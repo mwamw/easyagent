@@ -57,7 +57,7 @@ class ToolMessage(Message):
             result["name"] = self.name  # Google API需要name字段
         return result
 
-class FunctionMessage(Message):
+class GoogleToolMessage(Message):
     role: MessageRole = "function"
     tool_call_id: Optional[str] = None
     name: Optional[str] = None  # 工具名称 - Google API需要

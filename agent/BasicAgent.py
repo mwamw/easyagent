@@ -1,7 +1,7 @@
 from typing_extensions import override
 from core.agent import BaseAgent
 from core.llm import EasyLLM
-from core.Message import Message, ToolMessage, UserMessage, SystemMessage, AssistantMessage, FunctionMessage
+from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from typing import Optional, Any, TYPE_CHECKING
 from Tool.BaseTool import Tool
@@ -30,6 +30,7 @@ class BasicAgent(BaseAgent):
         config: Optional[Config] = None,
         memory: Optional["BaseMemory"] = None,
         enable_memory: bool = False,
+        verbose_thinking: bool = False,
     ):
         """
         初始化 BasicAgent
@@ -43,6 +44,7 @@ class BasicAgent(BaseAgent):
             description: 智能体描述
             config: 配置对象
             memory: 记忆系统实例（可选）
+            verbose_thinking: 是否显示 LLM 的思考过程（默认 True）
             enable_memory: 是否启用记忆
             
         Raises:
@@ -77,12 +79,10 @@ class BasicAgent(BaseAgent):
             raise ParameterValidationError(f"tool_registry 必须是 ToolRegistry 类型，收到: {type(tool_registry).__name__}")
         
         self.tool_registry = tool_registry
-        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，记忆: {'启用' if self.enable_memory else '禁用'}")
-        if self.llm.provide == "google":
-            # 使用functionmessage代替toolmessage
-            self.tool_message_class = FunctionMessage
-        else:
-            self.tool_message_class = ToolMessage
+        self.verbose_thinking = verbose_thinking
+        self.thinking_history: list[str] = []  # 记录思考过程
+        
+        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，记忆: {'启用' if self.enable_memory else '禁用'}，provider: {llm.provide}")
 
     def _validate_invoke_params(self, query: str, max_iter: int, temperature: float) -> None:
         """
@@ -266,6 +266,16 @@ class BasicAgent(BaseAgent):
                 final_response = f"智能体调用失败: {str(e)}"
                 break
             
+            # 捕获 LLM 的思考过程（content 字段）
+            thinking_content = getattr(response, 'reasoning_content', None)
+            if thinking_content and hasattr(response, 'tool_calls') and response.tool_calls:
+                # LLM 在调用工具前输出了思考过程
+                self.thinking_history.append(thinking_content)
+                if self.verbose_thinking:
+                    logger.info(f"💭 思考: {thinking_content}")
+                # 将思考内容添加到消息历史
+                messages.append(AssistantMessage(thinking_content))
+            
             # 检查是否有工具调用
             if hasattr(response, 'tool_calls') and response.tool_calls:
                 for tool_call in response.tool_calls:
@@ -287,16 +297,20 @@ class BasicAgent(BaseAgent):
                         logger.info(f"执行工具: {tool_name}，参数: {tool_args}")
                         tool_result = self._safe_execute_tool(tool_name, tool_args)
                         
-                        messages.append(self.tool_message_class(tool_result, tool_id, name=tool_name))
+                        # 使用 LLM 的 format_tool_result 方法获取正确格式
+                        tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                        messages.append(tool_msg)
                         
                     except ToolExecutionError as e:
                         logger.error(f"工具 '{tool_name}' 执行失败: {e}")
                         error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
-                        messages.append(self.tool_message_class(error_msg, tool_id, name=tool_name))
+                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                        messages.append(tool_msg)
                     except Exception as e:
                         logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                         error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
-                        messages.append(self.tool_message_class(error_msg, tool_id, name=tool_name))
+                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                        messages.append(tool_msg)
             else:
                 # 没有工具调用，获取最终响应
                 content = getattr(response, 'content', None)
@@ -507,12 +521,22 @@ class BasicAgent(BaseAgent):
             raise ToolRegistryError(f"获取 OpenAI 工具列表失败: {e}") from e
 
     def get_enhanced_prompt(self) -> str:
+
         """
         获取增强后的系统提示词
         
         Returns:
             增强后的系统提示词
         """
+        thinking_prompt:str=""
+        if self.verbose_thinking:
+            thinking_prompt="""
+            如何需要使用工具，请同时给出思考内容和工具调用内容
+            """
+        else:
+            thinking_prompt="""
+            如何需要使用工具，请直接调用工具
+            """
         if not self.enable_tool or not self.tool_registry:
             return self.system_prompt or "你是一个有用的AI助手，帮助用户回答问题，完成任务。"
         
@@ -540,7 +564,7 @@ class BasicAgent(BaseAgent):
 {tool_descriptions}
 
 ## 响应格式
-- 如果需要使用工具，直接调用工具
+- {thinking_prompt}
 - 如果不需要工具，直接回答用户问题
 - 工具返回结果后，基于结果给出清晰的回答
 
@@ -561,3 +585,25 @@ class BasicAgent(BaseAgent):
             对话历史条数
         """
         return len(self.history)
+
+    def get_thinking_history(self) -> list[str]:
+        """
+        获取思考历史
+        
+        Returns:
+            思考过程列表
+        """
+        return self.thinking_history.copy()
+    
+    def clear_thinking_history(self) -> None:
+        """清空思考历史"""
+        self.thinking_history.clear()
+    
+    def get_last_thinking(self) -> Optional[str]:
+        """
+        获取最后一次思考内容
+        
+        Returns:
+            最后一次思考内容，如果没有则返回 None
+        """
+        return self.thinking_history[-1] if self.thinking_history else None
