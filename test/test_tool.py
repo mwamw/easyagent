@@ -14,7 +14,7 @@ class SearchParameters(BaseModel):
     query: str=Field(description="搜索查询")
 
 
-llm=EasyLLM(model="gemini-2.5-pro")
+llm=EasyLLM(model="gemini-3-pro-preview")
 registry=ToolRegistry()
 @registry.tool("search","搜索工具",SearchParameters)
 def search(query: str) -> str:
@@ -60,6 +60,7 @@ message=llm.invoke_with_tools([{"role":"system","content":"你是一个智能助
 #查看message的所有key
 print(message.dict().keys())
 print(f"content:{message.content}")
+print(f"reasoning_content:{message.reasoning_content}")
 if message.tool_calls:
     for function_call in message.tool_calls:
         print(f"function_call:{function_call}")

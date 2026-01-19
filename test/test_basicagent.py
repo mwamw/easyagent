@@ -14,10 +14,13 @@ from Tool.BaseTool import Tool
 from agent.BasicAgent import BasicAgent
 from pydantic import BaseModel,Field
 import serpapi
+import core
+# core.enable_logging()
 
 
 if __name__ == "__main__":
-    llm=EasyLLM()
+    llm=EasyLLM(model="gemini-2.5-pro")
+    print(f"provider: {llm.provide}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
     tool_registry=ToolRegistry()
     
     
@@ -65,13 +68,6 @@ if __name__ == "__main__":
             return f"搜索时发生错误: {e}"
 
 
-    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手")
-    # print(basic_agent.invoke("你好，我是迈克尔，我来自中国，我今年25岁，我是一名学生，我喜欢打篮球和游泳，你是谁？"))
-    # print(basic_agent.invoke("你还记得我叫什么名字吗"))
-    # print(basic_agent.get_history())
-    # basic_agent.set_enable_tool(True)
-    # print(basic_agent.invoke("现在最厉害的篮球明星是谁？"))
-    # print(basic_agent.invoke("他多大了？"))
-    # basic_agent.set_enable_tool(False)
-    
-    basic_agent.stream_invoke("graphrag是什么")    
+    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答",verbose_thinking=False)
+    basic_agent.set_enable_tool(True)
+    print(basic_agent.invoke("GraphRAG是什么"))
