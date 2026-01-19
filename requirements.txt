@@ -1,0 +1,22 @@
+# EasyAgent 依赖
+
+# 核心依赖
+openai>=1.0.0
+pydantic>=2.0.0
+typing_extensions>=4.0.0
+python-dotenv>=1.0.0
+
+# RAG 模块
+chromadb>=0.4.0
+
+# PDF 加载 (可选)
+pypdf>=3.0.0
+
+# 编码检测 (可选)
+chardet>=5.0.0
+
+# Token 分割 (可选)
+tiktoken>=0.5.0
+
+# 搜索工具 (可选)
+google-search-results>=2.4.0
