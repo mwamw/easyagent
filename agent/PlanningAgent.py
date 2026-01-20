@@ -14,7 +14,7 @@ from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
-
+from output.json_parser import JsonOutputParser
 logger = logging.getLogger(__name__)
 
 
@@ -80,6 +80,7 @@ class PlanningAgent(BasicAgent):
         self.allow_replan = allow_replan
         self.current_plan: List[str] = []
         self.execution_log: List[Dict[str, Any]] = []
+        self.json_parser=JsonOutputParser()
     
     @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
@@ -148,8 +149,9 @@ class PlanningAgent(BasicAgent):
         
         try:
             response = self.llm.invoke(messages, temperature=temperature)
+            # print(response)
             # 解析 JSON
-            plan = json.loads(response)
+            plan = self.json_parser.parse(response)
             if isinstance(plan, list):
                 return plan
         except Exception as e:
@@ -203,7 +205,7 @@ class PlanningAgent(BasicAgent):
         
         try:
             response = self.llm.invoke(messages, temperature=temperature)
-            new_plan = json.loads(response)
+            new_plan = self.json_parser.parse(response)
             if isinstance(new_plan, list):
                 return new_plan
         except Exception as e:

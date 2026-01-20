@@ -1,25 +1,22 @@
 import sys
-import os  
-import json
-from dotenv import load_dotenv
-load_dotenv()
+import os
+# 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from core.agent import BaseAgent
+from agent.ReactAgent import ReactAgent
 from core.llm import EasyLLM
-from core.Message import Message
+from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from Tool.BaseTool import Tool
-from agent.BasicAgent import BasicAgent
 from pydantic import BaseModel,Field
 import serpapi
-import logging
-logging.basicConfig(level=logging.INFO)
-
+import core
+from dotenv import load_dotenv
+load_dotenv()   
+# core.enable_logging()
 
 if __name__ == "__main__":
-    llm=EasyLLM(model="gemini-2.5-flash")
+    llm=EasyLLM(model="gemini-2.5-pro")
     print(f"provider: {llm.provide}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
     tool_registry=ToolRegistry()
     
@@ -56,7 +53,7 @@ if __name__ == "__main__":
             if "organic_results" in results and results["organic_results"]:
                 # 如果没有直接答案，则返回前三个有机结果的摘要
                 snippets = [
-                    f"[{i+1}] {res.get('title', '')}\n{res.get('snipapet', '')}"
+                    f"[{i+1}] {res.get('title', '')}\n{res.get('snippet', '')}"
                     for i, res in enumerate(results["organic_results"][:3])
                 ]
                 print("搜索成功")
@@ -68,6 +65,6 @@ if __name__ == "__main__":
             return f"搜索时发生错误: {e}"
 
 
-    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答",verbose_thinking=False)
-    basic_agent.set_enable_tool(True)
-    print(basic_agent.invoke("GraphRAG是什么"))
+    react_agent=ReactAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答")
+    react_agent.set_enable_tool(True)
+    print(react_agent.invoke("GraphRAG是什么"))

@@ -127,7 +127,7 @@ class AnthropicProvider(BaseProvider):
         注意：如果使用的是完全兼容 OpenAI 的代理，可能需要使用 OpenAI 格式。
         这里提供 Claude 原生格式，如果不工作请切换到 OpenAI 格式。
         """
-        return {
+        mess={
             "role": "user",
             "content": [
                 {
@@ -137,6 +137,8 @@ class AnthropicProvider(BaseProvider):
                 }
             ]
         }
+        # logger.info(f"函数调用mess{mess}")
+        return mess 
     
     def get_thinking_content(self, response: Any) -> Optional[str]:
         """
@@ -149,3 +151,47 @@ class AnthropicProvider(BaseProvider):
     def is_thinking_model(self) -> bool:
         """检查是否是 Thinking 模型"""
         return 'thinking' in self.model.lower()
+    
+    def format_assistant_response(self, response: Any) -> dict:
+        """
+        将 OpenAI 格式的 assistant 响应转换为 Claude 格式
+        
+        OpenAI 格式:
+        ChatCompletionMessage(tool_calls=[ChatCompletionMessageFunctionToolCall(...)])
+        
+        Claude 格式:
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "xxx", "name": "search", "input": {...}}
+            ]
+        }
+        """
+        import json
+        
+        # 如果有 tool_calls，转换为 Claude 的 tool_use 格式
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            content = []
+            for tool_call in response.tool_calls:
+                try:
+                    input_data = json.loads(tool_call.function.arguments)
+                except:
+                    input_data = {}
+                
+                content.append({
+                    "type": "tool_use",
+                    "id": tool_call.id,
+                    "name": tool_call.function.name,
+                    "input": input_data
+                })
+            
+            return {
+                "role": "assistant",
+                "content": content
+            }
+        
+        # 如果没有 tool_calls，只是普通文本响应
+        return {
+            "role": "assistant",
+            "content": getattr(response, 'content', '') or ''
+        }
