@@ -1,22 +1,21 @@
 import sys
-import os  
+import os
 from dotenv import load_dotenv
 load_dotenv()
+# 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from Tool.ToolRegistry import ToolRegistry
-from Tool.BaseTool import Tool
-from pydantic import BaseModel,Field
-import json
-import serpapi
 from core.llm import EasyLLM
+from agent.PlanningAgent import PlanningAgent
+from Tool.ToolRegistry import ToolRegistry
+from pydantic import BaseModel, Field
+import serpapi
+#开启logging输出
+import logging
+logging.basicConfig(level=logging.INFO)
+tool_registry=ToolRegistry()
 class SearchParameters(BaseModel):
     query: str=Field(description="搜索查询")
-
-
-llm=EasyLLM(model="claude-sonnet-4.5")
-registry=ToolRegistry()
-@registry.tool("search","搜索工具",SearchParameters)
+@tool_registry.tool("search","搜索工具",SearchParameters)
 def search(query: str) -> str:
     """
     一个基于SerpApi的实战网页搜索引擎工具。
@@ -49,6 +48,7 @@ def search(query: str) -> str:
                 f"[{i+1}] {res.get('title', '')}\n{res.get('snippet', '')}"
                 for i, res in enumerate(results["organic_results"][:3])
             ]
+            print("搜索成功")
             return "\n\n".join(snippets)
         
         return f"对不起，没有找到关于 '{query}' 的信息。"
@@ -56,9 +56,10 @@ def search(query: str) -> str:
     except Exception as e:
         return f"搜索时发生错误: {e}"
 
-message=llm.invoke_with_tools([{"role":"system","content":"你是一个智能助手，能够帮助用户回答问题和完成任务,并拥有调用工具的能力,如果需要调用工具,请同时给出你的思考过程。"},{"role":"user","content":"解释一下LangGraph是什么"}],registry.get_openai_tools())
-#查看message的所有key
-print(f"content:{message}")
-if message.tool_calls:
-    for function_call in message.tool_calls:
-        print(f"function_call:{function_call}")
+
+if __name__ == "__main__": 
+    llm=EasyLLM(model="qwen3-30b")
+    agent=PlanningAgent(llm=llm,name="test_agent",description="test_agent",tool_registry=tool_registry)
+    result=agent.invoke("GraphRag是什么，现在有哪些主流方法",temperature=0.3)
+    print(result)
+    

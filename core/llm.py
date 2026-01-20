@@ -82,7 +82,7 @@ class EasyLLM:
         
         # 创建 Provider
         self._provider: BaseProvider = create_provider(
-            provider_name=self.provide,
+            provider_name=self.provide, # type: ignore
             model=self.model,
             api_key=self.resovle_api_key,
             base_url=self.resovle_base_url,
@@ -183,17 +183,17 @@ class EasyLLM:
         """获取默认模型名称"""
         default_models = {
             "openai": "gpt-3.5-turbo",
-            "google": "gemini-2.5-flash",
-            "anthropic": "claude-3-5-sonnet",
+            "google": "gemini-2.5-pro",
+            "anthropic": "claude-4.5-sonnet",
             "deepseek": "deepseek-chat",
-            "qwen": "qwen-plus",
+            "qwen": "qwen3-32b",
             "modelscope": "Qwen/Qwen2.5-VL-72B-Instruct",
             "kimi": "moonshot-v1-8k",
             "zhipu": "glm-4",
             "ollama": "llama3",
             "vllm": "llama3",
         }
-        return default_models.get(self.provide, "gpt-3.5-turbo")
+        return default_models.get(self.provide, "gpt-3.5-turbo") # type: ignore
     
     def _resolve_api_key_and_base_url(self) -> tuple[str, str]:
         """解析 API 密钥和地址"""
@@ -273,7 +273,7 @@ class EasyLLM:
         Returns:
             LLM 响应内容
         """
-        messages = self._convert_messages(messages)
+        messages = self._convert_messages(messages) # type: ignore
         return self._provider.invoke(messages, temperature=temperature, **kwargs)
     
     def stream(
@@ -292,7 +292,7 @@ class EasyLLM:
         Yields:
             响应内容片段
         """
-        messages = self._convert_messages(messages)
+        messages = self._convert_messages(messages) # type: ignore
         yield from self._provider.stream(messages, temperature=temperature, **kwargs)
     
     def invoke_with_tools(
@@ -313,9 +313,13 @@ class EasyLLM:
         Returns:
             LLM 响应对象
         """
-        messages = self._convert_messages(messages)
-        return self._provider.invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
-    
+        messages = self._convert_messages(messages) # type: ignore
+        try:
+            result=self._provider.invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
+            return result
+        except Exception as e:
+            logger.error(f"LLM工具调用失败 当前消息{messages}")
+            raise e
     def format_tool_result(
         self,
         content: str,
@@ -335,6 +339,25 @@ class EasyLLM:
         """
         return self._provider.format_tool_result(content, tool_id, tool_name)
     
+    def format_assistant_response(self, response: Any) -> dict:
+        """
+        格式化 assistant 响应为当前 Provider 需要的格式
+        
+        用于处理 tool_calls 消息，不同的 Provider 有不同的格式要求。
+        
+        Args:
+            response: LLM 响应对象
+            
+        Returns:
+            格式化后的消息字典
+        """
+        # 检查 Provider 是否有这个方法
+        if hasattr(self._provider, 'format_assistant_response'):
+            return self._provider.format_assistant_response(response)
+        
+        # 默认：直接返回原始响应（OpenAI 兼容格式可以直接使用）
+        return response
+    
     # ==================== 向后兼容的方法 ====================
     
     def think(
@@ -343,7 +366,7 @@ class EasyLLM:
         temperature: Optional[float] = None
     ) -> Generator[str, None, None]:
         """流式输出（向后兼容）"""
-        messages = self._convert_messages(messages)
+        messages = self._convert_messages(messages) # type: ignore
         for chunk in self._provider.stream(messages, temperature=temperature):
             print(chunk, end="", flush=True)
             yield chunk
@@ -362,7 +385,7 @@ class EasyLLM:
     
     # ==================== 辅助方法 ====================
     
-    def _convert_messages(self, messages: list) -> list[dict]:
+    def _convert_messages(self, messages: list[dict[str, str] | Message]) -> list[dict[str, str]]:
         """将 Message 对象转换为字典"""
         return [
             msg.to_dict() if isinstance(msg, Message) else msg

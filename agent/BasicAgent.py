@@ -259,6 +259,9 @@ class BasicAgent(BaseAgent):
                 if response is None:
                     raise LLMInvokeError("LLM 返回了空响应!")
                 
+                # 格式化 assistant 响应（处理不同 Provider 的格式差异）
+                formatted_response = self.llm.format_assistant_response(response)
+                messages.append(formatted_response)
             except LLMInvokeError:
                 raise
             except Exception as e:
@@ -559,6 +562,7 @@ class BasicAgent(BaseAgent):
 - 当需要获取实时信息、执行计算或操作外部系统时，使用工具
 - 可以连续调用多个工具来完成复杂任务
 - 如果工具调用失败，分析原因并尝试其他方案
+- 当收集到足够的信息后回答用户问题
 
 ## 可用工具
 {tool_descriptions}
