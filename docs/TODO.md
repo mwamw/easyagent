@@ -6,17 +6,15 @@
 
 ## 🔴 高优先级 (P1)
 
-### 1. Claude Thinking 模型支持
-支持 Claude Thinking 模型的多轮工具调用（需要在对话历史中保留 thinking blocks）。
+### 1. 异步工具调用
+支持在 Agent 中直接调用异步定义的工具函数，从而提高 I/O 密集型任务的并发效率。
 
 ```python
-# 需要处理 thinking blocks 的保留
-agent = BasicAgent(llm=EasyLLM(model="claude-sonnet-4-5-thinking"))
-```
-
+# 预期用法
 **涉及文件:**
-- `core/providers/anthropic_provider.py` - 处理 thinking blocks
-- `agent/BasicAgent.py` - 保留 thinking 历史
+- `core/tool.py` - 增加对 `async def` 工具的支持
+- `agent/BasicAgent.py` - 在 `ainvoke` 和 `astream` 中处理异步工具执行
+
 
 ---
 
