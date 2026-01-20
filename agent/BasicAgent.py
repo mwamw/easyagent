@@ -6,6 +6,8 @@ from core.Config import Config
 from typing import Optional, Any, TYPE_CHECKING
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
+from Tool.AsyncToolExecutor import AsyncToolExecutor
+import asyncio
 import json
 import logging
 from core.Exception import *
@@ -31,6 +33,8 @@ class BasicAgent(BaseAgent):
         memory: Optional["BaseMemory"] = None,
         enable_memory: bool = False,
         verbose_thinking: bool = False,
+        enable_async_tool: bool = False,
+        async_max_workers: int = 4,
     ):
         """
         初始化 BasicAgent
@@ -46,6 +50,8 @@ class BasicAgent(BaseAgent):
             memory: 记忆系统实例（可选）
             verbose_thinking: 是否显示 LLM 的思考过程（默认 True）
             enable_memory: 是否启用记忆
+            enable_async_tool: 是否启用异步工具执行（并行执行多个工具）
+            async_max_workers: 异步执行器线程池大小
             
         Raises:
             ParameterValidationError: 参数验证失败
@@ -82,7 +88,15 @@ class BasicAgent(BaseAgent):
         self.verbose_thinking = verbose_thinking
         self.thinking_history: list[str] = []  # 记录思考过程
         
-        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，记忆: {'启用' if self.enable_memory else '禁用'}，provider: {llm.provide}")
+        # 异步工具执行配置
+        self.enable_async_tool = enable_async_tool
+        self.async_max_workers = async_max_workers
+        self.async_executor: Optional[AsyncToolExecutor] = None
+        
+        if enable_async_tool and tool_registry:
+            self.async_executor = AsyncToolExecutor(tool_registry, max_workers=async_max_workers)
+        
+        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，记忆: {'启用' if self.enable_memory else '禁用'}，provider: {llm.provide}")
 
     def _validate_invoke_params(self, query: str, max_iter: int, temperature: float) -> None:
         """
@@ -185,6 +199,88 @@ class BasicAgent(BaseAgent):
             self.history.append(UserMessage(query))
             self.history.append(AssistantMessage("".join(final_results)))
             return "".join(final_results)
+
+    async def invoke_async(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
+        """
+        异步调用智能体，支持并行工具执行
+        
+        Args:
+            query: 用户输入
+            max_iter: 最大迭代次数
+            temperature: 温度参数
+            **kwargs: 其他参数
+            
+        Returns:
+            智能体返回结果
+            
+        Raises:
+            ParameterValidationError: 参数验证失败
+            LLMInvokeError: LLM 调用失败
+        """
+        # 参数验证
+        self._validate_invoke_params(query, max_iter, temperature)
+        
+        messages: list[Message | dict[str, str]] = []
+        
+        if self.enable_tool:
+            if self.enable_async_tool and self.async_executor:
+                logger.info("使用异步工具模式调用智能体")
+                return await self.invoke_with_tool_async(query, messages, max_iter, temperature)
+            else:
+                logger.info("使用同步工具模式调用智能体（异步包装）")
+                return self.invoke_with_tool(query, messages, max_iter, temperature)
+        else:
+            logger.info("使用普通模式调用智能体")
+            try:
+                messages.append(SystemMessage(self.get_enhanced_prompt()))
+                for message in self.history:
+                    messages.append(message)
+                messages.append(UserMessage(query))
+                
+                response = self.llm.invoke(messages, temperature=temperature, **kwargs)
+                
+                if response is None:
+                    raise LLMInvokeError("LLM 返回了空响应!")
+                
+                if not isinstance(response, str):
+                    response = str(response)
+                
+                self.history.append(UserMessage(query))
+                self.history.append(AssistantMessage(response))
+                return response
+                
+            except LLMInvokeError:
+                raise
+            except Exception as e:
+                logger.error(f"LLM 调用失败: {e}")
+                raise LLMInvokeError(f"LLM 调用失败: {e}") from e
+
+    def set_async_tool_mode(self, enabled: bool, max_workers: int = 4) -> None:
+        """
+        设置是否启用异步工具执行
+        
+        Args:
+            enabled: 是否启用异步执行
+            max_workers: 线程池大小
+            
+        Raises:
+            ToolRegistryError: 启用异步但未配置 ToolRegistry
+        """
+        if not isinstance(enabled, bool):
+            raise ParameterValidationError(f"enabled 参数必须是布尔类型，收到: {type(enabled).__name__}")
+        
+        if enabled and self.tool_registry is None:
+            raise ToolRegistryError("启用异步工具执行时必须先设置 ToolRegistry!")
+        
+        self.enable_async_tool = enabled
+        self.async_max_workers = max_workers
+        
+        if enabled and self.tool_registry:
+            self.async_executor = AsyncToolExecutor(self.tool_registry, max_workers=max_workers)
+        else:
+            self.async_executor = None
+        
+        logger.info(f"异步工具执行已{'启用' if enabled else '禁用'}")
 
 
     def set_enable_tool(self, enabled: bool) -> None:
@@ -314,6 +410,159 @@ class BasicAgent(BaseAgent):
                         error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
+            else:
+                # 没有工具调用，获取最终响应
+                content = getattr(response, 'content', None)
+                if content is not None:
+                    messages.append(AssistantMessage(content))
+                    final_response = content
+                else:
+                    logger.warning("LLM 响应中没有内容")
+                    final_response = ""
+                break
+            
+            max_iter -= 1
+        
+        # 检查是否超过最大迭代次数
+        if final_response is None:
+            logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
+            final_response = "超过最大迭代次数，智能体调用失败!"
+        
+        self.history.append(UserMessage(query))
+        self.history.append(AssistantMessage(final_response))
+        return final_response
+
+    async def invoke_with_tool_async(
+        self,
+        query: str,
+        messages: list[Message | dict[str, str]],
+        max_iter: int = 10,
+        temperature: float = 0.7
+    ) -> str:
+        """
+        异步使用工具调用模式调用智能体，支持并行执行多个工具
+        
+        Args:
+            query: 用户输入
+            messages: 消息列表
+            max_iter: 最大迭代次数
+            temperature: 温度参数
+            
+        Returns:
+            智能体返回结果
+            
+        Raises:
+            ToolRegistryError: 工具注册表未配置或异步执行器未初始化
+            LLMInvokeError: LLM 调用失败
+        """
+        self.enable_tool = True
+        
+        if self.tool_registry is None:
+            raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
+        
+        if self.async_executor is None:
+            raise ToolRegistryError("异步工具执行器未初始化！请启用 enable_async_tool")
+        
+        enhanced_prompt = self.get_enhanced_prompt()
+        messages.append(SystemMessage(enhanced_prompt))
+        
+        for message in self.history:
+            messages.append(message)
+        messages.append(UserMessage(query))
+        
+        final_response: Optional[str] = None
+        iteration_count = 0
+        
+        while max_iter > 0:
+            iteration_count += 1
+            logger.debug(f"异步工具调用迭代 {iteration_count}")
+            
+            try:
+                response = self.llm.invoke_with_tools(
+                    messages,
+                    self.tool_registry.get_openai_tools(),
+                    temperature=temperature
+                )
+                
+                if response is None:
+                    raise LLMInvokeError("LLM 返回了空响应!")
+                
+                formatted_response = self.llm.format_assistant_response(response)
+                messages.append(formatted_response)
+            except LLMInvokeError:
+                raise
+            except Exception as e:
+                logger.error(f"智能体调用失败: {e}")
+                final_response = f"智能体调用失败: {str(e)}"
+                break
+            
+            # 捕获 LLM 的思考过程
+            thinking_content = getattr(response, 'reasoning_content', None)
+            if thinking_content and hasattr(response, 'tool_calls') and response.tool_calls:
+                self.thinking_history.append(thinking_content)
+                if self.verbose_thinking:
+                    logger.info(f"💭 思考: {thinking_content}")
+                messages.append(AssistantMessage(thinking_content))
+            
+            # 检查是否有工具调用
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                # 准备并行执行的任务
+                tasks_to_execute = []
+                tool_metadata = []  # 保存 tool_id 和 tool_name 用于结果处理
+                
+                for tool_call in response.tool_calls:
+                    tool_name = "unknown_tool"
+                    tool_id = getattr(tool_call, 'id', 'unknown')
+                    
+                    try:
+                        tool_name = self._safe_get_tool_name(tool_call)
+                        tool_args = self._safe_parse_tool_args(tool_call)
+                        
+                        tasks_to_execute.append({
+                            "tool_name": tool_name,
+                            "parameters": tool_args
+                        })
+                        tool_metadata.append({
+                            "tool_id": tool_id,
+                            "tool_name": tool_name
+                        })
+                        logger.info(f"准备执行工具: {tool_name}，参数: {tool_args}")
+                        
+                    except Exception as e:
+                        logger.error(f"解析工具调用失败: {e}")
+                        # 即使解析失败也添加错误结果
+                        error_msg = f"工具 '{tool_name}' 解析失败: {str(e)}"
+                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                        messages.append(tool_msg)
+                
+                # 并行执行所有工具
+                if tasks_to_execute:
+                    logger.info(f"🚀 并行执行 {len(tasks_to_execute)} 个工具...")
+                    try:
+                        results = await self.async_executor.execute_tools_parallel(tasks_to_execute)
+                        
+                        # 将结果添加到消息历史
+                        for i, result in enumerate(results):
+                            meta = tool_metadata[i]
+                            tool_msg = self.llm.format_tool_result(
+                                str(result), 
+                                meta["tool_id"], 
+                                meta["tool_name"]
+                            )
+                            messages.append(tool_msg)
+                            logger.info(f"✅ 工具 '{meta['tool_name']}' 执行完成")
+                            
+                    except Exception as e:
+                        logger.error(f"并行执行工具失败: {e}")
+                        # 为所有任务添加错误结果
+                        for meta in tool_metadata:
+                            error_msg = f"工具执行失败: {str(e)}"
+                            tool_msg = self.llm.format_tool_result(
+                                error_msg, 
+                                meta["tool_id"], 
+                                meta["tool_name"]
+                            )
+                            messages.append(tool_msg)
             else:
                 # 没有工具调用，获取最终响应
                 content = getattr(response, 'content', None)

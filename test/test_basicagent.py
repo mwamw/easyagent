@@ -4,7 +4,7 @@ import json
 from dotenv import load_dotenv
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+import asyncio
 from core.agent import BaseAgent
 from core.llm import EasyLLM
 from core.Message import Message
@@ -68,6 +68,9 @@ if __name__ == "__main__":
             return f"搜索时发生错误: {e}"
 
 
-    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答",verbose_thinking=False)
+    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答",verbose_thinking=False,enable_async_tool=True)
     basic_agent.set_enable_tool(True)
     print(basic_agent.invoke("GraphRAG是什么"))
+    basic_agent.clear_history()
+    print("------------------------------异步执行----------------------------------------")
+    print(asyncio.run(basic_agent.invoke_async("GraphRAG是什么")))
