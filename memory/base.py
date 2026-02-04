@@ -1,5 +1,5 @@
 """
-记忆系统基类模块
+记忆系统基类模块,定义了记忆系统的基本接口
 """
 from abc import ABC, abstractmethod
 from typing import List, Optional, Any

@@ -16,7 +16,7 @@ load_dotenv()
 # core.enable_logging()
 
 if __name__ == "__main__":
-    llm=EasyLLM(model="gemini-2.5-pro")
+    llm=EasyLLM(model="gemini-2.5-flash")
     print(f"provider: {llm.provide}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
     tool_registry=ToolRegistry()
     
