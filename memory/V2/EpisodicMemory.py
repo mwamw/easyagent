@@ -37,7 +37,10 @@ class EpisodicMemory(BaseMemory):
         self.vector_store=vector_store
         self.embedding_model=embedding_model
     def add_memory(self,item:MemoryItem)->str:
-        
+        #确定id唯一
+        if item.id in self.id_to_episode:
+            logger.warning(f"记忆id已存在: {item.id}")
+            return ""
         session_id=item.metadata.get("session_id", "default_session")
         episode_id=item.id
         user_id=item.user_id
@@ -62,6 +65,7 @@ class EpisodicMemory(BaseMemory):
 
         # 处理缓存
         self.episodes.append(episode)
+        self.id_to_episode[episode_id]=episode
         self.sessions.setdefault(session_id, []).append(episode_id)
 
         #document store
@@ -111,15 +115,28 @@ class EpisodicMemory(BaseMemory):
         
         #处理cache
         removed_cache=False
-        for episode in self.episodes:
-            if episode.episode_id==memory_id:
-                remove_episode=episode
+        # for episode in self.episodes:
+        #     if episode.episode_id==memory_id:
+        #         remove_episode=episode
+        #         self.episodes.remove(episode)
+        #         if remove_episode.session_id in self.sessions:
+        #             self.sessions[remove_episode.session_id].remove(remove_episode.episode_id)
+        #         removed_cache=True
+        #         break
+        if memory_id in self.id_to_episode:
+            episode = self.id_to_episode[memory_id]
+            try:
                 self.episodes.remove(episode)
-                if remove_episode.session_id in self.sessions:
-                    self.sessions[remove_episode.session_id].remove(remove_episode.episode_id)
-                removed_cache=True
-                break
-
+            except ValueError:
+                logger.warning(f"episode {memory_id} 不在 episodes 列表中")
+            
+            del self.id_to_episode[memory_id]
+    
+            try:
+                self.sessions.get(episode.session_id, []).remove(episode.episode_id)
+            except ValueError:
+                logger.warning(f"session {episode.session_id} 不在 sessions 列表中")
+            removed_cache = True
 
         #处理 document store
 
@@ -146,18 +163,29 @@ class EpisodicMemory(BaseMemory):
     def update_memory(self,id:str,content:str,importance:Optional[float]=None,metadata:Optional[dict[str,Any]]=None) -> bool:
         #处理cache
         updated_cache=False
-        for episode in self.episodes:
-            if episode.episode_id==id:
-                if content:
-                    episode.content=content
-                if importance:
-                    episode.importance=importance
-                if metadata:
-                    episode.context.update(metadata.get("context", {}))
-                    if "outcome" in metadata:
-                        episode.outcome=metadata["outcome"]
-                updated_cache=True
-                break
+        # for episode in self.episodes:
+        #     if episode.episode_id==id:
+        #         if content:
+        #             episode.content=content
+        #         if importance:
+        #             episode.importance=importance
+        #         if metadata:
+        #             episode.context.update(metadata.get("context", {}))
+        #             if "outcome" in metadata:
+        #                 episode.outcome=metadata["outcome"]
+        #         updated_cache=True
+        #         break
+        if id in self.id_to_episode:
+            episode = self.id_to_episode[id]
+            if content:
+                episode.content = content
+            if importance is not None:
+                episode.importance = importance
+            if metadata:
+                episode.context.update(metadata.get("context", {}))
+                if "outcome" in metadata:
+                    episode.outcome = metadata["outcome"]
+            updated_cache = True
         #处理 document store
 
         updated_document_store=False
@@ -195,13 +223,14 @@ class EpisodicMemory(BaseMemory):
 
     @override
     def find_memory(self, id: str) -> bool:
-        return any(episode.episode_id==id for episode in self.episodes)
+        return id in self.id_to_episode
 
     @override
     def clear_memory(self):
         #清空cache
         self.episodes.clear()
         self.sessions.clear()
+        self.id_to_episode.clear()
 
         #处理document store
         try:
@@ -294,7 +323,7 @@ class EpisodicMemory(BaseMemory):
             if not mem_id or mem_id in visited:
                 continue
 
-            episode=next((e for e in self.episodes if e.episode_id==mem_id),None)
+            episode=self.id_to_episode.get(mem_id)
             if episode and episode.context.get("forgotten",False):
                 continue
 
@@ -491,7 +520,8 @@ class EpisodicMemory(BaseMemory):
             )
             self.episodes.append(episode)
             self.sessions.setdefault(session_id, []).append(episode_id)
-
+            self.id_to_episode[episode_id] = episode
+            
     def find_patterns(
         self, 
         user_id: Optional[str] = None, 
