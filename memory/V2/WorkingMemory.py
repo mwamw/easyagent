@@ -222,13 +222,13 @@ class WorkingMemory(BaseMemory):
             memory_keywords=set(memory.content.lower().split())
             keyword_similarities.append(len(query_keywords.intersection(memory_keywords))/len(query_keywords.union(memory_keywords)))
         
-        print("关键字相似度",keyword_similarities)
+        # print("关键字相似度",keyword_similarities)
         # 综合相似度
         combined_similarities=np.array(vector_similarities)*0.7+np.array(keyword_similarities)*0.3
-        print("综合相似度",combined_similarities)
+        # print("综合相似度",combined_similarities)
         # 时间衰减
         time_decay=np.array([self._calculate_time_decay(memory.timestamp) for memory in active_memories])
-        print("时间衰减",time_decay)
+        # print("时间衰减",time_decay)
         # 记忆重要性加权
         final_scores=combined_similarities*time_decay*np.array([memory.importance*0.2+0.8 for memory in active_memories])
         print("最终得分",final_scores)
@@ -256,13 +256,13 @@ class WorkingMemory(BaseMemory):
         """
         now_size=self.size
         #删除过期记忆
-        if base_on==ForgetType.TIME:
+        if base_on.value==ForgetType.TIME.value:
             self._clean_expired()
         #删除低重要性记忆
-        if base_on==ForgetType.IMPORTANCE:
+        if base_on.value==ForgetType.IMPORTANCE.value:
             self._clean_importance(threshold)
 
-        if base_on==ForgetType.CAPACITY:
+        if base_on.value==ForgetType.CAPACITY.value:
             self._clean_lowest_priority()
         
         return now_size-self.size
@@ -273,7 +273,7 @@ class WorkingMemory(BaseMemory):
         """
         self.memory_list=[memory for memory in self.memory_list if memory.importance>=threshold]
         self.size=len(self.memory_list)
-        self.current_tokens=sum([memory.token_count for memory in self.memory_list])
+        self.current_tokens=sum([len(memory.content.split()) for memory in self.memory_list])
         self._rebuild_heap()
 
 if __name__ == "__main__":

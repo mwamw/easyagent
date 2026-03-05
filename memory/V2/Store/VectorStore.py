@@ -26,3 +26,8 @@ class VectorStore(ABC):
     @abstractmethod
     def search_similar(self,query_embedding:list[float],where:dict[str,Any],limit:int)->list[dict[str,Any]]:
         pass
+
+    @abstractmethod
+    def get_all_vectors(self,with_vector:bool=False)->list[dict[str,Any]]:
+        """获取所有向量"""
+        pass

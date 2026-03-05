@@ -4,6 +4,60 @@
 
 ---
 
+## [v2.0.0-dev] - 2026-02 ~ 2026-03 (开发中)
+
+### 🚀 新特性
+
+#### V2 多层记忆系统
+全新仿人类认知的多层记忆架构，位于 `memory/V2/` 目录。
+
+**记忆类型：**
+- `memory/V2/BaseMemory.py` - V2 记忆基类，定义 `MemoryItem`、`MemoryConfig`、`MemoryType`、`ForgetType`
+- `memory/V2/EpisodicMemory.py` - 情景记忆：事件/会话级记忆，支持时间线、模式发现
+- `memory/V2/SemanticMemory.py` - 语义记忆：知识图谱 + 向量混合检索
+- `memory/V2/PerceptualMemory.py` - 感知记忆：多模态（文本/图像/音频）编码与跨模态检索
+- `memory/V2/WorkingMemory.py` - 工作记忆：内存短期记忆，优先级堆管理
+
+**存储后端：**
+- `memory/V2/Store/DocumentStore.py` - 文档存储抽象接口
+- `memory/V2/Store/SQLiteDocumentStore.py` - SQLite 文档存储实现
+- `memory/V2/Store/VectorStore.py` - 向量存储抽象接口
+- `memory/V2/Store/QdrantVectorStore.py` - Qdrant 向量存储实现（支持内存/本地/云端模式）
+- `memory/V2/Store/GraphStore.py` - 图存储抽象接口（含 Entity, Relation 数据类）
+- `memory/V2/Store/Neo4jGraphStore.py` - Neo4j 图存储实现
+
+**嵌入层：**
+- `memory/V2/Embedding/BaseEmbeddingModel.py` - 嵌入模型抽象接口
+- `memory/V2/Embedding/HuggingfaceEmbeddingModel.py` - SentenceTransformer 实现
+
+**提取器：**
+- `memory/V2/Extractor/Extractor.py` - LLM 实体关系提取器（两阶段：提取 + 验证）
+
+#### 核心能力
+- **批量/异步**：所有 V2 记忆类型支持 `add_memories_batch`、`add_memory_async`、`search_memory_async`
+- **遗忘机制**：按时间 / 重要性 / 容量的多策略遗忘
+- **持久化**：`load_from_store()` / `sync_stores()` 支持从存储层恢复缓存和数据同步
+- **模式发现**：EpisodicMemory 的 `find_patterns()` 基于 jieba 分词、TF-IDF、语义聚类
+- **多模态编码**：CLIP (图像)、CLAP (音频) 编码与跨模态文本检索
+- **知识图谱搜索**：SemanticMemory 的混合排序（向量相似度 + 图谱上下文相关性加权）
+
+#### 工具增强
+- `Tool/AsyncToolExecutor.py` - 异步工具执行器
+- `Tool/memory_tools.py` - 记忆相关工具
+
+#### 测试覆盖
+- `test/test_episodememory.py` - 情景记忆完整测试
+- `test/test_semanticmemory.py` - 语义记忆完整测试
+- `test/test_PerceptualMemory.py` - 感知记忆完整测试
+- `test/test_working_memory.py` - 工作记忆完整测试
+- `test/test_Neo4jStore.py` - Neo4j 存储测试
+- `test/test_Qdramt.py` - Qdrant 存储测试
+- `test/test_sqlite.py` - SQLite 存储测试
+- `test/test_Extractor.py` - 提取器测试
+- `test/test_async_tool_executor.py` - 异步执行器测试
+
+---
+
 ## [v1.1.0] - 2026-01-19
 
 ### 🚀 新特性
@@ -57,7 +111,7 @@
 - `Tool/builtin/calculator.py` - 安全计算器工具
 - `Tool/builtin/search.py` - 网络搜索工具 (SerpAPI/DuckDuckGo)
 
-#### 记忆系统
+#### V1 记忆系统
 - `memory/base.py` - 记忆基类
 - `memory/buffer.py` - 对话缓冲记忆
 - `memory/vector.py` - 向量记忆
@@ -84,10 +138,6 @@
 
 #### 测试
 - 52 个单元测试覆盖核心功能
-- `test/test_memory.py`
-- `test/test_output.py`
-- `test/test_callbacks.py`
-- `test/test_builtin_tools.py`
 
 ---
 

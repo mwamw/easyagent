@@ -49,3 +49,11 @@ class DocumentStore(ABC):
         limit: int = 1000
     ) -> list[MemoryItem]:
         pass
+
+    @abstractmethod
+    def get_all_memories(self)->list[MemoryItem]:
+        pass
+
+    @abstractmethod
+    def clear_all(self):
+        pass

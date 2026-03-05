@@ -12,3 +12,6 @@ class HuggingfaceEmbeddingModel(BaseEmbeddingModel):
     
     def embed(self, text: List[str]) -> List[List[float]]:
         return self.model.encode(text).tolist()
+    @property
+    def dimension(self)->int:
+        return self.embedding_size # type: ignore
