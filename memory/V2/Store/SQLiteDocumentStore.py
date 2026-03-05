@@ -1,7 +1,11 @@
 import sqlite3
 from typing import Any,Optional
-from .DocumentStore import DocumentStore
-from ..BaseMemory import MemoryItem,MemoryType
+try:
+    from .DocumentStore import DocumentStore
+    from ..BaseMemory import MemoryItem,MemoryType
+except ImportError:
+    from Store.DocumentStore import DocumentStore
+    from BaseMemory import MemoryItem,MemoryType
 from datetime import datetime
 import json
 class SQLiteDocumentStore(DocumentStore):
@@ -142,3 +146,23 @@ class SQLiteDocumentStore(DocumentStore):
             )
             for row in rows
         ]
+    
+    def get_all_memories(self)->list[MemoryItem]:
+        self.cursor.execute("SELECT * FROM memories")
+        rows=self.cursor.fetchall()
+        return [
+            MemoryItem(
+                id=row[0],
+                user_id=row[1],
+                content=row[2],
+                type=row[3],
+                timestamp=datetime.fromtimestamp(row[4]),
+                importance=row[5],
+                metadata=json.loads(row[6]) if row[6] and json.loads(row[6]) else {}
+            )
+            for row in rows
+        ]
+
+    def clear_all(self):
+        self.cursor.execute("DELETE FROM memories")
+        self.conn.commit()

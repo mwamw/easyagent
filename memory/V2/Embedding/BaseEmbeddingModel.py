@@ -4,3 +4,7 @@ class BaseEmbeddingModel(ABC):
     @abstractmethod
     def embed(self,text:List[str])->List[List[float]]:
         pass
+    @property
+    @abstractmethod
+    def dimension(self)->int:
+        pass

@@ -26,7 +26,7 @@ if __name__ == "__main__":
     print("----------------查询相似向量--------------------")
     query_embedding = np.random.rand(384).tolist()
     search_result = qdrant_vector_store.search_similar(query_embedding, {}, 10)
-    # print(search_result)
+    print(search_result[0]["similarity"])
 
     print("----------------删除向量--------------------")
     qdrant_vector_store.remove_vectors([all_vectors[0]["memory_id"]])

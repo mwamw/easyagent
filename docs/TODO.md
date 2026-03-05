@@ -6,15 +6,13 @@
 
 ## 🔴 高优先级 (P1)
 
-### 1. 异步工具调用
-支持在 Agent 中直接调用异步定义的工具函数，从而提高 I/O 密集型任务的并发效率。
+### 1. V2 记忆系统与 Agent 集成
+将 V2 多层记忆系统（EpisodicMemory、SemanticMemory、PerceptualMemory、WorkingMemory）正式集成到 Agent 框架中，使 Agent 可以直接使用多层记忆。
 
-```python
-# 预期用法
 **涉及文件:**
-- `core/tool.py` - 增加对 `async def` 工具的支持
-- `agent/BasicAgent.py` - 在 `ainvoke` 和 `astream` 中处理异步工具执行
-
+- `core/agent.py` - BaseAgent 增加 V2 记忆系统支持
+- `agent/ConversationalAgent.py` - 集成 V2 记忆
+- 新增 `agent/MemoryAgent.py` - 专用记忆增强 Agent
 
 ---
 
@@ -29,16 +27,15 @@ mcp_client = MCPClient("http://localhost:8080")
 tools = mcp_client.get_tools()
 registry.register_from_mcp(mcp_client)
 ```
-```
 
 **涉及文件:**
-- `agent/BasicAgent.py` - 增加 `stream_invoke_with_tool` 方法
-- `core/llm.py` - 增加 `stream_invoke_with_tools` 方法
+- `Tool/mcp.py` - MCP 客户端实现
+- `Tool/ToolRegistry.py` - 支持从 MCP 注册工具
 
 ---
 
-### 3. 异步调用支持 (Async Support)
-支持异步调用 Agent 和 LLM。
+### 3. 异步 Agent 调用支持
+支持异步调用 Agent 和 LLM，包括异步工具执行。
 
 ```python
 async def main():
@@ -53,9 +50,17 @@ async def main():
 
 ---
 
+### 4. 更多向量/图数据库支持
+- Milvus VectorStore 实现
+- Pinecone VectorStore 实现
+- `memory/V2/Store/MilvusVectorStore.py`
+- `memory/V2/Store/PineconeVectorStore.py`
+
+---
+
 ## 🟡 中优先级 (P2)
 
-### 4. AgentExecutor 统一执行器
+### 5. AgentExecutor 统一执行器
 标准化 Agent 执行流程，统一管理回调、错误处理、重试。
 
 ```python
@@ -73,7 +78,7 @@ result = executor.run(query)
 
 ---
 
-### 5. MultiAgentOrchestrator 多 Agent 协作
+### 6. MultiAgentOrchestrator 多 Agent 协作
 支持多个 Agent 协作完成复杂任务。
 
 ```python
@@ -91,14 +96,14 @@ result = orchestrator.run("写一篇关于 AI 的报告")
 
 ---
 
-### 6. 更多预置工具
+### 7. 更多预置工具
 - `Tool/builtin/code_interpreter.py` - 代码执行器
 - `Tool/builtin/file_manager.py` - 文件管理
 - `Tool/builtin/http_client.py` - HTTP 请求
 
 ---
 
-### 7. Agent 持久化
+### 8. Agent 持久化
 支持保存和加载 Agent 状态（包括记忆、配置）。
 
 ```python
@@ -108,30 +113,34 @@ agent = BasicAgent.load("./agent_state.json")
 
 ---
 
+### 9. V2 记忆性能优化
+- 批量 embedding 管道优化
+- 向量缓存层减少重复编码
+- 异步并发存储写入
+
+---
+
 ## 🟢 低优先级 (P3)
 
-### 8. Web UI 管理界面
+### 10. Web UI 管理界面
 基于 Gradio/Streamlit 的可视化管理界面。
 
 ---
 
-### 9. 分布式 Agent
+### 11. 分布式 Agent
 支持在多台机器上运行 Agent 集群。
 
 ---
 
-### 10. 更多 LLM 提供商支持
-- Anthropic Claude
+### 12. 更多 LLM 提供商支持
 - 讯飞星火
 - 百川
 - MiniMax
 
 ---
 
-### 11. 向量数据库扩展
-- Milvus 支持
-- Pinecone 支持
-- Weaviate 支持
+### 13. 视频模态支持
+为 PerceptualMemory 添加视频编码和检索能力。
 
 ---
 
@@ -139,6 +148,21 @@ agent = BasicAgent.load("./agent_state.json")
 
 | 功能 | 完成日期 | 版本 |
 |------|----------|------|
+| **V2 感知记忆 (PerceptualMemory)** | 2026-03 | v2.0-dev |
+| V2 感知记忆 `load_from_store` / `sync_stores` | 2026-03 | v2.0-dev |
+| **V2 语义记忆 (SemanticMemory)** | 2026-02 ~ 2026-03 | v2.0-dev |
+| 语义记忆向量+图谱混合排序 | 2026-03 | v2.0-dev |
+| **Neo4j 图存储 (Neo4jGraphStore)** | 2026-02 ~ 2026-03 | v2.0-dev |
+| **LLM 实体关系提取器 (Extractor)** | 2026-02 | v2.0-dev |
+| **V2 情景记忆 (EpisodicMemory)** | 2026-02 | v2.0-dev |
+| 情景记忆批量/异步支持 | 2026-02 | v2.0-dev |
+| 情景记忆模式发现 (find_patterns) | 2026-02 | v2.0-dev |
+| **V2 工作记忆 (WorkingMemory)** | 2026-02 | v2.0-dev |
+| **V2 基础架构** (BaseMemory, MemoryConfig, Stores, Embedding) | 2026-02 | v2.0-dev |
+| SQLite 文档存储 | 2026-02 | v2.0-dev |
+| Qdrant 向量存储 | 2026-02 | v2.0-dev |
+| HuggingFace 嵌入模型 | 2026-02 | v2.0-dev |
+| 异步工具执行器 (AsyncToolExecutor) | 2026-02 | v2.0-dev |
 | **Provider 适配器模式** | 2026-01-19 | v1.1 |
 | ConversationSummaryMemory | 2026-01-19 | v1.0 |
 | StructuredOutputAgent | 2026-01-19 | v1.0 |
