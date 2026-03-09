@@ -112,7 +112,10 @@ class BaseMemory(ABC):
     @abstractmethod
     def find_memory(self,id:str)->bool:
         pass
-
+    
+    @abstractmethod
+    def get_memory(self,ids:list[str])->list[MemoryItem]:
+        pass
     @abstractmethod
     def clear_memory(self):
         pass

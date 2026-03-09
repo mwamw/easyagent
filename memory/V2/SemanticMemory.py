@@ -199,6 +199,14 @@ class SemanticMemory(BaseMemory):
             logger.error(f"更新记忆失败: {e}")
             return False
 
+
+    def get_memory(self,ids:list[str])->list[MemoryItem]:
+        results=[]
+        for id in ids:
+            memory=self.id_to_memory.get(id)
+            if memory:
+                results.append(memory)
+        return results
     # ==================== 搜索记忆 ====================
 
     def search_memory(self, query: str, limit: int = 5,

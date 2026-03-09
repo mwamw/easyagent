@@ -90,7 +90,14 @@ class PerceptualMemory(BaseMemory):
         self.modality_index:dict[str,list[str]]={}
         self.id_to_memory:dict[str,MemoryItem]={}
 
-
+    def get_memory(self,ids:list[str])->list[MemoryItem]:
+        results=[]
+        for id in ids:
+            memory=self.id_to_memory[id]
+            if memory:
+                results.append(memory)
+        return results
+        
     def add_memory(self,item:MemoryItem)->str:
         """添加单条记忆
 

@@ -47,7 +47,13 @@ class WorkingMemory(BaseMemory):
         self.current_tokens+=len(item.content.split())
         heapq.heappush(self.memory_heap,(-priority,item.timestamp,item))
         return item.id
-
+    
+    def get_memory(self,ids:list[str])->list[MemoryItem]:
+        results=[]
+        for memory in self.memory_list:
+            if memory.id in ids:
+                results.append(memory)
+        return results
     def _clean_expired(self):
         
         max_timestamp=datetime.datetime.now()-datetime.timedelta(minutes=self.time_cap_min)
@@ -204,10 +210,15 @@ class WorkingMemory(BaseMemory):
             else:
                 from sklearn.feature_extraction.text import TfidfVectorizer
                 from sklearn.metrics.pairwise import cosine_similarity
+                import jieba
+                
+                # Use jieba for Chinese tokenization
+                text = [query] + memories_text
+                tokenized_text = [" ".join(jieba.lcut(t)) for t in text]
+                
                 vectorizer = TfidfVectorizer(stop_words=None, lowercase=True)
-                text=[query]+memories_text
-                tfidf_matrix=vectorizer.fit_transform(text)
-                query_tfidf=tfidf_matrix[0]
+                tfidf_matrix = vectorizer.fit_transform(tokenized_text)
+                query_tfidf = tfidf_matrix[0]
                 memories_tfidf=tfidf_matrix[1:]
                 vector_similarities=cosine_similarity(query_tfidf,memories_tfidf).flatten().tolist()
                 print("向量相似度",vector_similarities)
