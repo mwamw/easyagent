@@ -318,7 +318,7 @@ class EasyLLM:
             result=self._provider.invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
             return result
         except Exception as e:
-            logger.error(f"LLM工具调用失败 当前消息{messages}")
+            logger.error(f"LLM工具调用失败 当前消息{messages[-1]}")
             raise e
     def format_tool_result(
         self,

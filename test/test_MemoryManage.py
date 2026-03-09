@@ -18,6 +18,9 @@ MemoryManage 综合测试程序
 """
 import sys
 import os
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+os.environ['HF_HUB_OFFLINE'] = '1'
+
 import uuid
 import traceback
 from datetime import datetime, timedelta
@@ -42,6 +45,7 @@ from Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
 from typing import Optional
 import numpy as np
 
+# huggingface镜像
 
 # ==================== 颜色工具 ====================
 class Colors:

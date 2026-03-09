@@ -1,6 +1,5 @@
 from datetime import datetime
 import uuid
-from numpy import extract
 from pydantic import config
 from BaseMemory import MemoryConfig, MemoryItem,BaseMemory
 from WorkingMemory import WorkingMemory
@@ -76,7 +75,8 @@ class MemoryManage:
         logger.info("MemoryManage init success")
         logger.info(f"MemoryManage init success, memory types: {self.memory_types.keys()}")
 
-
+    def get_supported_type(self):
+        return self.memory_types.keys()
     def add_memory(self,content:str,memory_type:str,importance:float,metadata:Optional[Dict[str,Any]]=None,auto_classify:bool=True)->str:
         if auto_classify:
             memory_type=memory_type or self._classify_memory_type(content,metadata)
@@ -161,7 +161,16 @@ class MemoryManage:
             if value.find_memory(memory_id):
                 return True
         return False
-
+    def get_memories(self,memory_ids:list[str])->list[MemoryItem]:
+        results=[]
+        for key,value in self.memory_types.items():
+            memories = value.get_memory(memory_ids)
+            if memories:
+                results.extend(memories)
+        if len(results)==0:
+            logger.warning(f"Memory {memory_ids} not found")
+            return []
+        return results
     def forget_memory(self,strategy:str,threshold:float=0.1,max_age_days:int=30)->int:
         forget_count=0
         for key,value in self.memory_types.items():
@@ -236,3 +245,4 @@ class MemoryManage:
         for memory_type,memory_instance in self.memory_types.items():
             memory_instance.load_from_store()
         logger.info("Loaded all memories")
+

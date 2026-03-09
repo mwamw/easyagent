@@ -276,7 +276,13 @@ class EpisodicMemory(BaseMemory):
             return 0
         return int((max(e.timestamp for e in self.episodes) - min(e.timestamp for e in self.episodes)).days)
 
-
+    def get_memory(self,ids:list[str])->list[MemoryItem]:
+        results=[]
+        for mem_id in ids:
+            memory=self.document_store.get_memory(mem_id)
+            if memory:
+                results.append(memory)
+        return results
     def search_memory(self, query: str, limit: int = 5, user_id: Optional[str] = None, **kwargs):
         user_id=user_id
         session_id=kwargs.get("session_id")
