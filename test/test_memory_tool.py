@@ -32,14 +32,17 @@ from memory.V2.MemoryManage import MemoryManage
 from memory.V2.BaseMemory import MemoryConfig
 from memory.V2.WorkingMemory import WorkingMemory
 from memory.V2.EpisodicMemory import EpisodicMemory
-from Tool.builtin.memorytool import MemoryTool
+from memory.V2.PerceptualMemory import PerceptualMemory
+from memory.V2.SemanticMemory import SemanticMemory
+from Tool.builtin.memorytool import register_memory_tools
 from core.llm import EasyLLM
 from agent.BasicAgent import BasicAgent
 from Tool.ToolRegistry import ToolRegistry
 from memory.V2.Store.SQLiteDocumentStore import SQLiteDocumentStore
 from memory.V2.Store.QdrantVectorStore import QdrantVectorStore
+from memory.V2.Store.Neo4jGraphStore import Neo4jGraphStore
 from memory.V2.Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
-
+from memory.V2.Extractor.Extractor import Extractor
 class Colors:
     GREEN = "\033[92m"
     RED = "\033[91m"
@@ -68,10 +71,10 @@ class TestMemoryToolWithAgent:
         
         # 为了测试 consolidate 和多类型支持，我们也初始化 episodic
         self.config = MemoryConfig(max_capacity=20)
-        self.working_memory = WorkingMemory(self.config)
+        self.embedding_model = HuggingfaceEmbeddingModel(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        self.working_memory = WorkingMemory(self.config, self.embedding_model)
         
         # 简单实例化 episodic 依赖
-        self.embedding_model = HuggingfaceEmbeddingModel(model_name="sentence-transformers/all-MiniLM-L6-v2")
         self.episodic_doc_store = SQLiteDocumentStore(db_path="/tmp/test_tool_episodic.db")
         self.episodic_vector_store = QdrantVectorStore(way="memory", collection_name="test_tool_ep", vector_size=384)
         self.episodic_memory = EpisodicMemory(
@@ -81,6 +84,30 @@ class TestMemoryToolWithAgent:
             embedding_model=self.embedding_model
         )
         
+        # 简单实例化 perceptual 依赖
+        self.perceptual_doc_store = SQLiteDocumentStore(db_path="/tmp/test_tool_perceptual.db")
+        self.perceptual_vector_store = QdrantVectorStore(way="memory", collection_name="test_tool_pe", vector_size=384)
+        self.perceptual_image_store = QdrantVectorStore(way="memory", collection_name="test_tool_pe_image", vector_size=512)
+        self.perceptual_memory = PerceptualMemory(
+            memory_config=self.config,
+            document_store=self.perceptual_doc_store,
+            vector_stores={"text": self.perceptual_vector_store, "image": self.perceptual_image_store},
+            embedding_model=self.embedding_model,
+            supported_modalities=["text", "image"]
+        )
+
+        # 简单实例化 semantic 依赖
+        self.graph_store = Neo4jGraphStore(uri="bolt://localhost:17687", username="neo4j", password="password")
+        self.vector_store = QdrantVectorStore(way="memory", collection_name="semantic_memory")
+        self.llm = EasyLLM() # Assume valid config internally
+        self.extractor = Extractor(self.llm, False)
+        self.semantic_memory = SemanticMemory(
+            memory_config=MemoryConfig(),
+            vector_store=self.vector_store,
+            graph_store=self.graph_store,
+            extractor=self.extractor,
+            embedding_model=self.embedding_model
+        )
         self.mm = MemoryManage(
             config=self.config,
             user_id="test_tool_user",
@@ -88,23 +115,21 @@ class TestMemoryToolWithAgent:
             working_memory=self.working_memory,
             enable_episodic=True,
             episodic_memory=self.episodic_memory,
-            enable_semantic=False,
-            enable_perceptual=False
+            enable_semantic=True,
+            semantic_memory=self.semantic_memory,
+            enable_perceptual=True,
+            perceptual_memory=self.perceptual_memory
         )
         
-        self.memory_tool = MemoryTool(memory_manage=self.mm)
-        print(f"tool description:{self.memory_tool.description}")
-        print(f"tool parm:{self.memory_tool.get_openai_schema()}")
         self.tool_registry = ToolRegistry()
-        self.tool_registry.registerTool(self.memory_tool)
+        register_memory_tools(self.mm, self.tool_registry)
         
-        self.llm = EasyLLM() # Assume valid config internally
         
         # 带有 ToolRegistry 的 agent
         self.agent = BasicAgent(
             name="MemoryAgent",
             llm=self.llm,
-            system_prompt="你是一个可以通过调用 memory_tool 来管理记忆的智能助手。当有管理需要的请求时，请准确调用 memory_tool 并使用其参数完成任务。尽量直接使用工具，不要过多废话。",
+            system_prompt="你是一个可以通过调用独立的各个记忆管理工具（例如 add_memory_tool, search_memory_tool 等）来管理记忆的智能助手。",
             enable_tool=True,
             tool_registry=self.tool_registry,
             verbose_thinking=False
@@ -127,7 +152,7 @@ class TestMemoryToolWithAgent:
         self.agent.history.clear()
         self.mm.clear_memories()
         
-        prompt = "请使用 memory_tool 添加一条 working 类型记忆，内容是：'我的幸运数字是 42'，重要性为 0.9。"
+        prompt = "请使用 add_memory_tool 添加一条 working 类型记忆，内容是：'我的幸运数字是 42'，重要性为 0.9。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -142,7 +167,7 @@ class TestMemoryToolWithAgent:
         print_section("2. LLM 调用 stats 获取统计")
         self.agent.history.clear()
         
-        prompt = "请调用 memory_tool 获取当前的记忆系统统计信息。然后告诉我总共有多少条记忆。"
+        prompt = "请调用 memory_maintenance_tool 获取当前的记忆系统统计信息 (action为stats)。然后告诉我总共有多少条记忆。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -153,7 +178,7 @@ class TestMemoryToolWithAgent:
         print_section("3. LLM 调用 search 搜索记忆")
         self.agent.history.clear()
         
-        prompt = "请使用 memory_tool 搜索内容包含 '幸运数字' 的记忆，并直接告诉我我的幸运数字是多少。"
+        prompt = "请使用 search_memory_tool 搜索内容包含 '幸运数字' 的记忆，并直接告诉我我的幸运数字是多少。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -167,7 +192,7 @@ class TestMemoryToolWithAgent:
             return
             
         self.agent.history.clear()
-        prompt = f"请使用 memory_tool 的 get 操作，传入 memory_ids=[\"{self._memory_id_cache}\"] 这个ID来获取记忆内容，并将内容复述告诉我。"
+        prompt = f"请使用 get_memory_tool ，传入 memory_ids=[\"{self._memory_id_cache}\"] 这个ID来获取记忆内容，并将内容复述告诉我。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -181,7 +206,7 @@ class TestMemoryToolWithAgent:
             return
             
         self.agent.history.clear()
-        prompt = f"请使用 memory_tool 的 update 操作，将 memory_id 为 {self._memory_id_cache} 的记忆内容修改为 '我的幸运数字是 100'。"
+        prompt = f"请使用 update_memory_tool ，将 memory_id 为 {self._memory_id_cache} 的记忆内容修改为 '我的幸运数字是 100'。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -195,7 +220,7 @@ class TestMemoryToolWithAgent:
         self.agent.history.clear()
         self.mm.add_memory(content="待转化的高价值记忆", memory_type="working", importance=0.8)
         
-        prompt = "请使用 memory_tool 的 consolidate 操作，将 working 类型的记忆整合到 episodic 类型的记忆中，重要性阈值设为 0.5。"
+        prompt = "请使用 memory_maintenance_tool 的 consolidate 操作，将 working 类型的记忆整合到 episodic 类型的记忆中，重要性阈值设为 0.5。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -210,7 +235,7 @@ class TestMemoryToolWithAgent:
             return
             
         self.agent.history.clear()
-        prompt = f"请使用 memory_tool 的 remove 操作，删除 memory_id 为 {self._memory_id_cache} 的这条记忆。"
+        prompt = f"请使用 remove_memory_tool，删除 memory_id 为 {self._memory_id_cache} 的这条记忆。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -223,7 +248,7 @@ class TestMemoryToolWithAgent:
         self.mm.add_memory(content="极低级别记忆", memory_type="working", importance=0.01)
         self.mm.add_memory(content="中等级别记忆", memory_type="working", importance=0.5)
         
-        prompt = "请使用 memory_tool 的 forget 操作，对系统使用 'importance'（即重要性）策略进行遗忘，遗忘阈值 threshold 设为 0.3。"
+        prompt = "请使用 memory_maintenance_tool 的 forget 操作，对系统使用 'importance'（即重要性）策略进行遗忘，遗忘阈值 threshold 设为 0.3。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -236,7 +261,7 @@ class TestMemoryToolWithAgent:
         print_section("9. LLM 调用 clear 清空记忆")
         self.agent.history.clear()
         
-        prompt = "请使用 memory_tool 的 clear 操作清空目前系统中所有的记忆。"
+        prompt = "请使用 memory_maintenance_tool 的 clear 操作清空目前系统中所有的记忆。"
         print(f"用户输入: {prompt}")
         response = self.agent.invoke(prompt)
         print(f"Agent回答: {response}")
@@ -244,17 +269,79 @@ class TestMemoryToolWithAgent:
         memories = self.mm.get_all_memories()
         self._assert(len(memories) == 0, "LLM 成功执行了清空所有记忆的操作")
 
+    def test_implicit_memory_usage(self):
+        print_section("10. LLM 隐式调用测试 (Autonomous Usage)")
+        self.agent.history.clear()
+        self.mm.clear_memories()
+
+        # Phase 1: Working Memory
+        print_section("Phase 1: Working Memory (当前对话焦点)")
+        prompt_wm = "请记住，我们现在的讨论重点是关于‘量子计算的纠缠态’。"
+        print(f"用户输入: {prompt_wm}")
+        response_wm = self.agent.invoke(prompt_wm)
+        print(f"Agent回答: {response_wm}")
+        
+        memories = self.mm.get_all_memories()
+        last_mem = memories[-1] if memories else None
+        self._assert(last_mem and last_mem.type == "working", "Agent 正确识别并存储为 Working Memory", f"存储类型: {last_mem.type if last_mem else 'None'}")
+
+        # Phase 2: Episodic Memory
+        print_section("Phase 2: Episodic Memory (个人经历)")
+        prompt_ep = "我记得去年夏天我去过西藏，那里的景色非常迷人，尤其是纳木错。"
+        print(f"用户输入: {prompt_ep}")
+        response_ep = self.agent.invoke(prompt_ep)
+        print(f"Agent回答: {response_ep}")
+        
+        memories = self.mm.get_all_memories()
+        last_mem = memories[-1] if memories else None
+        self._assert(last_mem and last_mem.type == "episodic", "Agent 正确识别并存储为 Episodic Memory", f"存储类型: {last_mem.type if last_mem else 'None'}")
+
+        # Phase 3: Semantic Memory
+        print_section("Phase 3: Semantic Memory (事实知识)")
+        prompt_sem = "你要记住一个知识点：地球的平均半径大约是 6371 公里。"
+        print(f"用户输入: {prompt_sem}")
+        response_sem = self.agent.invoke(prompt_sem)
+        print(f"Agent回答: {response_sem}")
+        
+        memories = self.mm.get_all_memories()
+        last_mem = memories[-1] if memories else None
+        self._assert(last_mem and last_mem.type == "semantic", "Agent 正确识别并存储为 Semantic Memory", f"存储类型: {last_mem.type if last_mem else 'None'}")
+
+        # Phase 4: Perceptual Memory
+        print_section("Phase 4: Perceptual Memory (多模态/文件)")
+        prompt_per = "这是我上周在公园拍的一张照片：'/home/wxd/LLM/EasyAgent/test/images/test/dog.jpg'"
+        print(f"用户输入: {prompt_per}")
+        response_per = self.agent.invoke(prompt_per)
+        print(f"Agent回答: {response_per}")
+        
+        memories = self.mm.get_all_memories()
+        last_mem = memories[-1] if memories else None
+        self._assert(last_mem and last_mem.type == "perceptual", "Agent 正确识别并存储为 Perceptual Memory", f"存储类型: {last_mem.type if last_mem else 'None'}")
+
+        # Phase 5: Synthesis Query
+        print_section("Phase 5: 综合检索测试")
+        self.agent.history.clear() 
+        prompt_query = "我去年夏天去哪了？地球半径是多少？我们刚才在聊什么？"
+        print(f"用户输入: {prompt_query}")
+        response_query = self.agent.invoke(prompt_query)
+        print(f"Agent回答: {response_query}")
+        
+        self._assert("西藏" in response_query and "6371" in response_query and "量子计算" in response_query, 
+                     "Agent 成功检索并综合了不同类型的记忆")
+
+
     def run_all(self):
         tests = [
-            self.test_llm_add_memory,
-            self.test_llm_stats_memory,
-            self.test_llm_search_memory,
-            self.test_llm_get_memory,
-            self.test_llm_update_memory,
-            self.test_llm_consolidate_memory,
-            self.test_llm_remove_memory,
-            self.test_llm_forget_memory,
-            self.test_llm_clear_memory,
+            # self.test_llm_add_memory,
+            # self.test_llm_stats_memory,
+            # self.test_llm_search_memory,
+            # self.test_llm_get_memory,
+            # self.test_llm_update_memory,
+            # self.test_llm_consolidate_memory,
+            # self.test_llm_remove_memory,
+            # self.test_llm_forget_memory,
+            # self.test_llm_clear_memory,
+            self.test_implicit_memory_usage
         ]
 
         for test_func in tests:

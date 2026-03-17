@@ -158,8 +158,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
                 result = self.output_parser.parse(response)
                 
                 # 记录到历史
-                self.history.append(UserMessage(query))
-                self.history.append(AssistantMessage(response))
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(response))
                 
                 logger.info(f"结构化输出解析成功 (尝试 {attempt + 1}/{self.max_retries})")
                 return result

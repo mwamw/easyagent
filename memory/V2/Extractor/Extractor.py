@@ -14,7 +14,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 import uuid
 import logging
-from Store.GraphStore import Entity, Relation
+from ..Store.GraphStore import Entity, Relation
 
 logger = logging.getLogger(__name__)
 

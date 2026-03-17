@@ -62,3 +62,6 @@ class ToolRegistry:
             del self.tools[name]
         else:
             print(f"Tool {name} not found")
+
+    def get_Tool(self,name:str):
+        return self.tools.get(name)

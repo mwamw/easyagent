@@ -178,8 +178,8 @@ class ReactAgent(BasicAgent):
             logger.warning(final_answer)
         
         # 保存历史
-        self.history.append(UserMessage(query))
-        self.history.append(AssistantMessage(final_answer))
+        self.add_message(UserMessage(query))
+        self.add_message(AssistantMessage(final_answer))
         
         return final_answer
     
@@ -351,8 +351,8 @@ Final Answer: 对用户问题的完整回答
         
         try:
             response = self.llm.invoke(messages, temperature=temperature, **kwargs)
-            self.history.append(UserMessage(query))
-            self.history.append(AssistantMessage(response))
+            self.add_message(UserMessage(query))
+            self.add_message(AssistantMessage(response))
             return response
         except Exception as e:
             raise LLMInvokeError(f"LLM 调用失败: {e}") from e
@@ -367,5 +367,8 @@ Final Answer: 对用户问题的完整回答
     
     @override
     def get_enhanced_prompt(self) -> str:
-        """获取增强提示词（兼容 BasicAgent 接口）"""
-        return self._build_react_prompt()
+        """获取增强提示词，包含记忆上下文和 ReAct 指令"""
+        react_prompt = self._build_react_prompt()
+        # 注入记忆系统提示和 Working Memory 便签本
+        react_prompt += self._build_memory_prompt()
+        return react_prompt

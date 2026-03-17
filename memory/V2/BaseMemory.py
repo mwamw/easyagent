@@ -27,7 +27,7 @@ class MemoryType(Enum):
 class MemoryConfig(BaseModel):
 
     #基础设置
-    max_capacity:int=100
+    max_capacity:int=15
     importance_threshold:float=0.1
     decay_factor:float=0.95
 

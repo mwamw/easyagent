@@ -1,13 +1,14 @@
-# Memory module for EasyAgent
-from .base import BaseMemory
-from .buffer import ConversationBufferMemory
-from .vector import VectorMemory
-from .summary import ConversationSummaryMemory
+# Memory module for EasyAgent (V2)
+from .V2.BaseMemory import BaseMemory, MemoryItem, MemoryConfig, MemoryType, ForgetType
+from .V2.WorkingMemory import WorkingMemory
+from .V2.MemoryManage import MemoryManage
 
 __all__ = [
     "BaseMemory",
-    "ConversationBufferMemory",
-    "ConversationSummaryMemory",
-    "VectorMemory",
+    "MemoryItem",
+    "MemoryConfig",
+    "MemoryType",
+    "ForgetType",
+    "WorkingMemory",
+    "MemoryManage",
 ]
-

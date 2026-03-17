@@ -1,7 +1,7 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance,PointStruct,PointIdsList,ExtendedPointId,Filter,FieldCondition,MatchValue
 from typing import Optional,Any,cast,List
-from BaseMemory import MemoryType
+from ..BaseMemory import MemoryType
 try:
     from .VectorStore import VectorStore
 except ImportError:

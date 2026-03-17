@@ -1,17 +1,17 @@
 from datetime import datetime
 import uuid
 from pydantic import config
-from BaseMemory import MemoryConfig, MemoryItem,BaseMemory
-from WorkingMemory import WorkingMemory
-from EpisodicMemory import EpisodicMemory
-from SemanticMemory import SemanticMemory
-from PerceptualMemory import PerceptualMemory
-from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+from .BaseMemory import MemoryConfig, MemoryItem,BaseMemory
+from .WorkingMemory import WorkingMemory
+from .EpisodicMemory import EpisodicMemory
+from .SemanticMemory import SemanticMemory
+from .PerceptualMemory import PerceptualMemory
+from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 from typing import Optional
 import os
 from typing import Dict,Any
 import logging
-from BaseMemory import ForgetType
+from .BaseMemory import ForgetType
 logger=logging.getLogger(__name__)
 class MemoryManage:
     def __init__(
@@ -211,10 +211,13 @@ class MemoryManage:
             stats["total_memories"] += type_stats.get("count", 0)
 
         return stats
-    def clear_memories(self):
-        clear_count=0
-        for key,value in self.memory_types.items():
-            value.clear_memory()
+    def clear_memories(self,memory_type:Optional[str]=None):
+        if memory_type:
+            if memory_type in self.memory_types:
+                self.memory_types[memory_type].clear_memory()
+        else:
+            for key,value in self.memory_types.items():
+                value.clear_memory()
 
     def merge_memories(self,source_type:str,target_type:str,importance_threshold:float=0.5):
         if source_type not in self.memory_types or target_type not in self.memory_types:
