@@ -9,8 +9,10 @@ from .Config import Config
 from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
 if TYPE_CHECKING:
-    from memory.base import BaseMemory
+    from memory.V2.MemoryManage import MemoryManage
+    
 import json
+import threading
 from Tool.BaseTool import Tool
 from .Exception import *
 from Tool.AsyncToolExecutor import AsyncToolExecutor
@@ -30,7 +32,7 @@ class BaseAgent(ABC):
         description: Agent 描述
         config: 配置
         history: 对话历史（简单列表）
-        memory: 记忆系统（可选）
+        memory_manage: V2 记忆系统（可选）
     """
     
     def __init__(
@@ -40,12 +42,11 @@ class BaseAgent(ABC):
         system_prompt: Optional[str] = None,
         description: Optional[str] = None,
         config: Optional[Config] = None,
-        memory: Optional["BaseMemory"] = None,
-        enable_memory: bool = False,
         enable_tool: bool = False,
         tool_registry: Optional[ToolRegistry] = None,
         enable_async_tool: bool = False,
         async_max_workers: int = 4,
+        memory_manage: Optional["MemoryManage"] = None,
     ):
         """
         初始化 Agent
@@ -56,8 +57,7 @@ class BaseAgent(ABC):
             system_prompt: 系统提示词
             description: Agent 描述
             config: 配置
-            memory: 记忆系统实例（可选）
-            enable_memory: 是否启用记忆（如果 memory 为 None 则使用默认记忆）
+            memory_manage: V2 记忆管理实例（可选）
         """
         self.name = name
         self.llm = llm
@@ -65,10 +65,6 @@ class BaseAgent(ABC):
         self.description = description
         self.config = config or Config.from_env()
         self.history = []
-        
-        # 记忆系统
-        self.enable_memory = enable_memory or (memory is not None)
-        self._memory = memory
         
         # 工具系统
         if enable_tool and not tool_registry:
@@ -89,22 +85,32 @@ class BaseAgent(ABC):
         if enable_async_tool and tool_registry:
             self.async_executor = AsyncToolExecutor(tool_registry, max_workers=async_max_workers)
         
+        # V2 记忆系统 (MemoryManage)
+        self.memory_manage = memory_manage
+        self._unextracted_msg_count = 0
+        self._memory_lock = threading.Lock()  # 保护后台提炼对 MemoryManage 的并发访问
+        
+        # 自动注册 V2 记忆系统工具
+        if self.memory_manage and self.tool_registry:
+            self._register_v2_memory_tools()
 
-        if self.enable_memory and self._memory is None:
-            # 延迟导入，避免循环依赖
-            from memory.buffer import ConversationBufferMemory
-            self._memory = ConversationBufferMemory(max_messages=20)
-    
-    @property
-    def memory(self) -> Optional["BaseMemory"]:
-        """获取记忆系统"""
-        return self._memory
-    
-    @memory.setter
-    def memory(self, value: Optional["BaseMemory"]) -> None:
-        """设置记忆系统"""
-        self._memory = value
-        self.enable_memory = value is not None
+    def _register_v2_memory_tools(self) -> None:
+        if self.memory_manage and self.tool_registry:
+            try:
+                from Tool.builtin.memorytool import register_memory_tools
+                register_memory_tools(self.memory_manage, self.tool_registry)
+                logger.info("已自动注册 V2 记忆系统工具")
+            except ImportError as e:
+                logger.warning(f"未能导入 register_memory_tools: {e}")
+                
+    def with_memory(self, memory_manage: "MemoryManage") -> "BaseAgent":
+        """
+        方便地将 V2 版本的 MemoryManage 记忆系统绑定到 Agent
+        """
+        self.memory_manage = memory_manage
+        if self.tool_registry is not None:
+            self._register_v2_memory_tools()
+        return self
     
     def with_tool(self,tool_registry: Optional[ToolRegistry]) -> None:
         """设置工具注册表"""
@@ -114,7 +120,7 @@ class BaseAgent(ABC):
         self.enable_tool = tool_registry is not None
     
     @abstractmethod
-    def invoke(self, query: str, max_iter: int, temperature: float, **kwargs) -> str:
+    def invoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
         """执行 Agent"""
         pass
     
@@ -123,10 +129,101 @@ class BaseAgent(ABC):
         self.history.append(message)
         if len(self.history) > self.config.max_history_length:
             self.history.pop(0)
+            
+        # 触发后台记忆提炼
+        self._check_and_trigger_background_memory()
         
-        # 同时添加到记忆系统
-        if self.enable_memory and self._memory is not None:
-            self._memory.add_message(message)
+    def _check_and_trigger_background_memory(self) -> None:
+        """检查并触发后台记忆提炼"""
+        if self.memory_manage is None:
+            return
+            
+        # 设定阈值：例如每新增 5 条消息触发一次提炼
+        trigger_threshold = 10
+        self._unextracted_msg_count += 1
+
+        if self._unextracted_msg_count >= trigger_threshold:
+            self._unextracted_msg_count = 0
+            
+            # 提取需要提炼的对话内容
+            recent_msgs = self.history[-trigger_threshold:]
+            dialogue_text = "\n".join([f"{msg.role}: {msg.content}" for msg in recent_msgs])
+            
+            # 使用独立线程异步处理，不阻塞主流程
+            threading.Thread(
+                target=self._extract_background_memory,
+                args=(dialogue_text,),
+                daemon=True
+            ).start()
+            
+    def _extract_background_memory(self, dialogue_text: str) -> None:
+        """后台异步执行语义/情景记忆提炼（线程安全）"""
+        if not self.memory_manage or not self.tool_registry:
+            return
+        
+        with self._memory_lock:
+            try:
+                logger.info("启动后台记忆提炼 (Background Memory Extraction)...")
+                
+                from agent.BasicAgent import BasicAgent
+                from Tool.ToolRegistry import ToolRegistry
+                
+                # 使用一个独立的、无上下文包袱的 Agent 进行记忆提炼与保存
+                bg_registry = ToolRegistry()
+                add_memory_tool=self.tool_registry.get_Tool("add_memory_tool")
+                if add_memory_tool:
+                    bg_registry.registerTool(add_memory_tool)
+                bg_agent = BasicAgent(
+                    name="MemoryExtractor",
+                    llm=self.llm,
+                    enable_tool=True,
+                    tool_registry=bg_registry,
+                    system_prompt="你是一个专门负责后台记忆整理的AI核心。\n你的任务是分析这段多轮对话记录，提炼出重要的客观事实、用户的习惯与偏好以及发生的重要事件。\n你必须自己调用工具（如 add_memory_tool 等）将这些信息结构化地保存到记忆系统（semantic 和 episodic 面向长期，working 面向任务状态）中。\n保存完毕后只需回复'提取完成'，不需要啰嗦。"
+                )
+                summary_prompt = f"请提炼并保存以下对话记录到记忆系统中:\n{dialogue_text}"
+                
+                # 由于当前已经在独立线程中，调用 invoke 阻塞是可以接受的
+                bg_agent.invoke(summary_prompt)
+                
+                logger.info("后台记忆提炼完成，对话已被 LLM 自主归档。")
+                
+            except Exception as e:
+                logger.error(f"后台记忆提炼失败: {e}")
+    
+    def _build_memory_prompt(self) -> str:
+        """构建记忆系统相关的 prompt 片段（供子类在 get_enhanced_prompt 中调用）
+        
+        包含：
+        1. 记忆系统使用说明
+        2. Working Memory 便签本内容全量注入
+        
+        Returns:
+            记忆相关的 prompt 文本，无记忆系统时返回空字符串
+        """
+        if not getattr(self, "memory_manage", None):
+            return ""
+        
+        prompt = """
+## 你的记忆系统 (The Memory System)
+你拥有一个高级记忆管理系统，能够跨越长期和短期存储知识。
+- **必要性原则**：仅当当前对话上下文（History）不足以回答问题时，才考虑使用搜索工具。禁止对不需要记忆系统，显而易见或刚讨论过的信息进行重复搜索。
+- **工作记忆 (Working Memory)**：遇到关键的约束、当前任务大纲或中间状态，请主动调用工具写入。这是你的“即时贴”，用于存放当前任务最核心的信息。
+- **长期记忆搜索 (Search)**：遇到不知道的事实或历史脉络，请使用 search_memory_tool 到 semantic (语义) 或 episodic (情景) 记忆中检索。
+- **记忆持久化**：只有你主动存入，未来的你才能回想起现在的经历和设定。
+- **按需使用**：其他记忆工具（如删除、更新）仅在信息过时或用户要求时使用。
+"""
+        
+        # 注入 Working Memory 便签本
+        if "working" in self.memory_manage.memory_types:
+            working_memories = self.memory_manage.memory_types["working"].get_all_memories()
+            if working_memories:
+                wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
+                wm_str = "\n".join(wm_texts)
+                prompt += f"\n\n【当前工作便签本（Working Memory）】:\n{wm_str}\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)"
+            else:
+                prompt += f"\n\n【当前工作便签本（Working Memory）】:\n(空)\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
+        
+        return prompt
     
     def add_user_message(self, content: str) -> None:
         """添加用户消息"""
@@ -138,30 +235,10 @@ class BaseAgent(ABC):
         from .Message import AssistantMessage
         self.add_message(AssistantMessage(content))
     
-    def get_memory_context(self, query: Optional[str] = None) -> str:
-        """
-        获取记忆上下文
-        
-        Args:
-            query: 查询（用于向量记忆的语义检索）
-            
-        Returns:
-            格式化的记忆上下文
-        """
-        if not self.enable_memory or self._memory is None:
-            return ""
-        
-        # 检查是否支持 query 参数（向量记忆）
-        try:
-            return self._memory.get_context(query=query)
-        except TypeError:
-            return self._memory.get_context()
-    
     def clear_history(self) -> None:
         """清空对话历史"""
         self.history.clear()
-        if self.enable_memory and self._memory is not None:
-            self._memory.clear()
+        self._unextracted_msg_count = 0
         logger.info("对话历史已清空")
     def get_history(self):
         """获取对话历史"""

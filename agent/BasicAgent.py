@@ -12,10 +12,7 @@ import json
 import logging
 from core.Exception import *
 
-if TYPE_CHECKING:
-    from memory.base import BaseMemory
-
-# 配置日志
+from core.Exception import *
 logger = logging.getLogger(__name__)
 
 class BasicAgent(BaseAgent):
@@ -30,8 +27,6 @@ class BasicAgent(BaseAgent):
         tool_registry: Optional[ToolRegistry] = None,
         description: Optional[str] = None,
         config: Optional[Config] = None,
-        memory: Optional["BaseMemory"] = None,
-        enable_memory: bool = False,
         verbose_thinking: bool = False,
         enable_async_tool: bool = False,
         async_max_workers: int = 4,
@@ -47,9 +42,7 @@ class BasicAgent(BaseAgent):
             tool_registry: 工具注册表
             description: 智能体描述
             config: 配置对象
-            memory: 记忆系统实例（可选）
             verbose_thinking: 是否显示 LLM 的思考过程（默认 True）
-            enable_memory: 是否启用记忆
             enable_async_tool: 是否启用异步工具执行（并行执行多个工具）
             async_max_workers: 异步执行器线程池大小
             
@@ -73,8 +66,6 @@ class BasicAgent(BaseAgent):
             system_prompt=system_prompt, 
             description=description, 
             config=config,
-            memory=memory,
-            enable_memory=enable_memory,
             enable_tool=enable_tool,
             tool_registry=tool_registry,
             enable_async_tool=enable_async_tool,
@@ -85,10 +76,10 @@ class BasicAgent(BaseAgent):
         self.verbose_thinking = verbose_thinking
         self.thinking_history: list[str] = []  # 记录思考过程
 
-        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，记忆: {'启用' if self.enable_memory else '禁用'}，provider: {llm.provide}")
+        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，provider: {llm.provide}")
 
 
-    @override
+    # @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) :
         """
         调用智能体
@@ -132,8 +123,8 @@ class BasicAgent(BaseAgent):
                     logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
                     response = str(response)
                 
-                self.history.append(UserMessage(query))
-                self.history.append(AssistantMessage(response))
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(response))
                 return response
                 
             except LLMInvokeError:
@@ -156,8 +147,8 @@ class BasicAgent(BaseAgent):
             for chunk in self.llm.think(messages, temperature=temperature, **kwargs):
                 final_results.append(chunk)
                 
-            self.history.append(UserMessage(query))
-            self.history.append(AssistantMessage("".join(final_results)))
+            self.add_message(UserMessage(query))
+            self.add_message(AssistantMessage("".join(final_results)))
             return "".join(final_results)
 
     async def invoke_async(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
@@ -205,8 +196,8 @@ class BasicAgent(BaseAgent):
                 if not isinstance(response, str):
                     response = str(response)
                 
-                self.history.append(UserMessage(query))
-                self.history.append(AssistantMessage(response))
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(response))
                 return response
                 
             except LLMInvokeError:
@@ -346,8 +337,8 @@ class BasicAgent(BaseAgent):
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
         
-        self.history.append(UserMessage(query))
-        self.history.append(AssistantMessage(final_response))
+        self.add_message(UserMessage(query))
+        self.add_message(AssistantMessage(final_response))
         return final_response
 
     async def invoke_with_tool_async(
@@ -499,8 +490,8 @@ class BasicAgent(BaseAgent):
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
         
-        self.history.append(UserMessage(query))
-        self.history.append(AssistantMessage(final_response))
+        self.add_message(UserMessage(query))
+        self.add_message(AssistantMessage(final_response))
         return final_response
 
  
@@ -556,6 +547,10 @@ class BasicAgent(BaseAgent):
 
             {self.system_prompt or ''}
             """
+            
+        # 注入记忆系统提示和 Working Memory 便签本
+        enhanced_prompt += self._build_memory_prompt()
+                
         return enhanced_prompt
 
         

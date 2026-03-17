@@ -2,17 +2,16 @@ import logging
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-from Store.VectorStore import VectorStore
-from BaseMemory import MemoryType,MemoryItem
+from .Store.VectorStore import VectorStore
+from .BaseMemory import MemoryType,MemoryItem
 from typing import Optional,Any,List
-from BaseMemory import MemoryConfig,BaseMemory,ForgetType
-from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+from .BaseMemory import MemoryConfig,BaseMemory,ForgetType
+from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 from datetime import datetime
-from Store.GraphStore import GraphStore
+from .Store.GraphStore import GraphStore
 import numpy as np
-from Store.GraphStore import Entity,Relation
-from Extractor.Extractor import Extractor
-import copy
+from .Store.GraphStore import Entity,Relation
+from .Extractor.Extractor import Extractor
 
 class SemanticMemory(BaseMemory):
     def __init__(self,memory_config:MemoryConfig,
@@ -490,7 +489,7 @@ class SemanticMemory(BaseMemory):
                     context["relations"].append({
                         "from": parts[0],
                         "type": parts[1],
-                        "to": parts[2],
+                        "to": parts[2]
                     })
         except Exception as e:
             logger.warning(f"获取图谱上下文失败: {e}")
@@ -888,6 +887,7 @@ class SemanticMemory(BaseMemory):
     def search_entities(self,query:str,limit:int=5,user_id:Optional[str]=None)->list[Entity]:
         """搜索实体"""
         query_lower=query.lower()
+
         martched_entities=[]
         for entity in self.entities.values():
             score=0

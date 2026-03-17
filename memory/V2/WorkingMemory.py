@@ -1,13 +1,12 @@
 import datetime
-import datetime
 from heapq import heappush
 from typing_extensions import override
-from BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
+from .BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
 import logging
 import heapq
 from typing import Optional,Any
 from abc import abstractmethod
-from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 import numpy as np
 logger = logging.getLogger(__name__)
 """
@@ -221,7 +220,7 @@ class WorkingMemory(BaseMemory):
                 query_tfidf = tfidf_matrix[0]
                 memories_tfidf=tfidf_matrix[1:]
                 vector_similarities=cosine_similarity(query_tfidf,memories_tfidf).flatten().tolist()
-                print("向量相似度",vector_similarities)
+                logger.debug("向量相似度: %s", vector_similarities)
         except Exception as e:
             print(e)
             vector_similarities=[0.0]*len(active_memories)
@@ -242,7 +241,7 @@ class WorkingMemory(BaseMemory):
         # print("时间衰减",time_decay)
         # 记忆重要性加权
         final_scores=combined_similarities*time_decay*np.array([memory.importance*0.2+0.8 for memory in active_memories])
-        print("最终得分",final_scores)
+        logger.debug("最终得分: %s", final_scores)
         
         # 排序
         sorted_indices=np.argsort(final_scores)[::-1]

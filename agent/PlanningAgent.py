@@ -121,8 +121,8 @@ class PlanningAgent(BasicAgent):
         final_answer = self._summarize_results(query, results, temperature)
         
         # 保存历史
-        self.history.append(UserMessage(query))
-        self.history.append(AssistantMessage(final_answer))
+        self.add_message(UserMessage(query))
+        self.add_message(AssistantMessage(final_answer))
         
         return final_answer
     

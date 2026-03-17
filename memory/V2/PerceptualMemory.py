@@ -1,4 +1,4 @@
-from BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
+from .BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
 from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import hashlib
@@ -7,9 +7,9 @@ import torch
 import random
 import logging
 import numpy as np
-from Store.VectorStore import VectorStore
-from Store.DocumentStore import DocumentStore
-from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+from .Store.VectorStore import VectorStore
+from .Store.DocumentStore import DocumentStore
+from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 from PIL import Image
 import io
 logger = logging.getLogger(__name__)
@@ -326,43 +326,42 @@ class PerceptualMemory(BaseMemory):
             try:
                 if query_modality=="text":
                     query_text_vector=self._encoder_text(query)
-                    query_image_vector=self._encoder_text_clip(query)
-                    query_audio_vector=self._encoder_text_clap(query)
-                    if not query_text_vector:
-                        logger.warning("文本编码失败")
-                        return []
-                    if not query_image_vector:
-                        logger.warning("clip:文本编码图像失败")
-                        return []
-                    if not query_audio_vector:
-                        logger.warning("clap:文本编码音频失败")
-                        return []
-                    text_vector_store=self.vector_stores["text"]
-                    image_vector_store=self.vector_stores["image"]
-                    audio_vector_store=self.vector_stores["audio"]
                     where={}
                     where["memory_type"]="perceptual"
                     if user_id:
                         where["user_id"]=user_id
                     where["modality"]="text"
+                    text_vector_store=self.vector_stores["text"]
                     text_search_result=text_vector_store.search_similar(
                         query_embedding=query_text_vector,
                         limit=limit,
                         where=where
                     )
-                    where["modality"]="image"
-                    image_search_result=image_vector_store.search_similar(
-                        query_embedding=query_image_vector,
-                        limit=limit,
-                        where=where
-                    )
-                    where["modality"]="audio"
-                    audio_search_result=audio_vector_store.search_similar(
-                        query_embedding=query_audio_vector,
-                        limit=limit,
-                        where=where
-                    )
-                    vector_search_result=text_search_result+image_search_result+audio_search_result
+                    vector_search_result.extend(text_search_result)
+                    if self.image_encoder:
+                        query_image_vector=self._encoder_text_clip(query)
+                        image_vector_store=self.vector_stores["image"]
+                        where["modality"]="image"
+                        image_search_result=image_vector_store.search_similar(
+                            query_embedding=query_image_vector,
+                            limit=limit,
+                            where=where
+                        )
+                        vector_search_result.extend(image_search_result)
+
+                    if self.audio_encoder:
+                        query_audio_vector=self._encoder_text_clap(query)
+
+                        audio_vector_store=self.vector_stores["audio"]
+
+ 
+                        where["modality"]="audio"
+                        audio_search_result=audio_vector_store.search_similar(
+                            query_embedding=query_audio_vector,
+                            limit=limit,
+                            where=where
+                        )
+                        vector_search_result.extend(audio_search_result)
                     
                 elif query_modality=="image":
                     query_image_vector=self._encoder_image(query)
@@ -584,7 +583,7 @@ class PerceptualMemory(BaseMemory):
     def get_all_memories(self):
         return self.perceptual_memories.copy()
 
-    def get_memory(self,id:str):
+    def get_memory_by_id(self,id:str):
         return self.id_to_memory.get(id,None)
 
     def get_memory_by_user_id(self,user_id:str):
