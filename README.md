@@ -79,10 +79,22 @@ response = agent.invoke("帮我搜索最新的AI新闻")
 
 ```python
 from agent import ConversationalAgent
-from memory import ConversationBufferMemory
+from memory import MemoryManage, MemoryConfig
 
-memory = ConversationBufferMemory(max_messages=20)
-agent = ConversationalAgent(name="chatbot", llm=llm, memory=memory)
+memory_manage = MemoryManage(
+    config=MemoryConfig(),
+    user_id="user1",
+    enable_working=True,
+    enable_episodic=False,
+    enable_semantic=False,
+    enable_perceptual=False,
+)
+
+agent = ConversationalAgent(
+    name="chatbot",
+    llm=llm,
+    memory_manage=memory_manage,
+)
 
 agent.invoke("我叫张三，今年25岁")
 agent.invoke("你还记得我的名字和年龄吗？")  # 能记住上下文

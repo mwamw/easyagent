@@ -6,7 +6,7 @@ ReAct Agent
 prompt 引导 LLM 输出结构化的推理过程。
 """
 from typing_extensions import override
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, TYPE_CHECKING
 import re
 import json
 import logging
@@ -19,6 +19,10 @@ from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
+    from context.manager import ContextManager
 
 
 class ReactAgent(BasicAgent):
@@ -60,6 +64,9 @@ class ReactAgent(BasicAgent):
         description: Optional[str] = None,
         config: Optional[Config] = None,
         verbose: bool = True,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        history_via_context_manager: bool = False,
     ):
         """
         初始化 ReAct Agent
@@ -81,7 +88,10 @@ class ReactAgent(BasicAgent):
             enable_tool=enable_tool,
             tool_registry=tool_registry,
             description=description,
-            config=config
+            config=config,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            history_via_context_manager=history_via_context_manager,
         )
         self.verbose = verbose
         self.scratchpad: List[str] = []  # 记录推理过程
@@ -100,6 +110,7 @@ class ReactAgent(BasicAgent):
             最终答案
         """
         self._validate_invoke_params(query, max_iter, temperature)
+        self._current_query = query
         
         # 清空 scratchpad
         self.scratchpad = []
@@ -122,10 +133,20 @@ class ReactAgent(BasicAgent):
             logger.debug(f"ReAct 迭代 {iteration}")
             
             # 构建当前消息
-            messages = [
-                SystemMessage(system_prompt),
-                UserMessage(user_message + "\n\n" + self._get_scratchpad())
-            ]
+            round_query = user_message + "\n\n" + self._get_scratchpad()
+            if self.context_manager is not None:
+                messages = self.context_manager.build_messages(
+                    query=round_query,
+                    history=self.history,
+                    system_prompt=system_prompt,
+                    include_history=True,
+                    include_query=True,
+                )
+            else:
+                messages = [
+                    SystemMessage(system_prompt),
+                    UserMessage(round_query)
+                ]
             
             # 调用 LLM
             try:
@@ -217,6 +238,10 @@ Final Answer: 对用户问题的完整回答
 
 {self.system_prompt or ''}
 """
+
+        # 与 BasicAgent 对齐：注入记忆提示
+        prompt += self._build_memory_prompt()
+
         return prompt
     
     def _format_tools_for_prompt(self) -> str:
@@ -344,10 +369,7 @@ Final Answer: 对用户问题的完整回答
     
     def _direct_answer(self, query: str, temperature: float, **kwargs) -> str:
         """不使用工具直接回答"""
-        messages = [
-            SystemMessage(self.system_prompt or "你是一个有用的助手。"),
-            UserMessage(query)
-        ]
+        messages = self._build_start_messages(query)
         
         try:
             response = self.llm.invoke(messages, temperature=temperature, **kwargs)
@@ -368,7 +390,4 @@ Final Answer: 对用户问题的完整回答
     @override
     def get_enhanced_prompt(self) -> str:
         """获取增强提示词，包含记忆上下文和 ReAct 指令"""
-        react_prompt = self._build_react_prompt()
-        # 注入记忆系统提示和 Working Memory 便签本
-        react_prompt += self._build_memory_prompt()
-        return react_prompt
+        return self._build_react_prompt()

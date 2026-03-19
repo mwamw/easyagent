@@ -3,7 +3,7 @@
 
 先分析任务并制定计划，然后逐步执行每个步骤。
 """
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, TYPE_CHECKING
 from typing_extensions import override
 import json
 import logging
@@ -16,6 +16,10 @@ from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
 from output.json_parser import JsonOutputParser
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
+    from context.manager import ContextManager
 
 
 class PlanningAgent(BasicAgent):
@@ -52,6 +56,9 @@ class PlanningAgent(BasicAgent):
         config: Optional[Config] = None,
         max_steps: int = 10,
         allow_replan: bool = True,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        history_via_context_manager: bool = False,
     ):
         """
         初始化规划 Agent
@@ -74,7 +81,10 @@ class PlanningAgent(BasicAgent):
             enable_tool=enable_tool,
             tool_registry=tool_registry,
             description=description,
-            config=config
+            config=config,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            history_via_context_manager=history_via_context_manager,
         )
         self.max_steps = max_steps
         self.allow_replan = allow_replan

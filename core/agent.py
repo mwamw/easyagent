@@ -10,7 +10,8 @@ from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
-    
+    from context.manager import ContextManager
+    from context.source.base import BaseContextSource
 import json
 import threading
 from Tool.BaseTool import Tool
@@ -47,6 +48,7 @@ class BaseAgent(ABC):
         enable_async_tool: bool = False,
         async_max_workers: int = 4,
         memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
     ):
         """
         初始化 Agent
@@ -90,6 +92,9 @@ class BaseAgent(ABC):
         self._unextracted_msg_count = 0
         self._memory_lock = threading.Lock()  # 保护后台提炼对 MemoryManage 的并发访问
         
+        # 上下文工程管理器（可选）
+        self.context_manager = context_manager
+        
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
             self._register_v2_memory_tools()
@@ -110,6 +115,19 @@ class BaseAgent(ABC):
         self.memory_manage = memory_manage
         if self.tool_registry is not None:
             self._register_v2_memory_tools()
+        if self.context_manager is not None:
+            from context.source.memory_source import MemoryContextSource
+            memory_source = MemoryContextSource(memory_manage=memory_manage)
+            self.context_manager.add_source(memory_source)
+        return self
+
+    def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
+        """绑定上下文管理器"""
+        self.context_manager = context_manager
+        if self.memory_manage is not None:
+            from context.source.memory_source import MemoryContextSource
+            memory_source = MemoryContextSource(memory_manage=self.memory_manage)
+            self.context_manager.add_source(memory_source)
         return self
     
     def with_tool(self,tool_registry: Optional[ToolRegistry]) -> None:
@@ -183,7 +201,7 @@ class BaseAgent(ABC):
                 summary_prompt = f"请提炼并保存以下对话记录到记忆系统中:\n{dialogue_text}"
                 
                 # 由于当前已经在独立线程中，调用 invoke 阻塞是可以接受的
-                bg_agent.invoke(summary_prompt)
+                bg_agent.invoke(query=summary_prompt)
                 
                 logger.info("后台记忆提炼完成，对话已被 LLM 自主归档。")
                 
@@ -213,15 +231,34 @@ class BaseAgent(ABC):
 - **按需使用**：其他记忆工具（如删除、更新）仅在信息过时或用户要求时使用。
 """
         
+        # 若 context_manager 已挂载 memory source，避免重复注入 Working Memory 全量文本
+        context_has_memory_source = False
+        if getattr(self, "context_manager", None) is not None:
+            try:
+                source_names = set(self.context_manager.builder.source_names)
+                context_has_memory_source = "memory" in source_names
+            except Exception:
+                context_has_memory_source = False
+
         # 注入 Working Memory 便签本
         if "working" in self.memory_manage.memory_types:
-            working_memories = self.memory_manage.memory_types["working"].get_all_memories()
-            if working_memories:
-                wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
-                wm_str = "\n".join(wm_texts)
-                prompt += f"\n\n【当前工作便签本（Working Memory）】:\n{wm_str}\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)"
+            if context_has_memory_source:
+                prompt += (
+                    "\n\n【当前工作便签本（Working Memory）】见【记忆上下文】，已由上下文管理器注入】"
+                    
+                    "\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)"
+                    "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
+                )
             else:
-                prompt += f"\n\n【当前工作便签本（Working Memory）】:\n(空)\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
+                working_memories = self.memory_manage.memory_types["working"].get_all_memories()
+                if working_memories:
+                    wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
+                    wm_str = "\n".join(wm_texts)
+                    prompt += f"\n\n【当前工作便签本（Working Memory）】:\n{wm_str}"
+                else:
+                    prompt += f"\n\n【当前工作便签本（Working Memory）】:\n(空)"
+                prompt += "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
+                prompt += "\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)\n"
         
         return prompt
     
@@ -234,6 +271,12 @@ class BaseAgent(ABC):
         """添加助手消息"""
         from .Message import AssistantMessage
         self.add_message(AssistantMessage(content))
+    
+    def add_context_source(self, source:BaseContextSource) -> None:
+        """添加上下文来源"""
+        if self.context_manager is None:
+            raise ParameterValidationError("上下文管理器未配置，无法添加上下文来源!")
+        self.context_manager.add_source(source)
     
     def clear_history(self) -> None:
         """清空对话历史"""

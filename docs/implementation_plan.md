@@ -1,5 +1,9 @@
 # EasyAgent 框架完善实现计划
 
+> [!NOTE]
+> 本文档主要记录早期设计草案（V1/V1.5 阶段），与当前 V2 实现可能存在差异。
+> 以代码与 README 的最新接口为准。
+
 完善 EasyAgent 框架，使其成为一个功能完整、可扩展的 Agent 开发框架。
 
 ## User Review Required

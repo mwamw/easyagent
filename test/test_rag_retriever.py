@@ -424,7 +424,7 @@ class TestCompressionRetriever(unittest.TestCase):
             def invoke(self, messages):
                 raise RuntimeError("压缩失败")
 
-        compressor = CompressionRetriever(base_ret, FailingLLM(), k=3)
+        compressor = CompressionRetriever(base_ret, llm=FailingLLM(), k=3)
         results = compressor.retrieve("人工智能")
         # 失败时应保留原文档
         self.assertGreater(len(results), 0)
