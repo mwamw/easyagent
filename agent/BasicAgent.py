@@ -15,6 +15,10 @@ from core.Exception import *
 from core.Exception import *
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
+    from context.manager import ContextManager
+
 class BasicAgent(BaseAgent):
     """基础智能体实现，支持可选的工具调用和记忆功能"""
 
@@ -30,6 +34,9 @@ class BasicAgent(BaseAgent):
         verbose_thinking: bool = False,
         enable_async_tool: bool = False,
         async_max_workers: int = 4,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        history_via_context_manager: bool = False,
     ):
         """
         初始化 BasicAgent
@@ -70,11 +77,15 @@ class BasicAgent(BaseAgent):
             tool_registry=tool_registry,
             enable_async_tool=enable_async_tool,
             async_max_workers=async_max_workers,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
         )
         
 
         self.verbose_thinking = verbose_thinking
         self.thinking_history: list[str] = []  # 记录思考过程
+        self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
+        self.history_via_context_manager = history_via_context_manager
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，provider: {llm.provide}")
 
@@ -99,6 +110,7 @@ class BasicAgent(BaseAgent):
         """
         # 参数验证
         self._validate_invoke_params(query, max_iter, temperature)
+        self._current_query = query  # 供 get_enhanced_prompt 使用
         
         messages: list[Message | dict[str, str]] = []
  
@@ -108,10 +120,7 @@ class BasicAgent(BaseAgent):
         else:
             logger.info("使用普通模式调用智能体")
             try:
-                messages.append(SystemMessage(self.get_enhanced_prompt()))
-                for message in self.history:
-                    messages.append(message)
-                messages.append(UserMessage(query))
+                messages = self._build_start_messages(query)
                 
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs)
                 
@@ -134,15 +143,12 @@ class BasicAgent(BaseAgent):
                 raise LLMInvokeError(f"LLM 调用失败: {e}") from e
 
     def stream_invoke(self,query: str,temperature: float = 0.7, **kwargs):
+        self._current_query = query
         if self.enable_tool:
             logger.info("使用工具模式不支持流式调用智能体")
             raise NotImplementedError("工具模式不支持流式调用智能体")
         else:
-            messages=[]
-            messages.append(SystemMessage(self.get_enhanced_prompt()))
-            for message in self.history:
-                messages.append(message)
-            messages.append(UserMessage(query))
+            messages = self._build_start_messages(query)
             final_results=[]
             for chunk in self.llm.think(messages, temperature=temperature, **kwargs):
                 final_results.append(chunk)
@@ -170,6 +176,7 @@ class BasicAgent(BaseAgent):
         """
         # 参数验证
         self._validate_invoke_params(query, max_iter, temperature)
+        self._current_query = query  # 供 get_enhanced_prompt 使用
         
         messages: list[Message | dict[str, str]] = []
         
@@ -183,10 +190,7 @@ class BasicAgent(BaseAgent):
         else:
             logger.info("使用普通模式调用智能体")
             try:
-                messages.append(SystemMessage(self.get_enhanced_prompt()))
-                for message in self.history:
-                    messages.append(message)
-                messages.append(UserMessage(query))
+                messages = self._build_start_messages(query)
                 
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs)
                 
@@ -239,12 +243,7 @@ class BasicAgent(BaseAgent):
         if self.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
         
-        enhanced_prompt = self.get_enhanced_prompt()
-        messages.append(SystemMessage(enhanced_prompt))
-        
-        for message in self.history:
-            messages.append(message)
-        messages.append(UserMessage(query))
+        messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
         iteration_count = 0
@@ -372,12 +371,7 @@ class BasicAgent(BaseAgent):
         if self.async_executor is None:
             raise ToolRegistryError("异步工具执行器未初始化！请启用 enable_async_tool")
         
-        enhanced_prompt = self.get_enhanced_prompt()
-        messages.append(SystemMessage(enhanced_prompt))
-        
-        for message in self.history:
-            messages.append(message)
-        messages.append(UserMessage(query))
+        messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
         iteration_count = 0
@@ -550,8 +544,49 @@ class BasicAgent(BaseAgent):
             
         # 注入记忆系统提示和 Working Memory 便签本
         enhanced_prompt += self._build_memory_prompt()
-                
+
         return enhanced_prompt
+
+    def _use_context_history(self) -> bool:
+        """是否由 ContextManager 管理 history 注入"""
+        return bool(self.history_via_context_manager and self.context_manager)
+
+    def _context_include_history(self) -> bool:
+        """给 ContextManager 的 include_history 开关"""
+        return self._use_context_history()
+
+    def _append_runtime_history(self, messages: list[Message | dict[str, str]]) -> None:
+        """按当前模式追加 history 到消息序列。"""
+        if self._use_context_history():
+            return
+        for message in self.history:    
+            messages.append(message)
+
+    def _build_start_messages(self, query: str) -> list[Any]:
+        """构建发送给 LLM 的起始消息。
+
+        当配置了 ContextManager 时，起始 messages 由 ContextManager 统一管理和构造：
+        - history 保持多轮对话结构
+        - 非 history 来源聚合到单条 system 消息
+        """
+        system_prompt = self.get_enhanced_prompt()
+
+        if self.context_manager is not None:
+            try:
+                return self.context_manager.build_messages(
+                    query=query,
+                    history=self.history,
+                    system_prompt=system_prompt,
+                    include_history=True,
+                    include_query=True,
+                )
+            except Exception as e:
+                logger.warning(f"ContextManager 构建 messages 失败，回退默认拼接: {e}")
+
+        messages: list[Any] = [SystemMessage(system_prompt)]
+        self._append_runtime_history(messages)
+        messages.append(UserMessage(query))
+        return messages
 
         
 

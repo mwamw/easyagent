@@ -39,8 +39,8 @@ class MemoryManage:
             if episodic_memory:
                 self.memory_types['episodic']=episodic_memory
             else:
-                from Store import SQLiteDocumentStore,QdrantVectorStore
-                from Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
+                from .Store import SQLiteDocumentStore,QdrantVectorStore
+                from .Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
                 episode_document_store=SQLiteDocumentStore(os.getenv("EPISODIC_SQLITE_PATH") or "./EpisodicMemory.db")
                 episodic_vector_store=QdrantVectorStore(way="local",collection_name="episodic_memory",host=os.getenv("QDRANT_HOST") or "localhost",port=int(os.getenv("QDRANT_PORT") or 6379),vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384))
                 embedding_model=HuggingfaceEmbeddingModel(os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2")
@@ -49,8 +49,8 @@ class MemoryManage:
             if semantic_memory:
                 self.memory_types['semantic']=semantic_memory
             else:
-                from Store import SQLiteDocumentStore,Neo4jGraphStore
-                from Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
+                from .Store import SQLiteDocumentStore,Neo4jGraphStore,QdrantVectorStore
+                from .Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
                 semantic_vector_store=QdrantVectorStore(way="local",collection_name="semantic_memory",host=os.getenv("QDRANT_HOST") or "localhost",port=int(os.getenv("QDRANT_PORT") or 6379),vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384))
                 semantic_graph_store=Neo4jGraphStore(uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",username=os.getenv("NEO4J_USER") or "neo4j",password=os.getenv("NEO4J_PASSWORD") or "password",database=os.getenv("NEO4J_DATABASE") or "neo4j")
                 embedding_model=HuggingfaceEmbeddingModel(os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2")

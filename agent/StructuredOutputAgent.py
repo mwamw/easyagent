@@ -3,7 +3,7 @@
 
 强制 LLM 输出符合指定 Schema 的结构化数据。
 """
-from typing import Optional, Type, TypeVar, Generic
+from typing import Optional, Type, TypeVar, Generic, TYPE_CHECKING
 from typing_extensions import override
 import logging
 
@@ -17,6 +17,10 @@ from output.pydantic_parser import PydanticOutputParser
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
+    from context.manager import ContextManager
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -61,6 +65,9 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         description: Optional[str] = None,
         config: Optional[Config] = None,
         max_retries: int = 3,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        history_via_context_manager: bool = False,
     ):
         """
         初始化结构化输出 Agent
@@ -84,6 +91,9 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
             tool_registry=tool_registry,
             description=description,
             config=config,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            history_via_context_manager=history_via_context_manager,
         )
         
         self.output_model = output_model

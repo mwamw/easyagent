@@ -12,6 +12,7 @@ if _v2_path not in sys.path:
     sys.path.insert(0, _v2_path)
 
 # Setup context
+import context
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -61,17 +62,17 @@ class TestAgentMemoryIntegration:
         )
 
         # 简单实例化 semantic 依赖
-        self.graph_store = Neo4jGraphStore(uri="bolt://localhost:17687", username="neo4j", password="password")
-        self.vector_store = QdrantVectorStore(way="memory", collection_name="semantic_memory")
+        # self.graph_store = Neo4jGraphStore(uri="bolt://localhost:17687", username="neo4j", password="password")
+        # self.vector_store = QdrantVectorStore(way="memory", collection_name="semantic_memory")
         self.llm = EasyLLM() # Assume valid config internally
-        self.extractor = Extractor(self.llm, False)
-        self.semantic_memory = SemanticMemory(
-            memory_config=MemoryConfig(),
-            vector_store=self.vector_store,
-            graph_store=self.graph_store,
-            extractor=self.extractor,
-            embedding_model=self.embedding_model
-        )
+        # self.extractor = Extractor(self.llm, False)
+        # self.semantic_memory = SemanticMemory(
+        #     memory_config=MemoryConfig(),
+        #     vector_store=self.vector_store,
+        #     graph_store=self.graph_store,
+        #     extractor=self.extractor,
+        #     embedding_model=self.embedding_model
+        # )
         # 初始化 MemoryManage，为了简单只开启 working 和 episodic
         self.mm = MemoryManage(
             config=self.config,
@@ -80,8 +81,8 @@ class TestAgentMemoryIntegration:
             working_memory=self.working_memory,
             enable_episodic=True,
             episodic_memory=self.episodic_memory,
-            enable_semantic=True,
-            semantic_memory=self.semantic_memory,
+            enable_semantic=False,
+            # semantic_memory=self.semantic_memory,
             enable_perceptual=True,
             perceptual_memory=self.perceptual_memory
         ) 
@@ -100,8 +101,14 @@ class TestAgentMemoryIntegration:
         
         # .with_memory 应该自动注册了工具
         tools = self.tool_registry.get_openai_tools()
+        
+        
         assert any(t["function"]["name"] == "add_memory_tool" for t in tools), "Tool registry failed to auto-register memory tools!"
         
+        from context.source.memory_source import MemoryContextSource
+        from context.manager import ContextManager
+        context_manager = ContextManager(max_tokens=50000, auto_history=True)
+        self.agent.with_context(context_manager)
         print("测试环境初始化完成！")
 
     def test_implicit_prompt_injection(self):
@@ -225,12 +232,36 @@ class TestAgentMemoryIntegration:
         else:
             print("❌ 未观察到自动提炼产生新的记忆，可能是LLM抽取失败或线程未执行。")
 
+    def test_working_memory_management(self):
+        print("\n========== 测试5: Working Memory 的自动管理 ==========")
+        #测试自动将复杂任务中的关键信息保存到 Working Memory，并在后续对话中正确利用这些信息。
+        self.agent.clear_history()
+        self.mm.clear_memories()
+        prompt1 = "我正在计划一个秘密派对，地点在海边别墅。"
+        print(f"User: {prompt1}")
+        self.agent.invoke(prompt1)
+        self.agent.clear_history()
+        prompt2 = "请帮我回忆一下这个秘密派对的地点在哪里？"
+        print(self.agent._build_start_messages(query=prompt2))
+        print(f"User: {prompt2}")
+        res2 = self.agent.invoke(prompt2)
+        print(f"Agent: {res2}")
+        self.agent.clear_history()
+        
+        #测试话题重大变更时，Agent 是否能正确更新 Working Memory 中的相关信息。
+        prompt3 ="量子化学是研究分子和原子在量子力学框架下行为的学科。其中有哪些必须了解的核心概念？"
+        print(f"User: {prompt3}")
+        print(self.agent._build_start_messages(query=prompt3))
+
+        res3 = self.agent.invoke(prompt3)
+        print(f"Agent: {res3}")
     def run_all(self):
         try:
             # self.test_implicit_prompt_injection()
+            self.test_working_memory_management()
             # self.test_agent_tool_usage_for_memory()
             # self.test_background_auto_extraction()
-            self.test_memory_update_and_remove()
+            # self.test_memory_update_and_remove()
             print("\n🏁 所有Agent-Memory集成测试结束！")
         except Exception as e:
             print(f"\n❌ 测试过程中发生异常: {e}")

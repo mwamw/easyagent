@@ -16,6 +16,7 @@ from core.Exception import *
 
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
+    from context.manager import ContextManager
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class ConversationalAgent(BasicAgent):
         description: Optional[str] = None,
         config: Optional[Config] = None,
         auto_save_to_working: bool = True,
+        context_manager: Optional["ContextManager"] = None,
+        history_via_context_manager: bool = False,
     ):
         """
         初始化对话 Agent
@@ -85,14 +88,13 @@ class ConversationalAgent(BasicAgent):
             enable_tool=enable_tool,
             tool_registry=tool_registry,
             description=description,
-            config=config
+            config=config,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            history_via_context_manager=history_via_context_manager,
         )
         
         self.auto_save_to_working = auto_save_to_working
-        
-        # 绑定 V2 记忆系统
-        if memory_manage is not None:
-            self.with_memory(memory_manage)
     
     @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:

@@ -56,7 +56,7 @@ class ToolRegistry:
         for tool in self.tools.values():
             result.append(tool.get_openai_schema())
         return result
-    
+
     def disregister_tool(self,name:str):
         if name in self.tools:
             del self.tools[name]

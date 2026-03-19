@@ -1,0 +1,12 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest and tooling caches
+.pytest_cache/
+
+# Local env files
+.env
+.venv/
+venv/

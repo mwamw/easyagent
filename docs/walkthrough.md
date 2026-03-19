@@ -80,7 +80,7 @@ EasyAgent/
 | BasicAgent | 通用对话和工具调用 | Function Calling |
 | ReactAgent | 复杂推理任务 | Thought → Action → Observation |
 | PlanningAgent | 多步骤任务 | 任务分解和逐步执行 |
-| ConversationalAgent | 多轮对话 | 集成 V1 记忆系统 |
+| ConversationalAgent | 多轮对话 | 集成 V2 MemoryManage（可配置 Working/Episodic/Semantic） |
 | RAGAgent | 知识问答 | 检索增强生成 |
 | StructuredOutputAgent | 信息提取 | Pydantic Schema 强制输出 |
 

@@ -49,7 +49,7 @@ class HybridRetriever(BaseRetriever):
         self.k = k
         self.rrf_k = rrf_k
 
-    def retrieve(self, query: str, k: int = None) -> List[Document_Chunk]:
+    def retrieve(self, query: str, k: Optional[int] = None) -> List[Document_Chunk]:
         k = k or self.k
         fetch_k = k * 3  # 多取一些用于融合
 
@@ -70,5 +70,5 @@ class HybridRetriever(BaseRetriever):
             rrf_scores[cid] = rrf_scores.get(cid, 0) + self.bm25_weight / (self.rrf_k + rank + 1)
             all_chunks[cid] = chunk
 
-        sorted_ids = sorted(rrf_scores, key=rrf_scores.get, reverse=True)[:k]
+        sorted_ids = sorted(rrf_scores, key=lambda cid: rrf_scores[cid], reverse=True)[:k]
         return [all_chunks[cid] for cid in sorted_ids]
