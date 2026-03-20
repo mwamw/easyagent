@@ -8,7 +8,6 @@ LLM 实体关系提取器实现
 2. 验证 Agent：检查提取结果的质量和一致性，修正后返回
 """
 from typing import Optional, Any
-from agent import StructuredOutputAgent
 from core.llm import EasyLLM
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -79,6 +78,8 @@ class Extractor:
         self.enable_verification = enable_verification
 
         # 提取 Agent
+        from agent import StructuredOutputAgent
+        
         self.extract_agent = StructuredOutputAgent(
             name="extractor",
             llm=llm,

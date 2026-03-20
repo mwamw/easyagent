@@ -1,0 +1,65 @@
+[33mcommit 5a2a878b9a3974a965011fde9f2923a82d2d81cf[m[33m ([m[1;36mHEAD -> [m[1;32mfeature/split-memory-tools[m[33m)[m
+Author: mwamw <13081969068@163.com>
+Date:   Thu Mar 19 23:08:49 2026 +0800
+
+    context
+
+[33mcommit 09d665732d46cc8d28c9ed74dbff00016e57f3fb[m[33m ([m[1;32mdevelop[m[33m)[m
+Author: mwamw <13081969068@163.com>
+Date:   Tue Mar 17 14:40:33 2026 +0800
+
+    rag
+
+[33mcommit 551dc719211b565d7c45ae774c7c20a37f8880be[m
+Author: mwamw <13081969068@163.com>
+Date:   Mon Mar 9 15:50:40 2026 +0800
+
+    chore: save current memory management and Tool changes before splitting MemoryTool
+
+[33mcommit 1e3f9df0bd5ff0002d57d5d9834101b339ebff13[m
+Author: mwamw <13081969068@163.com>
+Date:   Fri Mar 6 00:34:43 2026 +0800
+
+    完成memory模块的测试和开发
+
+[33mcommit 9bf974d749c5908b4861b6699658ebe79128e666[m
+Author: mwamw <13081969068@163.com>
+Date:   Thu Feb 5 02:10:23 2026 +0800
+
+    提高搜索效率
+
+[33mcommit eee898da761dac3786dcf76242c25721be8d12dc[m
+Author: mwamw <13081969068@163.com>
+Date:   Thu Feb 5 02:09:58 2026 +0800
+
+    添加记忆功能
+
+[33mcommit 58cf0c1f694d40a8d86ea734b862c43e07c861ec[m
+Author: mwamw <13081969068@163.com>
+Date:   Tue Jan 20 20:03:38 2026 +0800
+
+    添加异步执行工具
+
+[33mcommit d96d21ed759237eab9f99177e901662d6725fec8[m
+Author: mwamw <13081969068@163.com>
+Date:   Tue Jan 20 18:45:01 2026 +0800
+
+    修复了planagent的问题
+
+[33mcommit 708b3be9edf86986a97ed4fd56284dcb7790146f[m[33m ([m[1;32mmaster[m[33m)[m
+Author: mwamw <13081969068@163.com>
+Date:   Mon Jan 19 19:52:06 2026 +0800
+
+    新增providers目录 实现LLM provider适配器模式
+
+[33mcommit 4fc5696f9d88760f0cf9236cfad7eae2e1246a87[m
+Author: mwamw <13081969068@163.com>
+Date:   Mon Jan 19 19:51:53 2026 +0800
+
+    新增providers目录 实现LLM provider适配器模式
+
+[33mcommit 6ad677a9daff219c2bae9cb9e5c34d840d8864fc[m
+Author: mwamw <13081969068@163.com>
+Date:   Mon Jan 19 17:54:59 2026 +0800
+
+    first push
