@@ -23,6 +23,9 @@ tiktoken>=0.5.0
 # 搜索工具 (可选)
 google-search-results>=2.4.0
 
+# MCP 协议工具 (可选)
+fastmcp>=2.0.0
+
 # RAG 高级功能 (可选)
 # rank-bm25>=0.2.0          # BM25 检索
 # jieba>=0.42.0             # 中文分词

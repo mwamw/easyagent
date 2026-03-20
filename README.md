@@ -75,6 +75,67 @@ agent = BasicAgent(
 response = agent.invoke("帮我搜索最新的AI新闻")
 ```
 
+### MCP 工具集成
+
+```python
+from agent import BasicAgent
+from core.llm import EasyLLM
+from Tool.ToolRegistry import ToolRegistry
+from Tool.builtin import register_mcp_tools
+
+llm = EasyLLM(model="gemini-2.5-flash", provide="google")
+registry = ToolRegistry()
+
+# 示例 1: 通过本地 Python MCP Server 脚本接入（stdio）
+mcp_manager = register_mcp_tools(
+    registry=registry,
+    server_source=["python", "./examples/mcp_server.py"],
+    tool_prefix="mcp_",
+)
+
+agent = BasicAgent(
+    name="mcp_agent",
+    llm=llm,
+    enable_tool=True,
+    tool_registry=registry,
+)
+
+print(agent.invoke("请调用 mcp_calc 计算 12*7"))
+
+# 结束时关闭连接
+mcp_manager.close()
+```
+
+说明：
+
+- `register_mcp_tools(...)` 会自动从 MCP Server 拉取 `list_tools`，并注册到 `ToolRegistry`
+- 支持 `stdio/http/sse/FastMCP(memory)` 传输
+- 需要安装可选依赖：`pip install fastmcp>=2.0.0`
+
+你也可以使用更简洁的语法糖写法：
+
+```python
+from Tool.ToolRegistry import ToolRegistry
+from Tool.builtin import mcptool
+
+registry = ToolRegistry()
+
+mcp_tool = mcptool(
+    server_source=[
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/wxd/LLM/EasyAgent",
+    ],
+    tool_prefix="fs_",
+)
+
+# 等价于 mcp_tool.register_to_registry(registry)
+registry.registry(mcp_tool)
+```
+
+注意：上面的变量应是 `mcp_tool`（你示例里的 `mcptool` 如果是函数名，需先赋值给变量再注册）。
+
 ### 对话记忆
 
 ```python

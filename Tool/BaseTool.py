@@ -2,7 +2,7 @@
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
-from typing import Type
+from typing import Any, Type
 
 class Tool(ABC):
     def __init__(self,name:str,description:str,parameters:Type[BaseModel]):
@@ -11,7 +11,7 @@ class Tool(ABC):
         self.parameters=parameters
     
     @abstractmethod
-    def run(self,parameters:dict):
+    def run(self,parameters:dict) -> Any:
         pass
 
     def get_openai_schema(self) ->dict:

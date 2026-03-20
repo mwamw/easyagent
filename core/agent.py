@@ -8,10 +8,9 @@ from abc import ABC, abstractmethod
 from .Config import Config
 from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
-if TYPE_CHECKING:
-    from memory.V2.MemoryManage import MemoryManage
-    from context.manager import ContextManager
-    from context.source.base import BaseContextSource
+from memory.V2.MemoryManage import MemoryManage
+from context.manager import ContextManager
+from context.source.base import BaseContextSource
 import json
 import threading
 from Tool.BaseTool import Tool
@@ -422,7 +421,7 @@ class BaseAgent(ABC):
         
         return self._safe_execute_tool(tool_name, tool_args)
 
-    def addTool(self, tool: Tool) -> None:
+    def addTool(self, tool) -> None:
         """
         添加工具
         
@@ -439,11 +438,8 @@ class BaseAgent(ABC):
         if tool is None:
             raise ParameterValidationError("工具实例不能为空!")
         
-        if not isinstance(tool, Tool):
-            raise ParameterValidationError(f"tool 必须是 Tool 类型，收到: {type(tool).__name__}")
-        
         try:
-            self.tool_registry.registerTool(tool)
+            self.tool_registry.registry(tool)
             logger.info(f"成功添加工具: {getattr(tool, 'name', 'unknown')}")
         except Exception as e:
             raise ToolRegistryError(f"添加工具失败: {e}") from e

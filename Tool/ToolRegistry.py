@@ -1,6 +1,5 @@
 import json
 from typing import Callable
-
 from pydantic import BaseModel
 from .BaseTool import Tool
 from typing import Type
@@ -13,6 +12,18 @@ class ToolRegistry:
     def registerTool(self,tool:Tool):
         self.tools[tool.name]=tool
 
+    def registry(self, item):
+        """兼容注册入口：支持 Tool 实例或带 register_to_registry 的对象。"""
+        if isinstance(item, Tool):
+            self.registerTool(item)
+            return item
+
+        register_fn = getattr(item, "register_to_registry", None)
+        if callable(register_fn):
+            return register_fn(self)
+
+        raise ValueError("registry(...) 仅支持 Tool 实例或可注册对象")
+
     def tool(self, name: str, description: str, parameters: Type[BaseModel]):
         """装饰器：注册函数为工具"""
         def decorator(func):
@@ -22,9 +33,9 @@ class ToolRegistry:
             
             # 注册到 registry
             class FunctionTool(Tool):
-                def run(self, params: dict):
-                    return func(**params)
-            
+                def run(self, parameters: dict):
+                    return func(**parameters)
+
             tool_instance = FunctionTool(name, description, parameters)
             self.registerTool(tool_instance)
             
