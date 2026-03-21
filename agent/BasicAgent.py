@@ -12,7 +12,7 @@ import json
 import logging
 from core.Exception import *
 
-from core.Exception import *
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ class BasicAgent(BaseAgent):
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
 
-        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，provider: {llm.provide}")
+        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，provider: {llm.provider_name}")
 
 
     # @override
@@ -112,17 +112,27 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         self._current_query = query  # 供 get_enhanced_prompt 使用
         
+        self.callback_manager.on_agent_start(self.name, query)
+        
         messages: list[Message | dict[str, str]] = []
  
         if self.enable_tool :
             logger.info("使用工具模式调用智能体")
-            return self.invoke_with_tool(query, messages, max_iter, temperature)
+            try:
+                result = self.invoke_with_tool(query, messages, max_iter, temperature)
+                self.callback_manager.on_agent_end(self.name, result, success=True)
+                return result
+            except Exception as e:
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+                raise
         else:
             logger.info("使用普通模式调用智能体")
             try:
                 messages = self._build_start_messages(query)
                 
+                self.callback_manager.on_llm_start(messages)
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs)
+                self.callback_manager.on_llm_end(response or "")
                 
                 # 验证响应
                 if response is None:
@@ -134,12 +144,15 @@ class BasicAgent(BaseAgent):
                 
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(response))
+                self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
             except LLMInvokeError:
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise LLMInvokeError(f"LLM 调用失败: {e}") from e
 
     def stream_invoke(self,query: str,temperature: float = 0.7, **kwargs):
@@ -253,11 +266,13 @@ class BasicAgent(BaseAgent):
             logger.debug(f"工具调用迭代 {iteration_count}")
             
             try:
+                self.callback_manager.on_llm_start(messages)
                 response = self.llm.invoke_with_tools(
                     messages,
                     self.tool_registry.get_openai_tools(),
                     temperature=temperature
                 )
+                self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
                 
                 # 验证响应对象
                 if response is None:

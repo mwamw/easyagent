@@ -150,7 +150,7 @@ class ReactAgent(BasicAgent):
             
             # 调用 LLM
             try:
-                response = self.llm.invoke(messages, temperature=temperature, **kwargs)
+                response = self.llm.invoke(messages, temperature=temperature, **kwargs) # type: ignore
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
                 final_answer = f"推理过程中发生错误: {e}"
@@ -360,7 +360,7 @@ Final Answer: 对用户问题的完整回答
                 else:
                     return f"错误：未找到工具 '{action}'。可用工具: {list(self.tool_registry.tools.keys())}"
             
-            result = self.tool_registry.executeTool(action, action_input)
+            result = self.tool_registry.execute_tool(action, action_input)
             return str(result) if result else "工具执行完成，无返回结果"
         
         except Exception as e:

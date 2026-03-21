@@ -9,13 +9,13 @@ class ToolRegistry:
         self.tools:dict[str,Tool]={}
 
     
-    def registerTool(self,tool:Tool):
+    def register_tool(self,tool:Tool):
         self.tools[tool.name]=tool
 
     def registry(self, item):
         """兼容注册入口：支持 Tool 实例或带 register_to_registry 的对象。"""
         if isinstance(item, Tool):
-            self.registerTool(item)
+            self.register_tool(item)
             return item
 
         register_fn = getattr(item, "register_to_registry", None)
@@ -37,7 +37,7 @@ class ToolRegistry:
                     return func(**parameters)
 
             tool_instance = FunctionTool(name, description, parameters)
-            self.registerTool(tool_instance)
+            self.register_tool(tool_instance)
             
             return wrapper
         return decorator
@@ -50,7 +50,7 @@ class ToolRegistry:
 
         return result
 
-    def executeTool(self,name:str,parameters:dict):
+    def execute_tool(self,name:str,parameters:dict):
         if name in self.tools:
             try:
                 result= self.tools[name](parameters)
@@ -68,11 +68,29 @@ class ToolRegistry:
             result.append(tool.get_openai_schema())
         return result
 
-    def disregister_tool(self,name:str):
+    def unregister_tool(self,name:str):
         if name in self.tools:
             del self.tools[name]
         else:
             print(f"Tool {name} not found")
 
-    def get_Tool(self,name:str):
+    def get_tool(self,name:str):
         return self.tools.get(name)
+
+    # ==================== 向后兼容别名 ====================
+
+    def registerTool(self, tool: Tool):
+        """向后兼容：请改用 register_tool"""
+        return self.register_tool(tool)
+
+    def executeTool(self, name: str, parameters: dict):
+        """向后兼容：请改用 execute_tool"""
+        return self.execute_tool(name, parameters)
+
+    def get_Tool(self, name: str):
+        """向后兼容：请改用 get_tool"""
+        return self.get_tool(name)
+
+    def disregister_tool(self, name: str):
+        """向后兼容：请改用 unregister_tool"""
+        return self.unregister_tool(name)

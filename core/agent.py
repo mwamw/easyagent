@@ -11,6 +11,7 @@ from Tool.ToolRegistry import ToolRegistry
 from memory.V2.MemoryManage import MemoryManage
 from context.manager import ContextManager
 from context.source.base import BaseContextSource
+from .callbacks import CallbackManager
 import json
 import threading
 from Tool.BaseTool import Tool
@@ -48,6 +49,7 @@ class BaseAgent(ABC):
         async_max_workers: int = 4,
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
     ):
         """
         初始化 Agent
@@ -59,6 +61,7 @@ class BaseAgent(ABC):
             description: Agent 描述
             config: 配置
             memory_manage: V2 记忆管理实例（可选）
+            callback_manager: 回调管理器（可选）
         """
         self.name = name
         self.llm = llm
@@ -66,6 +69,9 @@ class BaseAgent(ABC):
         self.description = description
         self.config = config or Config.from_env()
         self.history = []
+        
+        # 回调系统
+        self.callback_manager = callback_manager or CallbackManager()
         
         # 工具系统
         if enable_tool and not tool_registry:
@@ -187,9 +193,9 @@ class BaseAgent(ABC):
                 
                 # 使用一个独立的、无上下文包袱的 Agent 进行记忆提炼与保存
                 bg_registry = ToolRegistry()
-                add_memory_tool=self.tool_registry.get_Tool("add_memory_tool")
+                add_memory_tool=self.tool_registry.get_tool("add_memory_tool")
                 if add_memory_tool:
-                    bg_registry.registerTool(add_memory_tool)
+                    bg_registry.register_tool(add_memory_tool)
                 bg_agent = BasicAgent(
                     name="MemoryExtractor",
                     llm=self.llm,
@@ -234,13 +240,13 @@ class BaseAgent(ABC):
         context_has_memory_source = False
         if getattr(self, "context_manager", None) is not None:
             try:
-                source_names = set(self.context_manager.builder.source_names)
+                source_names = set(self.context_manager.builder.source_names) #type: ignore
                 context_has_memory_source = "memory" in source_names
             except Exception:
                 context_has_memory_source = False
 
         # 注入 Working Memory 便签本
-        if "working" in self.memory_manage.memory_types:
+        if "working" in self.memory_manage.memory_types: #type: ignore
             if context_has_memory_source:
                 prompt += (
                     "\n\n【当前工作便签本（Working Memory）】见【记忆上下文】，已由上下文管理器注入】"
@@ -249,7 +255,7 @@ class BaseAgent(ABC):
                     "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
                 )
             else:
-                working_memories = self.memory_manage.memory_types["working"].get_all_memories()
+                working_memories = self.memory_manage.memory_types["working"].get_all_memories() #type: ignore
                 if working_memories:
                     wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
                     wm_str = "\n".join(wm_texts)
@@ -380,24 +386,28 @@ class BaseAgent(ABC):
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
         
+        self.callback_manager.on_tool_start(tool_name, tool_args)
+        
         try:
-            result = self.tool_registry.executeTool(tool_name, tool_args)
+            result = self.tool_registry.execute_tool(tool_name, tool_args)
             
             # 确保返回字符串
             if result is None:
-                return "工具执行完成，无返回结果"
+                result = "工具执行完成，无返回结果"
             
             if not isinstance(result, str):
-                return str(result)
+                result = str(result)
             
+            self.callback_manager.on_tool_end(tool_name, result, success=True)
             return result
             
         except Exception as e:
+            self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
 
-    def executeTool(self, tool_name: str, tool_args: dict) -> str:
+    def execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """
-        执行工具（保留原有接口）
+        执行工具
         
         Args:
             tool_name: 工具名称
@@ -421,7 +431,7 @@ class BaseAgent(ABC):
         
         return self._safe_execute_tool(tool_name, tool_args)
 
-    def addTool(self, tool) -> None:
+    def add_tool(self, tool) -> None:
         """
         添加工具
         
@@ -443,6 +453,16 @@ class BaseAgent(ABC):
             logger.info(f"成功添加工具: {getattr(tool, 'name', 'unknown')}")
         except Exception as e:
             raise ToolRegistryError(f"添加工具失败: {e}") from e
+
+    # ==================== 向后兼容别名 ====================
+
+    def executeTool(self, tool_name: str, tool_args: dict) -> str:
+        """向后兼容：请改用 execute_tool"""
+        return self.execute_tool(tool_name, tool_args)
+
+    def addTool(self, tool) -> None:
+        """向后兼容：请改用 add_tool"""
+        return self.add_tool(tool)
 
     def get_tools_description(self) :
         """

@@ -376,7 +376,7 @@ class MCPToolManager:
                 tool_info=tool_info,
                 prefix=self.tool_prefix,
             )
-            registry.registerTool(tool)
+            registry.register_tool(tool)
             wrapped.append(tool)
 
         # 保存已注册的包装工具

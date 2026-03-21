@@ -41,7 +41,7 @@ class EasyLLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[int] = None,
-        provide: Optional[str] = "auto",
+        provider: Optional[str] = "auto",
         **kwargs
     ):
         """
@@ -54,9 +54,9 @@ class EasyLLM:
             api_key: API 密钥
             base_url: API 地址
             timeout: 超时时间
-            provide: Provider 类型 (auto, openai, google, anthropic, ...)
+            provider: Provider 类型 (auto, openai, google, anthropic, ...)
         """
-        self.provide = provide
+        self.provider_name = provider
         self.model = model or os.getenv("LLM_MODEL_ID")
         self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.base_url = base_url or os.getenv("LLM_BASE_URL")
@@ -66,26 +66,26 @@ class EasyLLM:
         self.kwargs = kwargs
         
         # 自动检测 Provider
-        if self.provide == "auto":
-            self.provide = self._auto_detect_provider()
+        if self.provider_name == "auto":
+            self.provider_name = self._auto_detect_provider()
         
         # 解析 API 密钥和地址
-        self.resovle_api_key, self.resovle_base_url = self._resolve_api_key_and_base_url()
+        self.resolve_api_key, self.resolve_base_url = self._resolve_api_key_and_base_url()
         
         # 设置默认模型
         if not self.model:
             self.model = self._get_default_model()
         
         # 验证配置
-        if not self.resovle_api_key or not self.resovle_base_url:
+        if not self.resolve_api_key or not self.resolve_base_url:
             raise ValueError("API密钥和服务地址必须被提供或在.env文件中定义。")
         
         # 创建 Provider
         self._provider: BaseProvider = create_provider(
-            provider_name=self.provide, # type: ignore
+            provider_name=self.provider_name, # type: ignore
             model=self.model,
-            api_key=self.resovle_api_key,
-            base_url=self.resovle_base_url,
+            api_key=self.resolve_api_key,
+            base_url=self.resolve_base_url,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             timeout=self.timeout,
@@ -95,7 +95,7 @@ class EasyLLM:
         # 保持向后兼容
         self.client = self._provider.client
         
-        logger.info(f"EasyLLM 初始化完成: provider={self.provide}, model={self.model}")
+        logger.info(f"EasyLLM 初始化完成: provider={self.provider_name}, model={self.model}")
     
     @property
     def provider(self) -> BaseProvider:
@@ -193,7 +193,7 @@ class EasyLLM:
             "ollama": "llama3",
             "vllm": "llama3",
         }
-        return default_models.get(self.provide, "gpt-3.5-turbo") # type: ignore
+        return default_models.get(self.provider_name, "gpt-3.5-turbo") # type: ignore
     
     def _resolve_api_key_and_base_url(self) -> tuple[str, str]:
         """解析 API 密钥和地址"""
@@ -243,8 +243,8 @@ class EasyLLM:
             ),
         }
         
-        if self.provide in provider_configs:
-            env_key, env_url = provider_configs[self.provide]
+        if self.provider_name in provider_configs:
+            env_key, env_url = provider_configs[self.provider_name]
             return (
                 self.api_key or env_key or os.getenv("LLM_API_KEY", ""),
                 self.base_url or env_url or os.getenv("LLM_BASE_URL", "")
@@ -262,7 +262,7 @@ class EasyLLM:
         messages: list[dict[str, str] | Message],
         temperature: Optional[float] = None,
         **kwargs
-    ) -> str:
+    ) -> str | None:
         """
         同步调用 LLM
         
@@ -274,7 +274,7 @@ class EasyLLM:
             LLM 响应内容
         """
         messages = self._convert_messages(messages) # type: ignore
-        return self._provider.invoke(messages, temperature=temperature, **kwargs)
+        return self._provider.invoke(messages, temperature=temperature, **kwargs) # type: ignore
     
     def stream(
         self,
@@ -353,7 +353,7 @@ class EasyLLM:
         """
         # 检查 Provider 是否有这个方法
         if hasattr(self._provider, 'format_assistant_response'):
-            return self._provider.format_assistant_response(response)
+            return self._provider.format_assistant_response(response) #type: ignore
         
         # 默认：直接返回原始响应（OpenAI 兼容格式可以直接使用）
         return response
@@ -407,3 +407,20 @@ class EasyLLM:
     def create_client(self):
         """创建客户端（向后兼容）"""
         return self._provider.client
+
+    # ==================== 向后兼容属性 ====================
+
+    @property
+    def provide(self) -> str|None:
+        """向后兼容：旧属性名 provide，请改用 provider_name"""
+        return self.provider_name
+
+    @property
+    def resovle_api_key(self) -> str:
+        """向后兼容：旧属性名 resovle_api_key，请改用 resolve_api_key"""
+        return self.resolve_api_key
+
+    @property
+    def resovle_base_url(self) -> str:
+        """向后兼容：旧属性名 resovle_base_url，请改用 resolve_base_url"""
+        return self.resolve_base_url

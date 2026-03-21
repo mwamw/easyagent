@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 if __name__ == "__main__":
-    llm=EasyLLM(model="gemini-2.5-flash")
+    llm=EasyLLM()
     print(f"provider: {llm.provide}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
     tool_registry=ToolRegistry()
     

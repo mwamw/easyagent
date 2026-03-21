@@ -49,7 +49,7 @@ class AddMemoryTool(Tool):
         try:
             if self.current_session_id is None:
                 self.current_session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            content = parameters.get("content")
+            content = parameters.get("content","")
             memory_type = parameters.get("memory_type", "working")
             importance = parameters.get("importance", 0.5)
             metadata = parameters.get("metadata") or {}
@@ -94,7 +94,7 @@ class SearchMemoryTool(Tool):
 
     def run(self, parameters: dict) -> str:
         try:
-            query = parameters.get("query")
+            query = parameters.get("query","")
             memory_types = parameters.get("memory_types")
             limit = parameters.get("limit", 10)
             importance_threshold = parameters.get("importance_threshold", 0.0)
@@ -102,7 +102,7 @@ class SearchMemoryTool(Tool):
             session_id=None
             if use_session_id:
                 session_id=self.current_session_id
-            results = self.memory_manage.search_memory(query, memory_types, limit, importance_threshold, session_id, None)
+            results = self.memory_manage.search_memory(query, memory_types, limit, importance_threshold,session_id=session_id)
 
             if not results:
                 return f"未找到和 '{query}' 相关的信息"
@@ -177,7 +177,7 @@ class RemoveMemoryTool(Tool):
         super().__init__(name, description, RemoveMemoryParam)
 
     def run(self, parameters: dict) -> str:
-        memory_id = parameters.get("memory_id")
+        memory_id = parameters.get("memory_id","")
         try:
             success = self.memory_manage.remove_memory(memory_id)
             return f"✅ 记忆已删除 (ID: {memory_id[:8]}...)" if success else "⚠️ 未找到要删除的记忆"
@@ -201,10 +201,10 @@ class UpdateMemoryTool(Tool):
         super().__init__(name, description, UpdateMemoryParam)
 
     def run(self, parameters: dict) -> str:
-        memory_id = parameters.get("memory_id")
-        content = parameters.get("content")
-        importance = parameters.get("importance")
-        metadata = parameters.get("metadata")
+        memory_id = parameters.get("memory_id","")
+        content = parameters.get("content","")
+        importance = parameters.get("importance",0.5)
+        metadata = parameters.get("metadata") or {}
         try:
             success = self.memory_manage.update_memory(
                 memory_id=memory_id,
@@ -290,5 +290,5 @@ def register_memory_tools(memory_manage: MemoryManage, registry: ToolRegistry):
         MemoryMaintenanceTool(memory_manage)
     ]
     for tool in tools:
-        registry.registerTool(tool)
+        registry.register_tool(tool)
     logger.info(f"成功将 {len(tools)} 个 Memory 工具注册到系统。")

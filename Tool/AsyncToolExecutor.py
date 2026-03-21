@@ -14,7 +14,7 @@ class AsyncToolExecutor:
     async def execute_tool_async(self,tool_name:str,parameters:dict):
         loop=asyncio.get_event_loop()
         def _execute():
-            return self.registry.executeTool(tool_name,parameters)
+            return self.registry.execute_tool(tool_name,parameters)
         result=await loop.run_in_executor(self.executor,_execute)
         return result
     

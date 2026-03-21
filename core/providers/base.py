@@ -2,9 +2,11 @@
 Provider 基类
 
 定义 LLM Provider 的统一接口。
+提供基于 OpenAI SDK 的通用实现，子类只需覆写差异化方法。
 """
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Generator
+from openai import OpenAI
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,7 +16,9 @@ class BaseProvider(ABC):
     """
     LLM Provider 抽象基类
     
-    每个具体的 Provider（OpenAI、Claude、Gemini 等）都需要实现这些方法。
+    所有 Provider（OpenAI、Claude、Gemini 等）均通过 OpenAI 兼容层调用。
+    通用的 invoke / stream / invoke_with_tools 已在此基类中实现，
+    子类只需覆写 format_tool_result 等差异化方法即可。
     """
     
     def __init__(
@@ -47,50 +51,65 @@ class BaseProvider(ABC):
         self.kwargs = kwargs
         self.client = self._create_client()
     
-    @abstractmethod
-    def _create_client(self) -> Any:
-        """创建 API 客户端"""
-        pass
+    def _create_client(self) -> OpenAI:
+        """创建 OpenAI 兼容客户端"""
+        return OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout
+        )
     
-    @abstractmethod
+    # ==================== 通用调用实现 ====================
+
     def invoke(
         self,
         messages: list,
         temperature: Optional[float] = None,
         **kwargs
-    ) -> str:
-        """
-        同步调用 LLM
+    ) -> str | None:
+        """同步调用 LLM"""
+        temperature = temperature if temperature is not None else self.temperature
         
-        Args:
-            messages: 消息列表
-            temperature: 温度参数
-            
-        Returns:
-            LLM 响应内容
-        """
-        pass
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=False
+            )
+            logger.info(f"✅ {self.provider_name} Provider 响应成功")
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
+            raise
     
-    @abstractmethod
     def stream(
         self,
         messages: list,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[str, None, None]:
-        """
-        流式调用 LLM
+        """流式调用 LLM"""
+        temperature = temperature if temperature is not None else self.temperature
         
-        Args:
-            messages: 消息列表
-            temperature: 温度参数
-            
-        Yields:
-            响应内容片段
-        """
-        pass
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=True
+            )
+            logger.info(f"✅ {self.provider_name} Provider 流式响应开始")
+            for chunk in response:
+                content = chunk.choices[0].delta.content or ""
+                if content:
+                    yield content
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 流式调用失败: {e}")
+            raise
     
-    @abstractmethod
     def invoke_with_tools(
         self,
         messages: list,
@@ -98,19 +117,26 @@ class BaseProvider(ABC):
         temperature: Optional[float] = None,
         **kwargs
     ) -> Any:
-        """
-        带工具调用的 LLM 调用
+        """带工具调用的 LLM 调用"""
+        temperature = temperature if temperature is not None else self.temperature
         
-        Args:
-            messages: 消息列表
-            tools: 工具定义列表
-            temperature: 温度参数
-            
-        Returns:
-            LLM 响应对象（包含 content 和 tool_calls）
-        """
-        pass
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=False
+            )
+            logger.info(f"✅ {self.provider_name} Provider 工具调用响应成功")
+            return response.choices[0].message
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
+            raise
     
+    # ==================== 需子类覆写的方法 ====================
+
     @abstractmethod
     def format_tool_result(
         self,
@@ -131,53 +157,22 @@ class BaseProvider(ABC):
         """
         pass
     
+    # ==================== 通用辅助方法 ====================
+
     def get_thinking_content(self, response: Any) -> Optional[str]:
-        """
-        提取思考内容（如果模型支持）
-        
-        Args:
-            response: LLM 响应对象
-            
-        Returns:
-            思考内容，如果没有则返回 None
-        """
-        # 默认尝试从 reasoning_content 获取
+        """提取思考内容（如果模型支持）"""
         return getattr(response, 'reasoning_content', None)
     
     def get_response_content(self, response: Any) -> Optional[str]:
-        """
-        提取响应内容
-        
-        Args:
-            response: LLM 响应对象
-            
-        Returns:
-            响应内容
-        """
+        """提取响应内容"""
         return getattr(response, 'content', None)
     
     def has_tool_calls(self, response: Any) -> bool:
-        """
-        检查响应是否包含工具调用
-        
-        Args:
-            response: LLM 响应对象
-            
-        Returns:
-            是否有工具调用
-        """
+        """检查响应是否包含工具调用"""
         return hasattr(response, 'tool_calls') and response.tool_calls
     
     def get_tool_calls(self, response: Any) -> list:
-        """
-        获取工具调用列表
-        
-        Args:
-            response: LLM 响应对象
-            
-        Returns:
-            工具调用列表
-        """
+        """获取工具调用列表"""
         if self.has_tool_calls(response):
             return response.tool_calls
         return []
