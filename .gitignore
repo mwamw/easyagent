@@ -7,6 +7,9 @@ __pycache__/
 .pytest_cache/
 
 # Local env files
+.env.example
+#所有目录下的.env文件
+**/.*
 .env
 .venv/
 venv/
