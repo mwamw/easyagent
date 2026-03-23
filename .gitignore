@@ -11,8 +11,8 @@ __pycache__/
 venv/
 
 # Local env files (忽略所有目录下的.env)
-.env
-**/.env
+# .env
+# **/.env
 
 # (可选) 强烈建议将 .env.example 提交到代码库作为参考模板
 # 如果你确实连模板也不想上传，请删掉下面这行开头的 # 号
