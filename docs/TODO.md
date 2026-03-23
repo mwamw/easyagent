@@ -61,13 +61,26 @@ agent.use_skill("code_review")
 agent.use_skill("web_search")
 ```
 
+模式 B：动态按需加载（LLM 视角自动发现）
+这就是你提到的“让 LLM 根据需要自己加载”。这通常用于通用型私人助理 (General Assistant)。 如果你的 Agent 有 100 个技能（包含 300 个工具），一开始全部塞给 LLM 会导致 Token 爆炸，且极其容易产生幻觉（用错工具）。
+
+怎么实现 LLM 自我加载？ 我们需要给 Agent 开发一个特殊的“元工具 (Meta-Tool)”，比如叫 skill_discovery_tool 和 load_skill_tool：
+
+用户：“帮我查一下这台服务器上 Docker 容器的状态”
+LLM 发现当前工具箱里没有相关工具，于是调用 skill_discovery_tool(query="docker linux")
+系统返回：“推荐加载 LinuxOpsSkill”
+LLM 调用 load_skill_tool(skill_name="LinuxOpsSkill")
+Agent 框架在运行时动态将 LinuxOpsSkill 的工具和提示词注入到当前的上下文中。
+LLM 使用新获得的 Docker 工具完成任务，完成后甚至可以调用 unload_skill 卸载。
+
+
 **涉及文件:**
 - `skill/base.py` - Skill 基类定义
 - `skill/manager.py` - SkillManager 管理器
 - `skill/loader.py` - Skill 加载器（本地/远程）
 - `skill/builtin/` - 内置技能包
 - `core/agent.py` - BaseAgent 集成 SkillManager
-
+- ....
 ---
 
 ### 3. 原生异步支持
