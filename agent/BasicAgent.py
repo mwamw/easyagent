@@ -316,7 +316,7 @@ class BasicAgent(BaseAgent):
                     try:
                         tool_args = self._safe_parse_tool_args(tool_call)
                         
-                        logger.info(f"执行工具: {tool_name}，参数: {tool_args}")
+                        logger.info(f"{self.name}执行工具: {tool_name}，参数: {tool_args}")
                         tool_result = self._safe_execute_tool(tool_name, tool_args)
                         
                         # 使用 LLM 的 format_tool_result 方法获取正确格式
