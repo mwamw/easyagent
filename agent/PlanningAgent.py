@@ -97,6 +97,9 @@ class PlanningAgent(BasicAgent):
         """执行规划任务"""
         self._validate_invoke_params(query, max_iter, temperature)
         
+        # Skill 前置拦截
+        query = self.skill_manager.on_before_invoke(query)
+        
         logger.info(f"开始规划任务: {query[:50]}...")
         
         # 1. 生成计划
@@ -121,7 +124,7 @@ class PlanningAgent(BasicAgent):
             self.execution_log.append(results[-1])
             
             # 检查是否需要重新规划
-            if self.allow_replan and self._should_replan(result):
+            if self.allow_replan and self._should_replan(result): #type: ignore 
                 logger.info("检测到需要重新规划")
                 remaining_plan = self._replan(query, results, plan[i+1:], temperature)
                 plan = plan[:i+1] + remaining_plan
@@ -129,6 +132,9 @@ class PlanningAgent(BasicAgent):
         
         # 3. 汇总结果
         final_answer = self._summarize_results(query, results, temperature)
+        
+        # Skill 后置拦截
+        final_answer = self.skill_manager.on_after_invoke(query, final_answer)
         
         # 保存历史
         self.add_message(UserMessage(query))
@@ -141,7 +147,7 @@ class PlanningAgent(BasicAgent):
         tools_desc = ""
         if self.enable_tool and self.tool_registry:
             tools_desc = f"\n可用工具：\n{self.tool_registry.get_tools_description()}"
-        
+    
         plan_prompt = f"""请分析以下任务，并将其分解为具体的执行步骤。
 
 任务：{query}
@@ -152,8 +158,12 @@ class PlanningAgent(BasicAgent):
 
 只返回 JSON 数组，不要其他内容。"""
         
+        # 注入 Skill prompt 到 planning 系统提示
+        planning_system = "你是一个任务规划专家，善于将复杂任务分解为可执行的步骤。"
+        planning_system += self._build_skills_prompt()
+        
         messages = [
-            SystemMessage("你是一个任务规划专家，善于将复杂任务分解为可执行的步骤。"),
+            SystemMessage(planning_system),
             UserMessage(plan_prompt)
         ]
         
@@ -161,7 +171,7 @@ class PlanningAgent(BasicAgent):
             response = self.llm.invoke(messages, temperature=temperature)
             # print(response)
             # 解析 JSON
-            plan = self.json_parser.parse(response)
+            plan = self.json_parser.parse(response) # type: ignore
             if isinstance(plan, list):
                 return plan
         except Exception as e:
@@ -169,7 +179,7 @@ class PlanningAgent(BasicAgent):
         
         return [f"完成任务: {query}"]
     
-    def _execute_step(self, step: str, temperature: float) -> str:
+    def _execute_step(self, step: str, temperature: float) -> str | None:
         """执行单个步骤"""
         if self.enable_tool and self.tool_registry:
             # 使用工具执行
@@ -215,7 +225,7 @@ class PlanningAgent(BasicAgent):
         
         try:
             response = self.llm.invoke(messages, temperature=temperature)
-            new_plan = self.json_parser.parse(response)
+            new_plan = self.json_parser.parse(response) # type: ignore
             if isinstance(new_plan, list):
                 return new_plan
         except Exception as e:
@@ -228,7 +238,7 @@ class PlanningAgent(BasicAgent):
         query: str, 
         results: List[Dict], 
         temperature: float
-    ) -> str:
+    ) -> str |None:
         """汇总执行结果"""
         summary_prompt = f"""原始任务：{query}
 
@@ -237,8 +247,12 @@ class PlanningAgent(BasicAgent):
 
 请根据以上执行记录，给出最终的完整回答。"""
         
+        # 注入 Skill prompt 到 summary 系统提示
+        summary_system = "你是一个助手，需要根据任务执行记录给出最终回答。"
+        summary_system += self._build_skills_prompt()
+        
         messages = [
-            SystemMessage("你是一个助手，需要根据任务执行记录给出最终回答。"),
+            SystemMessage(summary_system),
             UserMessage(summary_prompt)
         ]
         

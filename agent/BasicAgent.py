@@ -112,6 +112,9 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         self._current_query = query  # 供 get_enhanced_prompt 使用
         
+        # Skill 前置拦截
+        query = self.skill_manager.on_before_invoke(query)
+        
         self.callback_manager.on_agent_start(self.name, query)
         
         messages: list[Message | dict[str, str]] = []
@@ -144,6 +147,8 @@ class BasicAgent(BaseAgent):
                 
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(response))
+                # Skill 后置拦截
+                response = self.skill_manager.on_after_invoke(query, response)
                 self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
@@ -559,6 +564,9 @@ class BasicAgent(BaseAgent):
             
         # 注入记忆系统提示和 Working Memory 便签本
         enhanced_prompt += self._build_memory_prompt()
+        
+        # 注入所有激活 Skill 的 prompt
+        enhanced_prompt += self._build_skills_prompt()
 
         return enhanced_prompt
 

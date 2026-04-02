@@ -74,6 +74,24 @@ class ToolRegistry:
         else:
             print(f"Tool {name} not found")
 
+    def register_tools(self, tools: list) -> None:
+        """批量注册多个工具"""
+        for tool in tools:
+            self.register_tool(tool)
+
+    def unregister_tools(self, names: list) -> None:
+        """批量移除多个工具"""
+        for name in names:
+            self.unregister_tool(name)
+
+    def has_tool(self, name: str) -> bool:
+        """检查工具是否已注册"""
+        return name in self.tools
+
+    def get_tool_names(self) -> list:
+        """获取所有已注册工具名称"""
+        return list(self.tools.keys())
+
     def get_tool(self,name:str):
         return self.tools.get(name)
 

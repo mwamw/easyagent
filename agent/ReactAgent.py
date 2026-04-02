@@ -112,6 +112,9 @@ class ReactAgent(BasicAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         self._current_query = query
         
+        # Skill 前置拦截
+        query = self.skill_manager.on_before_invoke(query)
+        
         # 清空 scratchpad
         self.scratchpad = []
         
@@ -198,6 +201,9 @@ class ReactAgent(BasicAgent):
             final_answer = "超过最大迭代次数，未能完成推理"
             logger.warning(final_answer)
         
+        # Skill 后置拦截
+        final_answer = self.skill_manager.on_after_invoke(query, final_answer)
+        
         # 保存历史
         self.add_message(UserMessage(query))
         self.add_message(AssistantMessage(final_answer))
@@ -241,6 +247,9 @@ Final Answer: 对用户问题的完整回答
 
         # 与 BasicAgent 对齐：注入记忆提示
         prompt += self._build_memory_prompt()
+
+        # 注入所有激活 Skill 的 prompt
+        prompt += self._build_skills_prompt()
 
         return prompt
     

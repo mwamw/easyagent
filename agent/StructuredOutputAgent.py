@@ -124,6 +124,9 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         Raises:
             OutputParseError: 多次重试后仍然解析失败
         """
+        # Skill 前置拦截
+        query = self.skill_manager.on_before_invoke(query)
+        
         # 构建带格式要求的提示词
         format_instructions = self.output_parser.get_format_instructions()
         
@@ -217,7 +220,7 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         """构建系统提示词"""
         base_prompt = self.system_prompt or "你是一个精确的信息提取助手。"
         
-        return f"""{base_prompt}
+        prompt = f"""{base_prompt}
 
 你的任务是从用户输入中提取结构化信息，并以 JSON 格式输出。
 
@@ -226,6 +229,11 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
 2. 确保 JSON 格式正确，可以被解析
 3. 所有必填字段都必须提供
 4. 如果某个信息无法从输入中提取，使用合理的默认值或 null"""
+        
+        # 注入所有激活 Skill 的 prompt
+        prompt += self._build_skills_prompt()
+        
+        return prompt
     
     def get_schema(self) -> dict:
         """获取输出模型的 JSON Schema"""

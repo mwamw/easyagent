@@ -12,6 +12,7 @@ from memory.V2.MemoryManage import MemoryManage
 from context.manager import ContextManager
 from context.source.base import BaseContextSource
 from .callbacks import CallbackManager
+from skill.manager import SkillManager
 import json
 import threading
 from Tool.BaseTool import Tool
@@ -50,6 +51,7 @@ class BaseAgent(ABC):
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
+        skill_manager: Optional["SkillManager"] = None,
     ):
         """
         初始化 Agent
@@ -100,6 +102,10 @@ class BaseAgent(ABC):
         # 上下文工程管理器（可选）
         self.context_manager = context_manager
         
+        # Skill 管理器
+        self.skill_manager = skill_manager or SkillManager()
+        self.skill_manager.bind_agent(self)
+        
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
             self._register_v2_memory_tools()
@@ -115,15 +121,35 @@ class BaseAgent(ABC):
                 
     def with_memory(self, memory_manage: "MemoryManage") -> "BaseAgent":
         """
-        方便地将 V2 版本的 MemoryManage 记忆系统绑定到 Agent
+        方便地将 V2 版本的 MemoryManage 记忆系统绑定到 Agent。
+
+        内部会自动创建 MemorySkill 并注册到 SkillManager。
+        如果已经通过 with_skill 手动注册了 MemorySkill，则跳过自动注册。
         """
         self.memory_manage = memory_manage
-        if self.tool_registry is not None:
-            self._register_v2_memory_tools()
-        if self.context_manager is not None:
-            from context.source.memory_source import MemoryContextSource
-            memory_source = MemoryContextSource(memory_manage=memory_manage)
-            self.context_manager.add_source(memory_source)
+        
+        # 通过 MemorySkill 实现（新路径）
+        if not self.skill_manager.has_skill("memory"):
+            try:
+                from skill.builtin.memory_skill import MemorySkill
+                # 如果有 context_manager，MemorySkill 会自动提供 context_source
+                include_ctx = self.context_manager is not None
+                skill = MemorySkill(
+                    memory_manage=memory_manage,
+                    include_context_source=include_ctx,
+                )
+                self.skill_manager.register(skill)
+                logger.info("已通过 MemorySkill 注册 V2 记忆系统")
+            except ImportError:
+                # 回退到旧方式
+                logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
+                if self.tool_registry is not None:
+                    self._register_v2_memory_tools()
+                if self.context_manager is not None:
+                    from context.source.memory_source import MemoryContextSource
+                    memory_source = MemoryContextSource(memory_manage=memory_manage)
+                    self.context_manager.add_source(memory_source)
+        
         return self
 
     def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
@@ -135,12 +161,48 @@ class BaseAgent(ABC):
             self.context_manager.add_source(memory_source)
         return self
     
-    def with_tool(self,tool_registry: Optional[ToolRegistry]) -> None:
+    def with_tool(self, tool_registry: Optional[ToolRegistry]) -> None:
         """设置工具注册表"""
         if(self.tool_registry is not None):
             logger.warning("工具注册表已存在!")
         self.tool_registry = tool_registry
         self.enable_tool = tool_registry is not None
+
+    # ==================== Skill 管理 API ====================
+
+    def with_skill(self, skill) -> "BaseAgent":
+        """
+        添加并激活一个 Skill
+        
+        Args:
+            skill: BaseSkill 实例
+            
+        Returns:
+            self（支持链式调用）
+        """
+        # 确保有 ToolRegistry
+        if self.tool_registry is None:
+            self.tool_registry = ToolRegistry()
+            self.enable_tool = True
+        
+        self.skill_manager.register(skill)
+        return self
+
+    def remove_skill(self, name: str) -> None:
+        """移除一个 Skill（先停用再注销）"""
+        self.skill_manager.unregister(name)
+
+    def activate_skill(self, name: str) -> None:
+        """激活指定 Skill"""
+        self.skill_manager.activate(name)
+
+    def deactivate_skill(self, name: str) -> None:
+        """停用指定 Skill"""
+        self.skill_manager.deactivate(name)
+
+    def _build_skills_prompt(self) -> str:
+        """构建所有激活 Skill 的 prompt"""
+        return self.skill_manager.build_skills_prompt()
     
     @abstractmethod
     def invoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
