@@ -161,8 +161,14 @@ class BaseProvider(ABC):
 
     def get_thinking_content(self, response: Any) -> Optional[str]:
         """提取思考内容（如果模型支持）"""
-        return getattr(response, 'reasoning_content', None)
-    
+        thinking= getattr(response, 'reasoning_content', None)
+        content= getattr(response, 'content', None)
+        if thinking:
+            return thinking
+        elif content:
+            return content
+        else:
+            return None
     def get_response_content(self, response: Any) -> Optional[str]:
         """提取响应内容"""
         return getattr(response, 'content', None)

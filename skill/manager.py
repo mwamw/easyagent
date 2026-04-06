@@ -299,7 +299,7 @@ class SkillManager:
         if not prompt_parts:
             return ""
 
-        return "\n\n" + "\n\n".join(prompt_parts)
+        return "你拥有以下技能：\n<skills>\n\n" + "\n\n".join(prompt_parts)
 
     # ==================== 生命周期代理 ====================
 

@@ -10,7 +10,7 @@
 - [BaseSkill 基类详解](#baseskill-基类详解)
 - [SkillManager 管理器](#skillmanager-管理器)
 - [SkillRegistry 全局注册中心](#skillregistry-全局注册中心)
-- [零代码 Skill 定义](#零代码-skill-定义)
+- [声明式与文件夹 Skill 定义](#声明式与文件夹-skill-定义)
 - [内置 Skill](#内置-skill)
 - [Agent 集成](#agent-集成)
 - [高级用法](#高级用法)
@@ -33,7 +33,7 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 
 - **按需加载**：Agent 只挂载当前需要的 Skill，避免上下文窗口膨胀
 - **运行时动态切换**：可以在运行期间随时激活/停用 Skill
-- **零代码定义**：支持通过 YAML 或 Markdown 文件声明 Skill，无需编写 Python 代码
+- **轻量定义与目录封装**：支持零代码的 YAML/Markdown 定义，也支持含 `tools.py` 的 Claude Code 风格文件夹
 - **依赖管理**：Skill 之间可以声明依赖关系，自动级联激活
 
 ---
@@ -61,7 +61,7 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 ┌─────────────────────────────────────────────────┐
 │              SkillRegistry (全局单例)              │
 │  class 注册 / factory 注册 / 目录自动发现           │
-│  .py / .yaml / .yml / .md                        │
+│  .py / .yaml / .yml / .md / FolderSkill          │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -75,6 +75,7 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 | `SkillRegistry` | 全局 Skill 类/工厂注册中心，支持自动发现 |
 | `YAMLSkillLoader` | 从 YAML 文件加载 Skill |
 | `MarkdownSkillLoader` | 从 Markdown 文件加载 Skill |
+| `FolderSkillLoader` | 从符合 Claude Code 风格的目录中加载 Skill 及 Python 工具 |
 
 ---
 
@@ -403,6 +404,7 @@ print(registered_names)  # ["skill_a", "skill_b", ...]
 | `.py` | 导入模块，扫描所有 `BaseSkill` 子类，注册为 class |
 | `.yaml` / `.yml` | 使用 `YAMLSkillLoader.load()` 解析，注册为 factory |
 | `.md` | 使用 `MarkdownSkillLoader.load()` 解析，注册为 factory |
+| **包含 `README.md` 的子目录** | 使用 `FolderSkillLoader.load()` 解析，注册为 Folder-based Skill |
 
 > 以 `_` 开头的 Python 文件会被跳过。
 
@@ -428,7 +430,7 @@ registry.list_available()             # 带元信息的详细列表
 
 ---
 
-## 零代码 Skill 定义
+## 声明式与文件夹 Skill 定义
 
 ### YAML 格式
 
@@ -524,6 +526,57 @@ skills = MarkdownSkillLoader.load_directory("skills/")
 |------|-----------|
 | `calculator` | `Tool.builtin.calculator.CalculatorTool` |
 | `web_search` | `Tool.builtin.search.WebSearchTool` |
+
+### Folder-based 混合格式 (Claude Code 风格)
+
+这是一种将配置、Prompt与基于 Python 实现的工具代码组织在一起的结构，方便解耦与复用。
+
+**目录结构示例**：
+```text
+skills/my_awesome_skill/
+├── README.md        # [必须] 包含 YAML frontmatter 和 Markdown 正文
+└── tools.py         # [可选] 实现此 Skill 专属的 Python 工具
+```
+
+**1. `README.md` 分配核心信息**：
+```markdown
+---
+name: awesome_researcher
+description: 高级自动研究员
+priority: 15
+tags: [research, custom]
+---
+
+## 你的工作指南
+请使用当前拥有的 `my_custom_tool` 进行深入研究。
+```
+
+**2. `tools.py` 提供工具实现**：
+```python
+from Tool.BaseTool import Tool
+from pydantic import BaseModel
+
+class CustomParams(BaseModel):
+    query: str
+
+class MyCustomTool(Tool):
+    def __init__(self):
+        super().__init__("my_custom_tool", "自定义专属搜索", CustomParams)
+    
+    def run(self, params):
+        return f"Searching custom: {params['query']}"
+
+# 如果没有提供 get_tools() 函数，Loader 自动查找到该类并无参实例化
+def get_tools():
+    # 显式控制实例化过程（可选）
+    return [MyCustomTool()]
+```
+
+**加载与自动发现**：如果把这个文件夹放入上述的自动扫描目录：
+```python
+registry.discover_from_directory("skills/")
+# registry 将自动以名称 'awesome_researcher' 将其注册为就绪可创建的 factory 
+```
 
 ---
 
@@ -814,6 +867,122 @@ class MySkill(BaseSkill):
 
 当 Skill 激活时，`SkillManager` 会自动将这些 `ContextSource` 注册到 Agent 的 `ContextManager`。
 
+### 7. 动态按需加载（模式 B）
+
+当 Agent 拥有大量 Skill（例如 100 个 Skill、300 个工具）时，全部预加载会导致 Token 爆炸和工具选择幻觉。**模式 B** 通过 3 个「元工具」让 LLM 在运行时**自主发现、加载、卸载** Skill。
+
+#### 工作流程
+
+```
+用户: "帮我算一下 2^100"
+  ↓
+LLM: 发现当前工具箱没有计算工具
+  ↓
+LLM: 调用 skill_discovery_tool(query="math calculation")
+  ↓  返回: [{"name": "calculator", "description": "数学计算工具", "tags": ["math"]}]
+LLM: 调用 load_skill_tool(skill_name="calculator")
+  ↓  返回: "成功加载 Skill 'calculator'。新增工具: ['calculator_tool']"
+LLM: 使用 calculator_tool 完成计算
+  ↓
+LLM: 调用 unload_skill_tool(skill_name="calculator")
+  ↓  返回: "成功卸载 Skill 'calculator'。已移除工具: ['calculator_tool']"
+```
+
+#### 快速上手
+
+```python
+from skill.registry import SkillRegistry
+from skill.meta_tools import register_meta_tools
+from skill.builtin.calculator_skill import CalculatorSkill
+
+# 1. 把所有 Skill 注册到全局 Registry（启动时一次性完成）
+registry = SkillRegistry.instance()
+registry.register_class(CalculatorSkill)
+# 为搜索提供元信息
+registry.update_metadata("calculator", description="数学计算工具", tags=["math", "compute"])
+
+# 也可以从目录批量发现
+# registry.discover_from_directory("./skills/")
+
+# 2. 创建 Agent（不预加载任何 Skill）
+agent = BasicAgent(name="assistant", llm=llm, enable_tool=True)
+
+# 3. 注册 3 个元工具到 Agent 的工具箱
+register_meta_tools(
+    registry=registry,
+    manager=agent.skill_manager,
+    tool_registry=agent.tool_registry,
+)
+
+# 4. Agent 启动时只有 3 个元工具，LLM 根据需要自行加载其他 Skill
+result = agent.invoke("帮我算一下 2^100 + 3^50")
+```
+
+#### 三个元工具
+
+| 工具 | 名称 | 说明 |
+|------|------|------|
+| `SkillDiscoveryTool` | `skill_discovery_tool` | 按关键词/标签搜索 Registry 中可用的 Skill |
+| `LoadSkillTool` | `load_skill_tool` | 从 Registry 创建 Skill 实例并加载到当前 Agent |
+| `UnloadSkillTool` | `unload_skill_tool` | 卸载不再需要的 Skill，释放上下文空间 |
+
+#### SkillDiscoveryTool 参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `query` | `str` | 搜索关键词（匹配 name / description / tags） |
+| `tags` | `List[str]` | 按标签过滤（可选） |
+
+#### LoadSkillTool 参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `skill_name` | `str` | Skill 注册名称 |
+
+**智能行为**：
+- 如果 Skill 已加载且激活 → 提示无需重复加载
+- 如果 Skill 已注册但停用 → 自动重新激活
+- 如果 Skill 不存在 → 返回可用列表
+
+#### UnloadSkillTool 参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `skill_name` | `str` | 要卸载的 Skill 名称 |
+
+#### SkillRegistry.search() — 搜索 API
+
+```python
+# 按关键词搜索
+results = registry.search("math calculation")
+
+# 按标签搜索
+results = registry.search(tags=["web", "search"])
+
+# 关键词 + 标签（取交集）
+results = registry.search(query="统计", tags=["math"])
+
+# 空查询返回全部
+results = registry.search()
+```
+
+搜索逻辑：
+- 关键词以空格分隔，**所有关键词都必须出现**在 name/description/tags 中
+- 标签过滤：Skill 必须包含**至少一个**给定标签
+- 大小写不敏感
+
+#### SkillRegistry.update_metadata() — 更新元信息
+
+注册 Skill 后，可以补充 description 和 tags 以提高搜索精度：
+
+```python
+registry.register_class(MySkill)
+registry.update_metadata(
+    "my_skill",
+    description="文件管理工具，支持读写、搜索、压缩",
+    tags=["file", "io", "filesystem"],
+)
+
 ---
 
 ## API 参考
@@ -953,7 +1122,8 @@ class MySkill(BaseSkill):
 
 ### Q: 可以在 YAML/Markdown Skill 中引用自定义工具吗？
 
-当前版本仅支持引用 `builtin` 内置工具（`calculator`、`web_search`）。如需使用自定义工具，请通过 Python 代码继承 `BaseSkill` 来实现。
+如果使用单一的 YAML/MD 文件，当前仅支持引用 `builtin` 内置工具（`calculator`、`web_search`）。
+如需使用自定义工具，可以通过 **Folder-based Skill**：在同一个子文件夹中不仅写入 `README.md`，也提供 `tools.py` 来存放 Python 代码定义的工具对象即可实现无缝加载组合。
 
 ### Q: MemorySkill 和 `_build_memory_prompt` 会冲突吗？
 

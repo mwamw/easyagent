@@ -131,25 +131,26 @@ class BaseAgent(ABC):
         # 通过 MemorySkill 实现（新路径）
         if not self.skill_manager.has_skill("memory"):
             try:
-                from skill.builtin.memory_skill import MemorySkill
-                # 如果有 context_manager，MemorySkill 会自动提供 context_source
-                include_ctx = self.context_manager is not None
-                skill = MemorySkill(
-                    memory_manage=memory_manage,
-                    include_context_source=include_ctx,
-                )
-                self.skill_manager.register(skill)
-                logger.info("已通过 MemorySkill 注册 V2 记忆系统")
-            except ImportError:
-                # 回退到旧方式
-                logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
+            #     from skill.builtin.memory_skill import MemorySkill
+            #     # 如果有 context_manager，MemorySkill 会自动提供 context_source
+            #     include_ctx = self.context_manager is not None
+            #     skill = MemorySkill(
+            #         memory_manage=memory_manage,
+            #         include_context_source=include_ctx,
+            #     )
+            #     self.skill_manager.register(skill)
+            #     logger.info("已通过 MemorySkill 注册 V2 记忆系统")
+            # except ImportError:
+            #     # 回退到旧方式
+            #     logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
                 if self.tool_registry is not None:
                     self._register_v2_memory_tools()
                 if self.context_manager is not None:
                     from context.source.memory_source import MemoryContextSource
                     memory_source = MemoryContextSource(memory_manage=memory_manage)
                     self.context_manager.add_source(memory_source)
-        
+            except Exception as e:
+                logger.error(f"注册 V2 记忆系统失败: {e}")
         return self
 
     def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
@@ -165,6 +166,12 @@ class BaseAgent(ABC):
         """设置工具注册表"""
         if(self.tool_registry is not None):
             logger.warning("工具注册表已存在!")
+            return
+        if(tool_registry is None):
+            logger.warning("工具注册表为空!")
+            self.tool_registry=ToolRegistry()
+            self.enable_tool = True
+            return
         self.tool_registry = tool_registry
         self.enable_tool = tool_registry is not None
 
@@ -370,51 +377,73 @@ class BaseAgent(ABC):
     def _safe_get_tool_name(self, tool_call: Any) -> str:
         """
         安全获取工具名称
-        
+
+        支持两种 API 格式：
+          - Chat API:      tool_call.function.name
+          - Responses API: tool_call.name  (扶平化结构)
+
         Args:
             tool_call: 工具调用对象
-            
+
         Returns:
             工具名称
-            
+
         Raises:
             ToolExecutionError: 无法获取工具名称
         """
         try:
+            # Chat API: tool_call.function.name
             if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
                 name = tool_call.function.name
                 if name and isinstance(name, str):
                     return name
+
+            # Responses API: tool_call.name (flat structure)
+            if hasattr(tool_call, 'name'):
+                name = tool_call.name
+                if name and isinstance(name, str):
+                    return name
+
             raise ToolExecutionError("工具调用对象中没有有效的工具名称")
+        except ToolExecutionError:
+            raise
         except Exception as e:
             raise ToolExecutionError(f"获取工具名称失败: {e}") from e
 
     def _safe_parse_tool_args(self, tool_call: Any) -> dict:
         """
         安全解析工具参数
-        
+
+        支持两种 API 格式：
+          - Chat API:      tool_call.function.arguments  (JSON 字符串)
+          - Responses API: tool_call.arguments           (字符串或字典)
+
         Args:
             tool_call: 工具调用对象
-            
+
         Returns:
             解析后的参数字典
-            
+
         Raises:
             ToolExecutionError: 参数解析失败
         """
         try:
-            if not hasattr(tool_call, 'function') or not hasattr(tool_call.function, 'arguments'):
+            # Chat API: tool_call.function.arguments
+            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
+                arguments = tool_call.function.arguments
+            # Responses API: tool_call.arguments (flat structure)
+            elif hasattr(tool_call, 'arguments'):
+                arguments = tool_call.arguments
+            else:
                 raise ToolExecutionError("工具调用对象中没有 arguments 属性")
-            
-            arguments = tool_call.function.arguments
-            
+
             # 处理不同类型的参数
             if arguments is None or arguments == "":
                 return {}
-            
+
             if isinstance(arguments, dict):
                 return arguments
-            
+
             if isinstance(arguments, str):
                 try:
                     parsed = json.loads(arguments)
@@ -423,9 +452,9 @@ class BaseAgent(ABC):
                     return parsed
                 except json.JSONDecodeError as e:
                     raise ToolExecutionError(f"工具参数 JSON 解析失败: {e}") from e
-            
+
             raise ToolExecutionError(f"不支持的参数类型: {type(arguments).__name__}")
-            
+
         except ToolExecutionError:
             raise
         except Exception as e:

@@ -48,6 +48,7 @@ class SkillRegistry:
         self._skill_classes: Dict[str, Type[BaseSkill]] = {}
         self._skill_factories: Dict[str, Callable[..., BaseSkill]] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}  # 名称 → 元信息
+        self._skill_descriptions: Dict[str, str] = {}  # 名称 → 描述
 
     @classmethod
     def instance(cls) -> "SkillRegistry":
@@ -88,6 +89,10 @@ class SkillRegistry:
             "class": skill_class.__name__,
             "module": skill_class.__module__,
         }
+        # 从类 docstring 获取默认描述
+        desc = skill_class.__doc__.strip() if skill_class.__doc__ else ""
+        self._skill_descriptions[reg_name] = desc
+
         logger.debug("SkillRegistry: 注册类 '%s' → %s", reg_name, skill_class.__name__)
 
     def register_factory(
@@ -108,7 +113,6 @@ class SkillRegistry:
         self._skill_factories[name] = factory
         self._metadata[name] = {"type": "factory", "callable": repr(factory)}
         logger.debug("SkillRegistry: 注册工厂 '%s'", name)
-
     def skill(self, name: Optional[str] = None, **default_kwargs):
         """
         装饰器：将类注册为 Skill
@@ -189,8 +193,8 @@ class SkillRegistry:
         for filename in sorted(os.listdir(path)):
             filepath = os.path.join(path, filename)
 
-            if not os.path.isfile(filepath):
-                continue
+            # if not os.path.isfile(filepath):
+            #     continue
 
             try:
                 if filename.endswith(".py") and not filename.startswith("_"):
@@ -207,6 +211,16 @@ class SkillRegistry:
 
             except Exception as e:
                 logger.warning("发现 Skill 文件 '%s' 失败: %s", filepath, e)
+
+            if os.path.isdir(filepath):
+                # 检查是否是一个有效 Folder Skill 目录
+                if os.path.isfile(os.path.join(filepath, "README.md")) or \
+                   os.path.isfile(os.path.join(filepath, "skill.md")):
+                    try:
+                        names = self._discover_from_folder(filepath)
+                        registered.extend(names)
+                    except Exception as e:
+                        logger.warning("加载 Folder Skill 目录 '%s' 失败: %s", filepath, e)
 
         if registered:
             logger.info(
@@ -234,6 +248,78 @@ class SkillRegistry:
     def has(self, name: str) -> bool:
         """检查名称是否已注册"""
         return name in self._skill_classes or name in self._skill_factories
+
+    def search(
+        self,
+        query: str = "",
+        tags: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        按关键词和标签搜索可用 Skill
+
+        搜索逻辑：
+        - query 会与 Skill 的 name、description、tags 进行模糊匹配（大小写不敏感）
+        - tags 过滤：如果指定，Skill 必须包含至少一个给定 tag
+        - query 和 tags 同时指定时取交集
+
+        Args:
+            query: 搜索关键词（空字符串匹配全部）
+            tags: 标签过滤列表（可选）
+
+        Returns:
+            匹配的 Skill 信息列表
+        """
+        query_lower = query.lower().strip()
+        query_keywords = query_lower.split() if query_lower else []
+        tag_set = {t.lower() for t in tags} if tags else set()
+
+        results = []
+        for name in self.list_available_names():
+            meta = self._metadata.get(name, {})
+            skill_desc = str(meta.get("description", "")).lower()
+            skill_tags = [t.lower() for t in meta.get("tags", [])]
+
+            # 构建搜索文本
+            searchable = f"{name} {skill_desc} {' '.join(skill_tags)}"
+
+            # 关键词匹配：所有关键词都需要出现
+            if query_keywords:
+                if not all(kw in searchable for kw in query_keywords):
+                    continue
+
+            # 标签过滤：至少匹配一个
+            if tag_set:
+                if not tag_set.intersection(skill_tags):
+                    continue
+
+            results.append({"name": name, **meta})
+
+        return results
+
+    def update_metadata(
+        self,
+        name: str,
+        description: str = "",
+        tags: Optional[List[str]] = None,
+        **extra: Any,
+    ) -> None:
+        """
+        更新已注册 Skill 的元信息（description、tags 等）
+
+        Args:
+            name: Skill 注册名称
+            description: 描述
+            tags: 标签列表
+            **extra: 其他元信息
+        """
+        if name not in self._metadata:
+            self._metadata[name] = {}
+        if description:
+            self._metadata[name]["description"] = description
+            self._skill_descriptions[name] = description
+        if tags is not None:
+            self._metadata[name]["tags"] = tags
+        self._metadata[name].update(extra)
 
     # ==================== 内部 ====================
 
@@ -269,7 +355,9 @@ class SkillRegistry:
         try:
             skill = YAMLSkillLoader.load(filepath)
             name = skill.name
+            desc = getattr(skill.config, "description", "")
             if not self.has(name):
+                self._skill_descriptions[name] = desc
                 self.register_factory(name, lambda fp=filepath: YAMLSkillLoader.load(fp))
                 return [name]
         except Exception as e:
@@ -284,7 +372,9 @@ class SkillRegistry:
         try:
             skill = MarkdownSkillLoader.load(filepath)
             name = skill.name
+            desc = getattr(skill.config, "description", "")
             if not self.has(name):
+                self._skill_descriptions[name] = desc
                 self.register_factory(name, lambda fp=filepath: MarkdownSkillLoader.load(fp))
                 return [name]
         except Exception as e:
@@ -292,10 +382,27 @@ class SkillRegistry:
 
         return []
 
+    def _discover_from_folder(self, dirpath: str) -> List[str]:
+        """从特定格式的文件夹发现 Skill"""
+        from .folder_loader import FolderSkillLoader
+
+        try:
+            skill = FolderSkillLoader.load(dirpath)
+            name = skill.name
+            desc = getattr(skill.config, "description", "")
+            if not self.has(name):
+                self._skill_descriptions[name] = desc
+                self.register_factory(name, lambda dp=dirpath: FolderSkillLoader.load(dp))
+                return [name]
+        except Exception as e:
+            logger.warning("加载 Folder Skill '%s' 失败: %s", dirpath, e)
+
+        return []
+
     @staticmethod
-    def _class_to_name(cls: type) -> str:
+    def _class_to_name(skill_cls: type) -> str:
         """将类名转换为 snake_case 名称"""
-        name = cls.__name__
+        name = skill_cls.__name__
         # 移除 Skill 后缀
         if name.endswith("Skill"):
             name = name[:-5]
@@ -306,3 +413,7 @@ class SkillRegistry:
                 result.append("_")
             result.append(ch.lower())
         return "".join(result) or "skill"
+
+    def get_skills_description(self) -> dict:
+        """获取 Skill 的描述"""
+        return self._skill_descriptions

@@ -183,6 +183,7 @@ class EasyLLM:
         """获取默认模型名称"""
         default_models = {
             "openai": "gpt-3.5-turbo",
+            "openai_responses": "gpt-4o",
             "google": "gemini-2.5-pro",
             "anthropic": "claude-4.5-sonnet",
             "deepseek": "deepseek-chat",
@@ -202,6 +203,10 @@ class EasyLLM:
         
         provider_configs = {
             "openai": (
+                os.getenv("OPENAI_API_KEY"),
+                os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+            ),
+            "openai_responses": (
                 os.getenv("OPENAI_API_KEY"),
                 os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
             ),
@@ -395,7 +400,11 @@ class EasyLLM:
     def get_thinking_content(self, response: Any) -> Optional[str]:
         """提取思考内容"""
         return self._provider.get_thinking_content(response)
-    
+
+    def get_response_content(self, response: Any) -> Optional[str]:
+        """提取响应文本内容（兼容 Chat API 和 Responses API）"""
+        return self._provider.get_response_content(response)
+
     def has_tool_calls(self, response: Any) -> bool:
         """检查是否有工具调用"""
         return self._provider.has_tool_calls(response)

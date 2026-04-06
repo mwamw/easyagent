@@ -348,6 +348,7 @@ class TestSkillManager:
         self.manager.register(high)
 
         prompt = self.manager.build_skills_prompt()
+        print(prompt)
         assert prompt.index("HIGH") < prompt.index("LOW")
 
     def test_empty_prompt_when_no_skills(self):
@@ -982,5 +983,329 @@ class TestBuiltinMemorySkill:
         assert len(tools) == 6  # add, search, get, update, remove, maintenance
 
 
+# ==================== SkillRegistry.search 测试 ====================
+
+
+class TestSkillRegistrySearch:
+    """SkillRegistry.search() 关键词/标签搜索测试"""
+
+    def setup_method(self):
+        SkillRegistry.reset()
+        self.registry = SkillRegistry.instance()
+
+    def teardown_method(self):
+        SkillRegistry.reset()
+
+    def _register_with_meta(self, name, desc, tags):
+        """注册一个带元信息的 Skill（使用工厂）"""
+        def factory(_n=name, **kwargs):
+            return DummySkill(name=_n)
+
+        self.registry.register_factory(name, factory)
+        self.registry.update_metadata(name, description=desc, tags=tags)
+
+    def test_search_by_keyword(self):
+        self._register_with_meta("calculator", "数学计算工具", ["math", "compute"])
+        self._register_with_meta("web_search", "联网搜索引擎", ["search", "web"])
+
+        results = self.registry.search("math")
+        assert len(results) == 1
+        assert results[0]["name"] == "calculator"
+
+    def test_search_by_tag(self):
+        self._register_with_meta("calculator", "数学计算", ["math"])
+        self._register_with_meta("web_search", "联网搜索", ["search", "web"])
+
+        results = self.registry.search(tags=["web"])
+        assert len(results) == 1
+        assert results[0]["name"] == "web_search"
+
+    def test_search_empty_query_returns_all(self):
+        self._register_with_meta("a", "desc_a", ["tag_a"])
+        self._register_with_meta("b", "desc_b", ["tag_b"])
+
+        results = self.registry.search()
+        assert len(results) == 2
+
+    def test_search_no_match(self):
+        self._register_with_meta("calculator", "数学计算", ["math"])
+        results = self.registry.search("docker")
+        assert len(results) == 0
+
+    def test_search_keyword_and_tag(self):
+        self._register_with_meta("calculator", "数学计算", ["math", "compute"])
+        self._register_with_meta("stats", "统计分析", ["math", "stats"])
+
+        results = self.registry.search(query="统计", tags=["math"])
+        assert len(results) == 1
+        assert results[0]["name"] == "stats"
+
+
+# ==================== Meta-Tools 测试 ====================
+
+
+class TestMetaTools:
+    """Skill 元工具 — 动态按需加载测试"""
+
+    def setup_method(self):
+        SkillRegistry.reset()
+        self.registry = SkillRegistry.instance()
+        self.tool_registry = ToolRegistry()
+        self.manager = SkillManager()
+
+        # 模拟 Agent 绑定
+        mock_agent = MagicMock()
+        mock_agent.tool_registry = self.tool_registry
+        mock_agent.context_manager = None
+        self.manager.bind_agent(mock_agent)
+
+        # 注册一些 Skill 到 Registry（还未加载到 Manager）
+        def calc_factory(**kwargs):
+            return DummySkill(name="calculator")
+
+        self.registry.register_factory("calculator", calc_factory)
+        self.registry.update_metadata(
+            "calculator", description="数学计算工具", tags=["math", "compute"]
+        )
+
+        def search_factory(**kwargs):
+            return DummySkill(name="web_search")
+
+        self.registry.register_factory("web_search", search_factory)
+        self.registry.update_metadata(
+            "web_search",
+            description="联网搜索引擎",
+            tags=["search", "web", "real-time"],
+        )
+
+    def teardown_method(self):
+        SkillRegistry.reset()
+    # ---------- SkillDiscoveryTool ----------
+
+    def test_discovery_format(self):
+        from skill.meta_tools import SkillDiscoveryTool
+
+        tool = SkillDiscoveryTool(self.registry)
+        result = tool.run({})
+        # The new string will contain calculator and web_search descriptions
+        assert "calculator" in result
+        assert "web_search" in result
+    # ---------- LoadSkillTool ----------
+
+    def test_load_success(self):
+        from skill.meta_tools import LoadSkillTool
+
+        tool = LoadSkillTool(self.registry, self.manager, set())
+        result = tool.run({"skill_name": "calculator"})
+        assert "成功加载" in result
+        assert self.manager.has_skill("calculator")
+        assert self.manager.is_active("calculator")
+
+    def test_load_duplicate(self):
+        from skill.meta_tools import LoadSkillTool
+
+        tool = LoadSkillTool(self.registry, self.manager, set())
+        tool.run({"skill_name": "calculator"})
+        result = tool.run({"skill_name": "calculator"})
+        assert "已经加载" in result
+
+    def test_load_reactivate_inactive(self):
+        from skill.meta_tools import LoadSkillTool
+
+        tool = LoadSkillTool(self.registry, self.manager, set())
+        tool.run({"skill_name": "calculator"})
+        self.manager.deactivate("calculator")
+        assert not self.manager.is_active("calculator")
+
+        result = tool.run({"skill_name": "calculator"})
+        assert "重新激活" in result
+        assert self.manager.is_active("calculator")
+
+    def test_load_not_found(self):
+        from skill.meta_tools import LoadSkillTool
+
+        tool = LoadSkillTool(self.registry, self.manager, set())
+        result = tool.run({"skill_name": "nonexistent"})
+        assert "未在注册中心中找到" in result
+
+    def test_load_empty_name(self):
+        from skill.meta_tools import LoadSkillTool
+
+        tool = LoadSkillTool(self.registry, self.manager, set())
+        result = tool.run({"skill_name": ""})
+        assert "必须指定" in result
+
+    # ---------- UnloadSkillTool ----------
+
+    def test_unload_success(self):
+        from skill.meta_tools import LoadSkillTool, UnloadSkillTool
+
+        tracker = set()
+        load_tool = LoadSkillTool(self.registry, self.manager, tracker)
+        load_tool.run({"skill_name": "calculator"})
+        assert self.manager.has_skill("calculator")
+
+        unload_tool = UnloadSkillTool(self.manager, tracker)
+        result = unload_tool.run({"skill_name": "calculator"})
+        assert "成功卸载" in result
+        assert not self.manager.has_skill("calculator")
+
+    def test_unload_not_loaded(self):
+        from skill.meta_tools import UnloadSkillTool
+
+        tool = UnloadSkillTool(self.manager, set())
+        result = tool.run({"skill_name": "nonexistent"})
+        assert "只能卸载自己加载过" in result
+
+    def test_unload_empty_name(self):
+        from skill.meta_tools import UnloadSkillTool
+
+        tool = UnloadSkillTool(self.manager, set())
+        result = tool.run({"skill_name": ""})
+        assert "必须指定" in result
+
+    # ---------- 完整流程测试 ----------
+
+    def test_full_workflow_discover_load_unload(self):
+        """完整流程: 发现 → 加载 → 验证工具注入 → 卸载 → 验证清理"""
+        from skill.meta_tools import SkillDiscoveryTool, LoadSkillTool, UnloadSkillTool
+        import json
+
+        tracker = set()
+        discovery = SkillDiscoveryTool(self.registry)
+        loader = LoadSkillTool(self.registry, self.manager, tracker)
+        unloader = UnloadSkillTool(self.manager, tracker)
+
+        # 1. 发现
+        result = discovery.run({})
+        assert "calculator" in result
+        skill_name = "calculator"
+
+        # 2. 加载
+        result = loader.run({"skill_name": skill_name})
+        assert "成功加载" in result
+        assert self.manager.is_active(skill_name)
+
+        # 3. 验证工具注入到 ToolRegistry
+        skill = self.manager.get_skill(skill_name)
+        tool_names = skill.get_tool_names()
+        for tn in tool_names:
+            assert self.tool_registry.has_tool(tn)
+
+        # 4. 卸载
+        result = unloader.run({"skill_name": skill_name})
+        assert "成功卸载" in result
+        assert not self.manager.has_skill(skill_name)
+
+        # 5. 验证工具已从 ToolRegistry 移除
+        for tn in tool_names:
+            assert not self.tool_registry.has_tool(tn)
+
+    def test_meta_skill_loading(self):
+        """测试 MetaSkill 管理"""
+        from skill.meta_tools import MetaSkill
+
+        skill = MetaSkill(self.registry, self.manager)
+        self.manager.register(skill)
+
+        assert self.manager.has_skill("meta_skill")
+        # 验证工具注入到 ToolRegistry
+        assert self.tool_registry.has_tool("skill_discovery_tool")
+        assert self.tool_registry.has_tool("load_skill_tool")
+        assert self.tool_registry.has_tool("unload_skill_tool")
+        assert self.tool_registry.has_tool("skill_discovery_tool")
+        assert self.tool_registry.has_tool("load_skill_tool")
+        assert self.tool_registry.has_tool("unload_skill_tool")
+
+
+# ==================== Folder Skill 测试 ====================
+
+
+class TestFolderSkillLoader:
+    def test_load_from_folder_without_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = os.path.join(tmpdir, "my_folder_skill")
+            os.makedirs(skill_dir)
+            md_content = "---\nname: my_folder_skill\npriority: 10\n---\nPrompt Content"
+            with open(os.path.join(skill_dir, "skill.md"), "w") as f:
+                f.write(md_content)
+
+            from skill.folder_loader import FolderSkillLoader, FolderSkill
+            skill = FolderSkillLoader.load(skill_dir)
+            assert isinstance(skill, FolderSkill)
+            assert skill.name == "my_folder_skill"
+            assert skill.priority == 10
+            assert "Prompt Content" in skill.get_prompt()
+            assert len(skill.get_tools()) == 0
+
+    def test_load_from_folder_with_dynamic_tools_auto_instantiate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = os.path.join(tmpdir, "auto_skill")
+            os.makedirs(skill_dir)
+            
+            with open(os.path.join(skill_dir, "README.md"), "w") as f:
+                f.write("---\nname: auto_skill\n---\nDynamic Tools")
+                
+            py_content = """
+from Tool.BaseTool import Tool
+from pydantic import BaseModel
+
+class MyParams(BaseModel):
+    pass
+
+class DynamicAutoTool(Tool):
+    def __init__(self):
+        super().__init__("dynamic_auto", "A dynamic tool", MyParams)
+        
+    def run(self, params):
+        return "auto"
+"""
+            with open(os.path.join(skill_dir, "tools.py"), "w") as f:
+                f.write(py_content)
+
+            from skill.folder_loader import FolderSkillLoader
+            skill = FolderSkillLoader.load(skill_dir)
+            tools = skill.get_tools()
+            assert len(tools) == 1
+            assert tools[0].name == "dynamic_auto"
+            assert tools[0].run({}) == "auto"
+
+    def test_load_from_folder_with_get_tools(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            skill_dir = os.path.join(tmpdir, "get_tools_skill")
+            os.makedirs(skill_dir)
+            
+            with open(os.path.join(skill_dir, "README.md"), "w") as f:
+                f.write("---\nname: get_tools_skill\n---\n")
+                
+            py_content = """
+from Tool.BaseTool import Tool
+from pydantic import BaseModel
+
+class MyParams(BaseModel):
+    pass
+
+class DynamicGetTool(Tool):
+    def __init__(self):
+        super().__init__("dynamic_get", "A dynamic tool", MyParams)
+        
+    def run(self, params):
+        return "get"
+
+def get_tools():
+    return [DynamicGetTool()]
+"""
+            with open(os.path.join(skill_dir, "tools.py"), "w") as f:
+                f.write(py_content)
+
+            from skill.folder_loader import FolderSkillLoader
+            skill = FolderSkillLoader.load(skill_dir)
+            tools = skill.get_tools()
+            assert len(tools) == 1
+            assert tools[0].name == "dynamic_get"
+            assert tools[0].run({}) == "get"
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+    test_skill_manager = TestSkillManager()
+    test_skill_manager.setup_method()
+    test_skill_manager.test_prompt_priority_order()

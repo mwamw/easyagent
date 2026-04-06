@@ -1,0 +1,8 @@
+name: test_yaml_math
+description: 基础 YAML 数学技能
+priority: 10
+tools:
+  - builtin: calculator
+ prompt: |
+  ## YAML 注入提示词
+  系统已赋予你运算技能，随时使用calculator工具回答任何数学问题。

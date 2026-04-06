@@ -5,12 +5,14 @@ LLM Providers 模块
 """
 from .base import BaseProvider
 from .openai_provider import OpenAIProvider
+from .openai_responses_provider import OpenAIResponsesProvider
 from .google_provider import GoogleProvider
 from .anthropic_provider import AnthropicProvider
 
 __all__ = [
     "BaseProvider",
     "OpenAIProvider",
+    "OpenAIResponsesProvider",
     "GoogleProvider",
     "AnthropicProvider",
 ]
@@ -27,7 +29,7 @@ def create_provider(
     工厂函数：根据 provider 名称创建对应的 Provider 实例
     
     Args:
-        provider_name: Provider 名称 (openai, google, anthropic, auto)
+        provider_name: Provider 名称 (openai, google, anthropic, auto, openai_responses)
         model: 模型名称
         api_key: API 密钥
         base_url: API 地址
@@ -44,6 +46,7 @@ def create_provider(
     
     provider_map = {
         "openai": OpenAIProvider,
+        "openai_responses": OpenAIResponsesProvider,
         "google": GoogleProvider,
         "gemini": GoogleProvider,
         "anthropic": AnthropicProvider,
