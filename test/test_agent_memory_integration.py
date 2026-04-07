@@ -242,7 +242,7 @@ class TestAgentMemoryIntegration:
         self.agent.invoke(prompt1)
         self.agent.clear_history()
         prompt2 = "请帮我回忆一下这个秘密派对的地点在哪里？"
-        print(self.agent._build_start_messages(query=prompt2))
+        # print(self.agent._build_start_messages(query=prompt2))
         print(f"User: {prompt2}")
         res2 = self.agent.invoke(prompt2)
         print(f"Agent: {res2}")
@@ -251,7 +251,7 @@ class TestAgentMemoryIntegration:
         #测试话题重大变更时，Agent 是否能正确更新 Working Memory 中的相关信息。
         prompt3 ="量子化学是研究分子和原子在量子力学框架下行为的学科。其中有哪些必须了解的核心概念？"
         print(f"User: {prompt3}")
-        print(self.agent._build_start_messages(query=prompt3))
+        # print(self.agent._build_start_messages(query=prompt3))
 
         res3 = self.agent.invoke(prompt3)
         print(f"Agent: {res3}")

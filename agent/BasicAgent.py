@@ -3,10 +3,9 @@ from core.agent import BaseAgent
 from core.llm import EasyLLM
 from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
-from typing import Optional, Any, TYPE_CHECKING
+from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
-from Tool.AsyncToolExecutor import AsyncToolExecutor
 import asyncio
 import json
 import logging
@@ -32,8 +31,6 @@ class BasicAgent(BaseAgent):
         description: Optional[str] = None,
         config: Optional[Config] = None,
         verbose_thinking: bool = False,
-        enable_async_tool: bool = False,
-        async_max_workers: int = 4,
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
@@ -49,9 +46,7 @@ class BasicAgent(BaseAgent):
             tool_registry: 工具注册表
             description: 智能体描述
             config: 配置对象
-            verbose_thinking: 是否显示 LLM 的思考过程（默认 True）
-            enable_async_tool: 是否启用异步工具执行（并行执行多个工具）
-            async_max_workers: 异步执行器线程池大小
+            verbose_thinking: 是否显示 LLM 的思考过程
             
         Raises:
             ParameterValidationError: 参数验证失败
@@ -75,8 +70,6 @@ class BasicAgent(BaseAgent):
             config=config,
             enable_tool=enable_tool,
             tool_registry=tool_registry,
-            enable_async_tool=enable_async_tool,
-            async_max_workers=async_max_workers,
             memory_manage=memory_manage,
             context_manager=context_manager,
         )
@@ -87,7 +80,7 @@ class BasicAgent(BaseAgent):
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
 
-        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，异步执行: {'启用' if enable_async_tool else '禁用'}，provider: {llm.provider_name}")
+        logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
 
     # @override
@@ -177,64 +170,6 @@ class BasicAgent(BaseAgent):
             self.add_message(AssistantMessage("".join(final_results)))
             return "".join(final_results)
 
-    async def invoke_async(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
-        """
-        异步调用智能体，支持并行工具执行
-        
-        Args:
-            query: 用户输入
-            max_iter: 最大迭代次数
-            temperature: 温度参数
-            **kwargs: 其他参数
-            
-        Returns:
-            智能体返回结果
-            
-        Raises:
-            ParameterValidationError: 参数验证失败
-            LLMInvokeError: LLM 调用失败
-        """
-        # 参数验证
-        self._validate_invoke_params(query, max_iter, temperature)
-        self._current_query = query  # 供 get_enhanced_prompt 使用
-        
-        messages: list[Message | dict[str, str]] = []
-        
-        if self.enable_tool:
-            if self.enable_async_tool and self.async_executor:
-                logger.info("使用异步工具模式调用智能体")
-                return await self.invoke_with_tool_async(query, messages, max_iter, temperature, **kwargs)
-            else:
-                logger.info("使用同步工具模式调用智能体（异步包装）")
-                return self.invoke_with_tool(query, messages, max_iter, temperature, **kwargs)
-        else:
-            logger.info("使用普通模式调用智能体")
-            try:
-                messages = self._build_start_messages(query)
-                
-                response = self.llm.invoke(messages, temperature=temperature, **kwargs)
-                
-                if response is None:
-                    raise LLMInvokeError("LLM 返回了空响应!")
-                
-                if not isinstance(response, str):
-                    response = str(response)
-                
-                self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(response))
-                return response
-                
-            except LLMInvokeError:
-                raise
-            except Exception as e:
-                logger.error(f"LLM 调用失败: {e}")
-                raise LLMInvokeError(f"LLM 调用失败: {e}") from e
-
-
-
-
-
-
     def invoke_with_tool(
         self,
         query: str,
@@ -244,7 +179,7 @@ class BasicAgent(BaseAgent):
         **kwargs
     ) -> str:
         """
-        使用工具调用模式调用智能体
+        使用工具调用模式调用智能体（同步版本）
         
         Args:
             query: 用户输入
@@ -254,10 +189,6 @@ class BasicAgent(BaseAgent):
             
         Returns:
             智能体返回结果
-            
-        Raises:
-            ToolRegistryError: 工具注册表未配置
-            LLMInvokeError: LLM 调用失败
         """
         self.enable_tool = True
         
@@ -283,21 +214,16 @@ class BasicAgent(BaseAgent):
                 )
                 self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
                 
-                # 验证响应对象
                 if response is None:
                     raise LLMInvokeError("LLM 返回了空响应!")
 
-                # 格式化 assistant 响应（处理不同 Provider 的格式差异）
                 formatted_response = self.llm.format_assistant_response(response)
-                print(f"formatted_response:{formatted_response}")
-                # Responses API 返回 list，Chat API 返回 dict
-                # 必须区分处理，否则 list 会被 append 成一个嵌套元素
+                # print(f"formatted_response:{formatted_response}")
                 if isinstance(formatted_response, list):
                     messages.extend(formatted_response)
                 else:
                     messages.append(formatted_response)
 
-                # 【调试】记录 response.output 结构，帮助诊断工具调用检测问题
                 _output = getattr(response, "output", None)
                 if _output is not None:
                     _types = [getattr(item, "type", repr(item)) for item in _output]
@@ -308,20 +234,16 @@ class BasicAgent(BaseAgent):
                 logger.error(f"智能体调用失败: {e}")
                 final_response = f"智能体调用失败: {str(e)}"
                 break
-            # 捕获 LLM 的思考过程（支持 Chat API 和 Responses API）
+
             thinking_content = self.llm.get_thinking_content(response)
             if thinking_content:
                 self.thinking_history.append(thinking_content)
                 if self.verbose_thinking:
                     logger.info(f"💭 模型思考: {thinking_content}")
-                messages.append(AssistantMessage(thinking_content))
+                # messages.append(AssistantMessage(thinking_content))
 
-            # 检查是否有工具调用（通过抽象接口，兼容 Chat API 和 Responses API）
             if self.llm.has_tool_calls(response):
                 for tool_call in self.llm.get_tool_calls(response):
-                    # 兼容两种 API 的 tool_id 字段名：
-                    #   Chat API:      tool_call.id
-                    #   Responses API: tool_call.call_id
                     tool_name = "unknown_tool"
                     tool_id = (
                         getattr(tool_call, 'call_id', None)
@@ -335,15 +257,12 @@ class BasicAgent(BaseAgent):
                         if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
                             tool_name = tool_call.function.name or "unknown_tool"
                         elif hasattr(tool_call, 'name'):
-                            # Responses API: tool_call.name
                             tool_name = tool_call.name or "unknown_tool"
 
                     try:
                         tool_args = self._safe_parse_tool_args(tool_call)
-
                         logger.info(f"{self.name}执行工具: {tool_name}，参数: {tool_args}")
                         tool_result = self._safe_execute_tool(tool_name, tool_args)
-
                         tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                         messages.append(tool_msg)
 
@@ -358,7 +277,6 @@ class BasicAgent(BaseAgent):
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
             else:
-                # 没有工具调用，获取最终响应（通过抽象接口）
                 content = self.llm.get_response_content(response) or getattr(response, 'content', None)
                 if content is not None:
                     messages.append(AssistantMessage(content))
@@ -370,7 +288,6 @@ class BasicAgent(BaseAgent):
             
             max_iter -= 1
         
-        # 检查是否超过最大迭代次数
         if final_response is None:
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
@@ -379,7 +296,69 @@ class BasicAgent(BaseAgent):
         self.add_message(AssistantMessage(final_response))
         return final_response
 
-    async def invoke_with_tool_async(
+    async def ainvoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
+        """
+        原生异步调用智能体
+        
+        Args:
+            query: 用户输入
+            max_iter: 最大迭代次数
+            temperature: 温度参数
+            **kwargs: 其他参数
+            
+        Returns:
+            智能体返回结果
+        """
+        if self.verbose_thinking:
+            kwargs["reasoning"] = {"effort": "medium", "summary": "auto"}
+        self._validate_invoke_params(query, max_iter, temperature)
+        self._current_query = query
+        
+        # Skill 前置拦截
+        query = self.skill_manager.on_before_invoke(query)
+        
+        self.callback_manager.on_agent_start(self.name, query)
+        
+        if self.enable_tool:
+            logger.info("使用异步工具模式调用智能体")
+            try:
+                result = await self.ainvoke_with_tool(query, [], max_iter, temperature, **kwargs)
+                self.callback_manager.on_agent_end(self.name, result, success=True)
+                return result
+            except Exception as e:
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+                raise
+        else:
+            logger.info("使用异步普通模式调用智能体")
+            try:
+                messages = self._build_start_messages(query)
+                
+                self.callback_manager.on_llm_start(messages)
+                response = await self.llm.ainvoke(messages, temperature=temperature, **kwargs)
+                self.callback_manager.on_llm_end(response or "")
+                
+                if response is None:
+                    raise LLMInvokeError("LLM 返回了空响应!")
+                
+                if not isinstance(response, str):
+                    logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
+                    response = str(response)
+                
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(response))
+                response = self.skill_manager.on_after_invoke(query, response)
+                self.callback_manager.on_agent_end(self.name, response, success=True)
+                return response
+                
+            except LLMInvokeError as e:
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+                raise
+            except Exception as e:
+                logger.error(f"LLM 异步调用失败: {e}")
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+                raise LLMInvokeError(f"LLM 异步调用失败: {e}") from e
+
+    async def ainvoke_with_tool(
         self,
         query: str,
         messages: list[Message | dict[str, str]],
@@ -388,28 +367,14 @@ class BasicAgent(BaseAgent):
         **kwargs
     ) -> str:
         """
-        异步使用工具调用模式调用智能体，支持并行执行多个工具
+        原生异步工具调用模式
         
-        Args:
-            query: 用户输入
-            messages: 消息列表
-            max_iter: 最大迭代次数
-            temperature: 温度参数
-            
-        Returns:
-            智能体返回结果
-            
-        Raises:
-            ToolRegistryError: 工具注册表未配置或异步执行器未初始化
-            LLMInvokeError: LLM 调用失败
+        与 invoke_with_tool 对称，但 LLM 调用和工具执行均为异步。
         """
         self.enable_tool = True
         
         if self.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
-        
-        if self.async_executor is None:
-            raise ToolRegistryError("异步工具执行器未初始化！请启用 enable_async_tool")
         
         messages = self._build_start_messages(query)
         
@@ -421,44 +386,42 @@ class BasicAgent(BaseAgent):
             logger.debug(f"异步工具调用迭代 {iteration_count}")
             
             try:
-                response = await asyncio.to_thread(
-                    self.llm.invoke_with_tools,
+                self.callback_manager.on_llm_start(messages)
+                response = await self.llm.ainvoke_with_tools(
                     messages,
                     self.tool_registry.get_openai_tools(),
                     temperature=temperature,
                     **kwargs
                 )
+                self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
                 
                 if response is None:
                     raise LLMInvokeError("LLM 返回了空响应!")
 
-                # 格式化 assistant 响应，Responses API 返回 list，Chat API 返回 dict
                 formatted_response = self.llm.format_assistant_response(response)
                 if isinstance(formatted_response, list):
                     messages.extend(formatted_response)
                 else:
                     messages.append(formatted_response)
+
             except LLMInvokeError:
                 raise
             except Exception as e:
-                logger.error(f"智能体调用失败: {e}")
+                logger.error(f"异步智能体调用失败: {e}")
                 final_response = f"智能体调用失败: {str(e)}"
                 break
-            
-            # 捕获 LLM 的思考过程（通过抽象接口）
+
+            # 捕获 LLM 的思考过程
             thinking_content = self.llm.get_thinking_content(response)
-            if thinking_content and self.llm.has_tool_calls(response):
+            if thinking_content:
                 self.thinking_history.append(thinking_content)
                 if self.verbose_thinking:
-                    logger.info(f"💭 思考: {thinking_content}")
+                    logger.info(f"💭 模型思考: {thinking_content}")
                 messages.append(AssistantMessage(thinking_content))
 
-            # 检查是否有工具调用（通过抽象接口，兼容 Chat API 和 Responses API）
+            # 检查是否有工具调用
             if self.llm.has_tool_calls(response):
-                tasks_to_execute = []
-                tool_metadata = []
-
-                for tool_call in self.llm.get_tool_calls(response):
+                async def _process_single_tool(tool_call) -> Message | dict:
                     tool_name = "unknown_tool"
                     tool_id = (
                         getattr(tool_call, 'call_id', None)
@@ -467,52 +430,37 @@ class BasicAgent(BaseAgent):
 
                     try:
                         tool_name = self._safe_get_tool_name(tool_call)
-                        tool_args = self._safe_parse_tool_args(tool_call)
-
-                        tasks_to_execute.append({
-                            "tool_name": tool_name,
-                            "parameters": tool_args
-                        })
-                        tool_metadata.append({
-                            "tool_id": tool_id,
-                            "tool_name": tool_name
-                        })
-                        logger.info(f"准备执行工具: {tool_name}，参数: {tool_args}")
-
                     except Exception as e:
-                        logger.error(f"解析工具调用失败: {e}")
-                        error_msg = f"工具 '{tool_name}' 解析失败: {str(e)}"
-                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
-                        messages.append(tool_msg)
+                        logger.warning(f"获取工具名称失败: {e}，使用默认名称")
+                        if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
+                            tool_name = tool_call.function.name or "unknown_tool"
+                        elif hasattr(tool_call, 'name'):
+                            tool_name = tool_call.name or "unknown_tool"
 
-                # 并行执行所有工具
-                if tasks_to_execute:
-                    logger.info(f"🚀 并行执行 {len(tasks_to_execute)} 个工具...")
                     try:
-                        results = await self.async_executor.execute_tools_parallel(tasks_to_execute)
+                        tool_args = self._safe_parse_tool_args(tool_call)
+                        logger.info(f"{self.name} 并发异步执行工具: {tool_name}，参数: {tool_args}")
+                        tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
+                        return self.llm.format_tool_result(tool_result, tool_id, tool_name)
 
-                        for i, result in enumerate(results):
-                            meta = tool_metadata[i]
-                            tool_msg = self.llm.format_tool_result(
-                                str(result),
-                                meta["tool_id"],
-                                meta["tool_name"]
-                            )
-                            messages.append(tool_msg)
-                            logger.info(f"✅ 工具 '{meta['tool_name']}' 执行完成")
-
+                    except ToolExecutionError as e:
+                        logger.error(f"工具 '{tool_name}' 执行失败: {e}")
+                        error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
+                        return self.llm.format_tool_result(error_msg, tool_id, tool_name)
                     except Exception as e:
-                        logger.error(f"并行执行工具失败: {e}")
-                        for meta in tool_metadata:
-                            error_msg = f"工具执行失败: {str(e)}"
-                            tool_msg = self.llm.format_tool_result(
-                                error_msg,
-                                meta["tool_id"],
-                                meta["tool_name"]
-                            )
-                            messages.append(tool_msg)
+                        logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
+                        error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
+                        return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+
+                # 并发执行所有工具调用
+                tasks = [
+                    _process_single_tool(tc) 
+                    for tc in self.llm.get_tool_calls(response)
+                ]
+                tool_msgs = await asyncio.gather(*tasks)
+                messages.extend(tool_msgs)
+
             else:
-                # 没有工具调用，获取最终响应（通过抽象接口）
                 content = self.llm.get_response_content(response) or getattr(response, 'content', None)
                 if content is not None:
                     messages.append(AssistantMessage(content))
@@ -524,7 +472,6 @@ class BasicAgent(BaseAgent):
             
             max_iter -= 1
         
-        # 检查是否超过最大迭代次数
         if final_response is None:
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
@@ -532,6 +479,32 @@ class BasicAgent(BaseAgent):
         self.add_message(UserMessage(query))
         self.add_message(AssistantMessage(final_response))
         return final_response
+
+    async def astream_invoke(self, query: str, temperature: float = 0.7, **kwargs) -> str:
+        """
+        异步流式调用智能体
+        
+        Args:
+            query: 用户输入
+            temperature: 温度参数
+            
+        Returns:
+            完整响应文本
+        """
+        self._current_query = query
+        if self.enable_tool:
+            raise NotImplementedError("工具模式不支持流式调用，请使用 ainvoke")
+        
+        messages = self._build_start_messages(query)
+        final_results = []
+        async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
+            print(chunk, end="", flush=True)
+            final_results.append(chunk)
+        
+        result = "".join(final_results)
+        self.add_message(UserMessage(query))
+        self.add_message(AssistantMessage(result))
+        return result
 
  
     @override
@@ -568,7 +541,7 @@ class BasicAgent(BaseAgent):
             ## 工具使用指南
             - 当用户问题可以直接回答时，不必使用工具
             - 当需要获取实时信息、执行计算或操作外部系统时，使用工具
-            - 可以连续调用多个工具来完成复杂任务
+            - 可以连续同时调用多个工具来完成复杂任务
             - 如果工具调用失败，分析原因并尝试其他方案
             - 当收集到足够的信息后回答用户问题
 

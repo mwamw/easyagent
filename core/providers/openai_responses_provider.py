@@ -49,6 +49,7 @@ class OpenAIResponsesProvider(BaseProvider):
                 **self._base_params(temperature, **kwargs)
             )
             logger.info(f"✅ {self.provider_name} Provider 响应成功")
+            print("OUTPUT IS:", repr(response))
             return response.output_text
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
@@ -124,6 +125,89 @@ class OpenAIResponsesProvider(BaseProvider):
             return response
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
+            raise
+
+
+    # ==================== 异步调用实现 ====================
+
+    async def async_invoke(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> str | None:
+        """异步调用（无工具）"""
+        async_client = self._get_async_client()
+        try:
+            response = await async_client.responses.create(
+                model=self.model,
+                input=messages,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步响应成功")
+            return response.output_text
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步调用失败: {e}")
+            raise
+
+    async def async_stream(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ):
+        """异步流式调用（无工具）"""
+        async_client = self._get_async_client()
+        try:
+            response = await async_client.responses.create(
+                model=self.model,
+                input=messages,
+                stream=True,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步流式响应开始")
+            async for event in response:
+                delta = getattr(event, "delta", None)
+                if delta is not None:
+                    text = getattr(delta, "text", None) or (delta if isinstance(delta, str) else "")
+                    if text:
+                        yield text
+                else:
+                    if isinstance(event, str) and event:
+                        yield event
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步流式调用失败: {e}")
+            raise
+
+    async def async_invoke_with_tools(
+        self,
+        messages: list,
+        tools: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Any:
+        """异步带工具调用（Responses API 格式）"""
+        async_client = self._get_async_client()
+        try:
+            flat_tools = self._convert_tools(tools)
+            params = self._base_params(temperature, **kwargs)
+            converted_input = self._convert_input(messages)
+
+            logger.debug(f"📤 异步发送给 Responses API 的 input 条目数: {len(converted_input)}")
+            response = await async_client.responses.create(
+                model=self.model,
+                input=converted_input,
+                tools=flat_tools,
+                **params
+            )
+            _output = getattr(response, "output", None)
+            if _output is not None:
+                _types = [getattr(item, "type", repr(item)) for item in _output]
+                logger.info(f"📦 Responses API 异步 output 类型列表: {_types}")
+            logger.info(f"✅ {self.provider_name} Provider 异步工具调用响应成功")
+            return response
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步工具调用失败: {e}")
             raise
 
 

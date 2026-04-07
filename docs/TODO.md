@@ -1,89 +1,13 @@
 # EasyAgent 待实现功能 (Roadmap)
 
 本文档记录 EasyAgent 框架后续计划实现的功能。
+> 最后更新：2026-04-06
 
 ---
 
 ## 🔴 高优先级 (P1)
 
-### 1. 多 Agent 协作 (Multi-Agent Orchestration)
-支持多个 Agent 协作完成复杂任务，是框架从"单体 Agent"演进为"Agent 平台"的核心能力。
-
-- **Supervisor 模式**：一个主 Agent 调度多个子 Agent
-- **Agent 间消息传递**：标准化的通信协议
-- **工作流编排**：DAG 式 Agent Pipeline，支持并行/串行/条件分支
-- **共享记忆**：多个 Agent 访问同一记忆系统
-
-```python
-# 预期用法
-orchestrator = AgentOrchestrator(
-    supervisor=supervisor_agent,
-    workers={
-        "researcher": researcher_agent,
-        "writer": writer_agent,
-        "reviewer": reviewer_agent,
-    },
-    workflow="researcher -> writer -> reviewer"
-)
-result = orchestrator.run("写一篇关于 AI Agent 的调研报告")
-```
-
-**涉及文件:**
-- `agent/orchestrator.py` - 编排引擎
-- `agent/communication.py` - Agent 间通信
-- `core/workflow.py` - 工作流定义与执行
-
----
-
-### 2. Skill 技能系统
-允许 Agent 加载和使用预定义的"技能包"，每个 Skill 封装一组工具 + 提示词 + 工作流。
-
-- **Skill 定义**：YAML/Python 声明式技能描述
-- **Skill 注册与发现**：从本地目录或远程仓库加载
-- **Skill 组合**：多个 Skill 可以叠加到同一个 Agent
-- **内置 Skill**：代码执行、文件操作、网络搜索、数据分析等
-
-```python
-# 预期用法
-from skill import SkillManager, Skill
-
-skill_mgr = SkillManager()
-skill_mgr.load_from_dir("./skills/")  # 加载本地技能包
-
-# 单个 Skill 结构
-# skills/code_review/
-# ├── skill.yaml          # 技能元数据 (name, description, tools, prompts)
-# ├── tools.py            # 技能专属工具
-# └── prompt_templates/   # 技能提示词模板
-
-agent = BasicAgent(name="dev", llm=llm, skill_manager=skill_mgr)
-agent.use_skill("code_review")
-agent.use_skill("web_search")
-```
-
-模式 B：动态按需加载（LLM 视角自动发现）
-这就是你提到的“让 LLM 根据需要自己加载”。这通常用于通用型私人助理 (General Assistant)。 如果你的 Agent 有 100 个技能（包含 300 个工具），一开始全部塞给 LLM 会导致 Token 爆炸，且极其容易产生幻觉（用错工具）。
-
-怎么实现 LLM 自我加载？ 我们需要给 Agent 开发一个特殊的“元工具 (Meta-Tool)”，比如叫 skill_discovery_tool 和 load_skill_tool：
-
-用户：“帮我查一下这台服务器上 Docker 容器的状态”
-LLM 发现当前工具箱里没有相关工具，于是调用 skill_discovery_tool(query="docker linux")
-系统返回：“推荐加载 LinuxOpsSkill”
-LLM 调用 load_skill_tool(skill_name="LinuxOpsSkill")
-Agent 框架在运行时动态将 LinuxOpsSkill 的工具和提示词注入到当前的上下文中。
-LLM 使用新获得的 Docker 工具完成任务，完成后甚至可以调用 unload_skill 卸载。
-
-
-**涉及文件:**
-- `skill/base.py` - Skill 基类定义
-- `skill/manager.py` - SkillManager 管理器
-- `skill/loader.py` - Skill 加载器（本地/远程）
-- `skill/builtin/` - 内置技能包
-- `core/agent.py` - BaseAgent 集成 SkillManager
-- ....
----
-
-### 3. 原生异步支持
+### 1. 原生异步支持
 当前异步只是 `run_in_executor` 包装，需要原生 `async/await`。
 
 - `AsyncOpenAI` 客户端支持
@@ -104,7 +28,7 @@ async def main():
 
 ---
 
-### 4. 对话持久化与会话管理
+### 2. 对话持久化与会话管理
 对话历史和 Agent 状态目前只存在内存中，需要支持持久化。
 
 - SQLite / Redis 对话存储
@@ -123,7 +47,9 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 5. 更多向量/图数据库支持
+### 3. 更多向量/图数据库支持
+当前仅支持 Qdrant 向量存储和 Neo4j 图存储，扩展更多后端。
+
 - Milvus VectorStore 实现
 - Pinecone VectorStore 实现
 - `memory/V2/Store/MilvusVectorStore.py`
@@ -131,9 +57,23 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
+### 4. 多 Agent 协作增强
+当前已实现 Sequential / Supervisor / GroupChat 三种编排模式，后续增强：
+
+- **DAG 工作流编排**：支持并行/串行/条件分支的复杂工作流
+- **共享记忆**：多个 Agent 通过 SharedContext 访问同一 V2 记忆系统
+- **Agent 间异步通信**：支持跨 Agent 异步消息传递
+- **动态 Agent 创建与销毁**：运行时按需创建/销毁子 Agent
+
+**涉及文件:**
+- `orchestrator/dag.py` - DAG 工作流编排器
+- `orchestrator/context.py` - 增强 SharedContext 与 V2 Memory 集成
+
+---
+
 ## 🟡 中优先级 (P2)
 
-### 6. Guard Rails / 安全机制
+### 5. Guard Rails / 安全机制
 - 输入检查（Prompt Injection 防护）
 - 输出过滤（敏感内容检测）
 - 工具调用权限控制（白名单/黑名单）
@@ -145,7 +85,7 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 7. 流式 + 工具调用组合
+### 6. 流式 + 工具调用组合
 当前 `stream_invoke` 不支持工具模式。需要支持「边流式输出边触发工具」的 Streaming Tool Call 模式。
 
 **涉及文件:**
@@ -154,7 +94,7 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 8. 可观测性 (Observability)
+### 7. 可观测性 (Observability)
 - OpenTelemetry Tracing 集成
 - 每次调用的 Token 计数（input/output）
 - 调用链可视化（Agent → LLM → Tool → LLM → ...）
@@ -166,7 +106,7 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 9. 更多 Agent 模式
+### 8. 更多 Agent 模式
 - **ReWOO Agent**：先规划所有工具调用，再批量执行
 - **Reflexion Agent**：自反思 + 自我修正
 - **Code Interpreter Agent**：动态执行代码
@@ -178,17 +118,33 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 10. 更多预置工具
-- `Tool/builtin/code_interpreter.py` - 代码执行器
-- `Tool/builtin/file_manager.py` - 文件管理
-- `Tool/builtin/http_client.py` - HTTP 请求
+### 9. 更多预置工具 / 内置 Skill
+当前内置 Skill 有 calculator、web_search、memory、mcp，继续扩展：
+
+- `skill/builtin/code_interpreter_skill.py` - 代码执行器 Skill
+- `skill/builtin/file_manager_skill.py` - 文件管理 Skill
+- `skill/builtin/http_client_skill.py` - HTTP 请求 Skill
+- `skill/builtin/linux_ops_skill.py` - Linux 运维 Skill
 
 ---
 
-### 11. V2 记忆性能优化
+### 10. V2 记忆性能优化
 - 批量 embedding 管道优化
 - 向量缓存层减少重复编码
 - 异步并发存储写入
+
+---
+
+### 11. Skill 远程仓库支持
+当前 Skill 仅支持本地加载（YAML / Markdown / Folder），增加远程加载能力：
+
+- Skill 远程仓库协议定义
+- 从 Git / HTTP 加载 Skill
+- Skill 版本管理与依赖声明
+
+**涉及文件:**
+- `skill/remote_loader.py` - 远程 Skill 加载器
+- `skill/registry.py` - 增加远程注册源
 
 ---
 
@@ -221,20 +177,14 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 16. 高级 RAG 增强
-- Hybrid Search（向量 + BM25 关键词）
-- GraphRAG 集成
-- Re-ranking 模块
-- 语义分块策略优化
-
----
-
-### 17. 分布式 Agent
+### 16. 分布式 Agent
 支持在多台机器上运行 Agent 集群，任务自动分发与负载均衡。
 
 ---
 
-### 18. 更多 LLM 提供商支持
+### 17. 更多 LLM 提供商支持
+当前已支持 OpenAI / Anthropic / Google 三大主流 Provider，后续扩展：
+
 - 讯飞星火
 - 百川
 - MiniMax
@@ -245,6 +195,39 @@ agent = BasicAgent.load_session("session_001")
 
 | 功能 | 完成日期 | 版本 |
 |------|----------|------|
+| **Skill 技能系统** | 2026-04 | v2.2-dev |
+| Skill 基础架构 (BaseSkill, SkillConfig, SkillManager) | 2026-04 | v2.2-dev |
+| SkillRegistry 注册中心（关键词/标签搜索） | 2026-04 | v2.2-dev |
+| YAMLSkill / MarkdownSkill 声明式加载 | 2026-04 | v2.2-dev |
+| FolderSkill 文件夹加载器 | 2026-04 | v2.2-dev |
+| 动态 Skill 加载 — 模式 B (MetaSkill) | 2026-04 | v2.2-dev |
+| Meta-Tools (SkillDiscoveryTool / LoadSkillTool / UnloadSkillTool) | 2026-04 | v2.2-dev |
+| 内置 Skill (calculator / web_search / memory / mcp) | 2026-04 | v2.2-dev |
+| Agent 集成 SkillManager (BasicAgent / ReactAgent / PlanningAgent / StructuredOutputAgent) | 2026-04 | v2.2-dev |
+| Skill 单元测试 | 2026-04 | v2.2-dev |
+| **多 Agent 协作 (Multi-Agent Orchestration)** | 2026-03 | v2.1-dev |
+| SequentialOrchestrator 顺序编排 | 2026-03 | v2.1-dev |
+| SupervisorOrchestrator 主管模式 | 2026-03 | v2.1-dev |
+| GroupChatOrchestrator 群聊模式 | 2026-03 | v2.1-dev |
+| AgentMessage / SharedContext / 异常体系 | 2026-03 | v2.1-dev |
+| Orchestrator 回调系统集成 | 2026-03 | v2.1-dev |
+| Orchestrator 单元测试 | 2026-03 | v2.1-dev |
+| **Context Engineering 上下文工程模块** | 2026-03 | v2.1-dev |
+| ContextBuilder / ContextManager / ContextWindow | 2026-03 | v2.1-dev |
+| 多源上下文收集 (HistorySource / RAGSource / MemorySource) | 2026-03 | v2.1-dev |
+| Token 预算管理 (TokenCounter / TokenBudget) | 2026-03 | v2.1-dev |
+| 压缩器 (SlidingWindow / TokenBudget / Selective / Summarization) | 2026-03 | v2.1-dev |
+| 格式化器 (Plain / XML / Markdown) | 2026-03 | v2.1-dev |
+| **RAG 检索增强生成模块** | 2026-03 | v2.1-dev |
+| DocumentLoader 文档加载器 (30+ 格式) | 2026-03 | v2.1-dev |
+| 分块策略 (Fixed / Recursive / Semantic / Token) | 2026-03 | v2.1-dev |
+| 嵌入模型 (OpenAI / HuggingFace) | 2026-03 | v2.1-dev |
+| 向量存储 (Memory / ChromaDB) | 2026-03 | v2.1-dev |
+| 检索器 (Vector / BM25 / Hybrid / MultiQuery / ReRank / Compression) | 2026-03 | v2.1-dev |
+| 查询转换 (HyDE / Step-Back) | 2026-03 | v2.1-dev |
+| RAGPipeline 管线编排 | 2026-03 | v2.1-dev |
+| **MCP 模块增强 (MCPServer)** | 2026-03 | v2.1-dev |
+| MCP Server 端实现 (mcp_server.py) | 2026-03 | v2.1-dev |
 | **P0/P1 Bug 修复与代码质量提升** | 2026-03-21 | v2.1-dev |
 | temperature=0.0 bug 修复 | 2026-03-21 | v2.1-dev |
 | 命名 typo 修复 (resovle→resolve, provide→provider_name) | 2026-03-21 | v2.1-dev |
@@ -270,11 +253,14 @@ agent = BasicAgent.load_session("session_001")
 | **MCP 支持 (MCPClient + MCPToolWrapper)** | 2026-02 | v2.0-dev |
 | Callbacks 回调系统 | 2026-01-19 | v1.0 |
 | **Provider 适配器模式** | 2026-01-19 | v1.1 |
+| Anthropic Provider 适配器 | 2026-03 | v2.1-dev |
+| Google Provider 适配器 | 2026-03 | v2.1-dev |
+| OpenAI Responses Provider 适配器 | 2026-03 | v2.1-dev |
 | ConversationSummaryMemory | 2026-01-19 | v1.0 |
 | StructuredOutputAgent | 2026-01-19 | v1.0 |
 | WebSearchTool | 2026-01-19 | v1.0 |
 | CalculatorTool | 2026-01-19 | v1.0 |
-| 单元测试 (52 tests) | 2026-01-19 | v1.0 |
+| 单元测试 (52+ tests) | 2026-01-19 | v1.0 |
 
 ---
 

@@ -5,8 +5,8 @@ Provider 基类
 提供基于 OpenAI SDK 的通用实现，子类只需覆写差异化方法。
 """
 from abc import ABC, abstractmethod
-from typing import Optional, Any, Generator
-from openai import OpenAI
+from typing import Optional, Any, Generator, AsyncGenerator
+from openai import OpenAI, AsyncOpenAI
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,10 @@ class BaseProvider(ABC):
     所有 Provider（OpenAI、Claude、Gemini 等）均通过 OpenAI 兼容层调用。
     通用的 invoke / stream / invoke_with_tools 已在此基类中实现，
     子类只需覆写 format_tool_result 等差异化方法即可。
+    
+    异步支持：
+    - async_invoke / async_stream / async_invoke_with_tools 使用 AsyncOpenAI 客户端
+    - 异步客户端惰性创建，首次调用异步方法时才初始化
     """
     
     def __init__(
@@ -50,6 +54,7 @@ class BaseProvider(ABC):
         self.timeout = timeout
         self.kwargs = kwargs
         self.client = self._create_client()
+        self._async_client: Optional[AsyncOpenAI] = None
     
     def _create_client(self) -> OpenAI:
         """创建 OpenAI 兼容客户端"""
@@ -59,7 +64,17 @@ class BaseProvider(ABC):
             timeout=self.timeout
         )
     
-    # ==================== 通用调用实现 ====================
+    def _get_async_client(self) -> AsyncOpenAI:
+        """获取或创建 AsyncOpenAI 客户端（惰性初始化）"""
+        if self._async_client is None:
+            self._async_client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=self.timeout
+            )
+        return self._async_client
+    
+    # ==================== 同步调用实现 ====================
 
     def invoke(
         self,
@@ -78,8 +93,12 @@ class BaseProvider(ABC):
                 max_tokens=self.max_tokens,
                 stream=False
             )
+            msg = response.choices[0].message
+            content = msg.content
+            if not content and self.get_thinking_content(response):
+                content = self.get_thinking_content(response)
             logger.info(f"✅ {self.provider_name} Provider 响应成功")
-            return response.choices[0].message.content
+            return content or ""
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
             raise
@@ -103,6 +122,8 @@ class BaseProvider(ABC):
             )
             logger.info(f"✅ {self.provider_name} Provider 流式响应开始")
             for chunk in response:
+                if not chunk.choices:
+                    continue
                 content = chunk.choices[0].delta.content or ""
                 if content:
                     yield content
@@ -133,6 +154,92 @@ class BaseProvider(ABC):
             return response.choices[0].message
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
+            raise
+
+    # ==================== 异步调用实现 ====================
+
+    async def async_invoke(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> str | None:
+        """异步调用 LLM"""
+        temperature = temperature if temperature is not None else self.temperature
+        async_client = self._get_async_client()
+        
+        try:
+            print(f"messages",messages)
+            response = await async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=False
+            )
+            print(f"response",response)
+            msg = response.choices[0].message
+            content = msg.content
+            
+            if not content and self.get_thinking_content(response):
+                content = self.get_thinking_content(response)
+            logger.info(f"✅ {self.provider_name} Provider 异步响应成功")
+            return content or ""
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步调用失败: {e}")
+            raise
+
+    async def async_stream(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """异步流式调用 LLM"""
+        temperature = temperature if temperature is not None else self.temperature
+        async_client = self._get_async_client()
+        
+        try:
+            response = await async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=True
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步流式响应开始")
+            async for chunk in response:
+                content = chunk.choices[0].delta.content or ""
+                if content:
+                    yield content
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步流式调用失败: {e}")
+            raise
+
+    async def async_invoke_with_tools(
+        self,
+        messages: list,
+        tools: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Any:
+        """异步带工具调用的 LLM 调用"""
+        temperature = temperature if temperature is not None else self.temperature
+        async_client = self._get_async_client()
+        
+        try:
+            response = await async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=self.max_tokens,
+                stream=False
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步工具调用响应成功")
+            return response.choices[0].message
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步工具调用失败: {e}")
             raise
     
     # ==================== 需子类覆写的方法 ====================

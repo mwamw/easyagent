@@ -5,7 +5,7 @@ EasyLLM - 统一的 LLM 接口
 """
 from .Message import Message
 from .providers import create_provider, BaseProvider
-from typing import Optional, Any, Generator
+from typing import Optional, Any, Generator, AsyncGenerator
 import logging
 import os
 
@@ -363,6 +363,73 @@ class EasyLLM:
         # 默认：直接返回原始响应（OpenAI 兼容格式可以直接使用）
         return response
     
+    # ==================== 异步 API ====================
+
+    async def ainvoke(
+        self,
+        messages: list[dict[str, str] | Message],
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> str | None:
+        """
+        异步调用 LLM
+        
+        Args:
+            messages: 消息列表
+            temperature: 温度参数
+            
+        Returns:
+            LLM 响应内容
+        """
+        messages = self._convert_messages(messages) # type: ignore
+        return await self._provider.async_invoke(messages, temperature=temperature, **kwargs) # type: ignore
+
+    async def astream(
+        self,
+        messages: list[dict[str, str] | Message],
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> AsyncGenerator[str, None]:
+        """
+        异步流式调用 LLM
+        
+        Args:
+            messages: 消息列表
+            temperature: 温度参数
+            
+        Yields:
+            响应内容片段
+        """
+        messages = self._convert_messages(messages) # type: ignore
+        async for chunk in self._provider.async_stream(messages, temperature=temperature, **kwargs):
+            yield chunk
+
+    async def ainvoke_with_tools(
+        self,
+        messages: list[dict[str, str] | Message],
+        tools: list[dict],
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Any:
+        """
+        异步带工具调用的 LLM 调用
+        
+        Args:
+            messages: 消息列表
+            tools: 工具定义列表
+            temperature: 温度参数
+            
+        Returns:
+            LLM 响应对象
+        """
+        messages = self._convert_messages(messages) # type: ignore
+        try:
+            result = await self._provider.async_invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
+            return result
+        except Exception as e:
+            logger.error(f"LLM 异步工具调用失败 当前消息{messages[-1]}")
+            raise e
+
     # ==================== 向后兼容的方法 ====================
     
     def think(

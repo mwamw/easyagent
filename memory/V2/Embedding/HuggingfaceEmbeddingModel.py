@@ -10,7 +10,7 @@ class HuggingfaceEmbeddingModel(BaseEmbeddingModel):
         # If model_path is provided, use it. Otherwise use model_name.
         # SentenceTransformer handles both HuggingFace Hub IDs and local paths.
         load_path = model_name
-        self.model = SentenceTransformer(load_path)
+        self.model = SentenceTransformer(load_path,device="cpu")
         self.embedding_size = self.model.get_sentence_embedding_dimension()
     
     def embed(self, text: List[str]) -> List[List[float]]:

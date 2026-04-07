@@ -181,8 +181,7 @@ class TestMetaToolsSkill(TestSkillBase):
                 "你是一个具有自主意识的 Agent。如果用户交给你的任务你目前没有合适的工具去完成，"
                 "请首先使用 skill_discovery_tool 寻找对应的技能。找到后使用 load_skill_tool 加载它，然后再使用新装载的工具完成任务。"
             ),
-            verbose_thinking=False,
-            enable_async_tool=False
+            verbose_thinking=False
         )
         
         # 为 Agent 加载 MetaSkill，让其获得动态加载的能力

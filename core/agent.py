@@ -14,10 +14,10 @@ from context.source.base import BaseContextSource
 from .callbacks import CallbackManager
 from skill.manager import SkillManager
 import json
+import asyncio
 import threading
 from Tool.BaseTool import Tool
 from .Exception import *
-from Tool.AsyncToolExecutor import AsyncToolExecutor
 import logging
 logger = logging.getLogger(__name__)
 class BaseAgent(ABC):
@@ -46,8 +46,6 @@ class BaseAgent(ABC):
         config: Optional[Config] = None,
         enable_tool: bool = False,
         tool_registry: Optional[ToolRegistry] = None,
-        enable_async_tool: bool = False,
-        async_max_workers: int = 4,
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
@@ -84,15 +82,6 @@ class BaseAgent(ABC):
         
         self.enable_tool = enable_tool or (tool_registry is not None)
         self.tool_registry = tool_registry
-        
-                
-        # 异步工具执行配置
-        self.enable_async_tool = enable_async_tool
-        self.async_max_workers = async_max_workers
-        self.async_executor: Optional[AsyncToolExecutor] = None
-        
-        if enable_async_tool and tool_registry:
-            self.async_executor = AsyncToolExecutor(tool_registry, max_workers=async_max_workers)
         
         # V2 记忆系统 (MemoryManage)
         self.memory_manage = memory_manage
@@ -131,26 +120,25 @@ class BaseAgent(ABC):
         # 通过 MemorySkill 实现（新路径）
         if not self.skill_manager.has_skill("memory"):
             try:
-            #     from skill.builtin.memory_skill import MemorySkill
-            #     # 如果有 context_manager，MemorySkill 会自动提供 context_source
-            #     include_ctx = self.context_manager is not None
-            #     skill = MemorySkill(
-            #         memory_manage=memory_manage,
-            #         include_context_source=include_ctx,
-            #     )
-            #     self.skill_manager.register(skill)
-            #     logger.info("已通过 MemorySkill 注册 V2 记忆系统")
-            # except ImportError:
-            #     # 回退到旧方式
-            #     logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
+                from skill.builtin.memory_skill import MemorySkill
+                # 如果有 context_manager，MemorySkill 会自动提供 context_source
+                include_ctx = self.context_manager is not None
+                skill = MemorySkill(
+                    memory_manage=memory_manage,
+                    include_context_source=include_ctx,
+                )
+                self.skill_manager.register(skill)
+                logger.info("已通过 MemorySkill 注册 V2 记忆系统")
+            except ImportError:
+                # 回退到旧方式
+                logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
                 if self.tool_registry is not None:
                     self._register_v2_memory_tools()
                 if self.context_manager is not None:
                     from context.source.memory_source import MemoryContextSource
                     memory_source = MemoryContextSource(memory_manage=memory_manage)
                     self.context_manager.add_source(memory_source)
-            except Exception as e:
-                logger.error(f"注册 V2 记忆系统失败: {e}")
+
         return self
 
     def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
@@ -213,8 +201,12 @@ class BaseAgent(ABC):
     
     @abstractmethod
     def invoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
-        """执行 Agent"""
+        """同步执行 Agent"""
         pass
+    
+    async def ainvoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
+        """异步执行 Agent（子类可覆写，默认回退到同步）"""
+        return self.invoke(query, max_iter=max_iter, temperature=temperature, **kwargs)
     
     def add_message(self, message: Message) -> None:
         """添加消息到历史"""
@@ -496,6 +488,34 @@ class BaseAgent(ABC):
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
 
+    async def _async_safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        """
+        异步安全执行工具
+        
+        工具本身是同步的 tool.run()，通过 asyncio.to_thread 放到线程池以避免阻塞事件循环。
+        """
+        if self.tool_registry is None:
+            raise ToolExecutionError("工具注册表未配置!")
+        
+        self.callback_manager.on_tool_start(tool_name, tool_args)
+        
+        try:
+            result = await asyncio.to_thread(
+                self.tool_registry.execute_tool, tool_name, tool_args
+            )
+            
+            if result is None:
+                result = "工具执行完成，无返回结果"
+            if not isinstance(result, str):
+                result = str(result)
+            
+            self.callback_manager.on_tool_end(tool_name, result, success=True)
+            return result
+            
+        except Exception as e:
+            self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
+            raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
+
     def execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """
         执行工具
@@ -646,29 +666,3 @@ class BaseAgent(ABC):
         
         if temperature < 0 or temperature > 2:
             raise ParameterValidationError(f"temperature 必须在 0 到 2 之间，收到: {temperature}")
-    def set_async_tool_mode(self, enabled: bool, max_workers: int = 4) -> None:
-        """
-        设置是否启用异步工具执行
-        
-        Args:
-            enabled: 是否启用异步执行
-            max_workers: 线程池大小
-            
-        Raises:
-            ToolRegistryError: 启用异步但未配置 ToolRegistry
-        """
-        if not isinstance(enabled, bool):
-            raise ParameterValidationError(f"enabled 参数必须是布尔类型，收到: {type(enabled).__name__}")
-        
-        if enabled and self.tool_registry is None:
-            raise ToolRegistryError("启用异步工具执行时必须先设置 ToolRegistry!")
-        
-        self.enable_async_tool = enabled
-        self.async_max_workers = max_workers
-        
-        if enabled and self.tool_registry:
-            self.async_executor = AsyncToolExecutor(self.tool_registry, max_workers=max_workers)
-        else:
-            self.async_executor = None
-        
-        logger.info(f"异步工具执行已{'启用' if enabled else '禁用'}")

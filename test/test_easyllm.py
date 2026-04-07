@@ -7,6 +7,6 @@ from core.llm import EasyLLM
 from dotenv import load_dotenv
 load_dotenv()
 if __name__ == "__main__":
-    llm:EasyLLM=EasyLLM(model="Qwen3",provide="custom")
+    llm:EasyLLM=EasyLLM()
     print(llm.model,llm.provide,llm.resovle_api_key,llm.resovle_base_url)
     print(llm.invoke([{"role":"user","content":"你是什么模型"}]))
