@@ -1,12 +1,18 @@
-from .BaseMemory import BaseMemory, ForgetType,MemoryConfig,MemoryItem
+try:
+    from .BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+    from .Store.VectorStore import *
+    from .Store.DocumentStore import *
+except ImportError:
+    from BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+    from Store.VectorStore import *
+    from Store.DocumentStore import *
 from datetime import datetime,timedelta
 import os
 import logging
 logger=logging.getLogger(__name__)
 from typing import Any,Optional
-from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
-from .Store.VectorStore import *
-from .Store.DocumentStore import *
 from typing_extensions import override
 class Episode:
 

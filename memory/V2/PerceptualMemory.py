@@ -1,4 +1,3 @@
-from .BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
 from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import hashlib
@@ -7,11 +6,18 @@ import torch
 import random
 import logging
 import numpy as np
-from .Store.VectorStore import VectorStore
-from .Store.DocumentStore import DocumentStore
-from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 from PIL import Image
 import io
+try:
+    from .BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
+    from .Store.VectorStore import VectorStore
+    from .Store.DocumentStore import DocumentStore
+    from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+except ImportError:
+    from BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
+    from Store.VectorStore import VectorStore
+    from Store.DocumentStore import DocumentStore
+    from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 logger = logging.getLogger(__name__)
 
 class Perception:

@@ -1,0 +1,7 @@
+sentence-transformers>=2.0.0
+qdrant-client>=1.7.0
+neo4j>=5.0.0
+transformers>=4.0.0
+torch>=2.0.0
+jieba>=0.42.0
+scikit-learn>=1.0.0

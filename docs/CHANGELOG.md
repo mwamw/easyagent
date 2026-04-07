@@ -100,7 +100,7 @@
 #### Agent 实现
 - `agent/BasicAgent.py` - 基础智能体，支持工具调用
 - `agent/ReactAgent.py` - ReAct 模式智能体
-- `agent/RAGAgent.py` - 检索增强生成智能体
+- `rag/pipeline.py` - 检索增强生成管线
 - `agent/ConversationalAgent.py` - 对话智能体
 - `agent/PlanningAgent.py` - 规划智能体
 - `agent/StructuredOutputAgent.py` - 结构化输出智能体

@@ -1,6 +1,9 @@
 from abc import ABC,abstractmethod
 from typing import Any
-from ..BaseMemory import MemoryType
+try:
+    from ..BaseMemory import MemoryType
+except ImportError:
+    from BaseMemory import MemoryType
 class VectorStore(ABC):
     @abstractmethod
     def add_vectors(

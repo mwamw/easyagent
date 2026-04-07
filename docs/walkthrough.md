@@ -10,12 +10,11 @@ EasyAgent 框架已从 v1.0 基础版本发展到 v2.0-dev，新增了完整的�
 
 ```
 EasyAgent/
-├── agent/                         # 6 种 Agent 类型
+├── agent/                         # 5 种 Agent 类型
 │   ├── BasicAgent.py              # 工具调用 Agent
 │   ├── ReactAgent.py              # ReAct 思考链
 │   ├── PlanningAgent.py           # 规划执行
 │   ├── ConversationalAgent.py     # 对话记忆
-│   ├── RAGAgent.py                # 检索增强
 │   └── StructuredOutputAgent.py   # 结构化输出
 ├── memory/V2/                     # V2 多层记忆系统 ⭐
 │   ├── BaseMemory.py              # 基类 (MemoryItem, MemoryConfig)
@@ -81,7 +80,6 @@ EasyAgent/
 | ReactAgent | 复杂推理任务 | Thought → Action → Observation |
 | PlanningAgent | 多步骤任务 | 任务分解和逐步执行 |
 | ConversationalAgent | 多轮对话 | 集成 V2 MemoryManage（可配置 Working/Episodic/Semantic） |
-| RAGAgent | 知识问答 | 检索增强生成 |
 | StructuredOutputAgent | 信息提取 | Pydantic Schema 强制输出 |
 
 ---

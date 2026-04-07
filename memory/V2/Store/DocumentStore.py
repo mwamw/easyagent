@@ -1,6 +1,9 @@
 from abc import ABC,abstractmethod
 from typing import Dict,Any,Optional
-from ..BaseMemory import MemoryItem, MemoryType
+try:
+    from ..BaseMemory import MemoryItem, MemoryType
+except ImportError:
+    from BaseMemory import MemoryItem, MemoryType
 class DocumentStore(ABC):
     @abstractmethod
     def add_memory(

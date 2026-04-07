@@ -2,16 +2,25 @@ import logging
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-from .Store.VectorStore import VectorStore
-from .BaseMemory import MemoryType,MemoryItem
 from typing import Optional,Any,List
-from .BaseMemory import MemoryConfig,BaseMemory,ForgetType
-from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 from datetime import datetime
-from .Store.GraphStore import GraphStore
 import numpy as np
-from .Store.GraphStore import Entity,Relation
-from .Extractor.Extractor import Extractor
+try:
+    from .Store.VectorStore import VectorStore
+    from .BaseMemory import MemoryType,MemoryItem
+    from .BaseMemory import MemoryConfig,BaseMemory,ForgetType
+    from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+    from .Store.GraphStore import GraphStore
+    from .Store.GraphStore import Entity,Relation
+    from .Extractor.Extractor import Extractor
+except ImportError:
+    from Store.VectorStore import VectorStore
+    from BaseMemory import MemoryType,MemoryItem
+    from BaseMemory import MemoryConfig,BaseMemory,ForgetType
+    from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+    from Store.GraphStore import GraphStore
+    from Store.GraphStore import Entity,Relation
+    from Extractor.Extractor import Extractor
 
 class SemanticMemory(BaseMemory):
     def __init__(self,memory_config:MemoryConfig,

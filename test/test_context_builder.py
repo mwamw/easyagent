@@ -203,7 +203,7 @@ class TestContextBuilder(unittest.TestCase):
             history=history,
             system_prompt="你是测试助手",
         )
-
+        print(messages)
         self.assertEqual(messages[0]["role"], "system")
         self.assertIn("你是测试助手", messages[0]["content"])
         self.assertIn("检索内容", messages[0]["content"])
@@ -452,13 +452,6 @@ class TestMemoryContextSource(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    ok = run_manual_tests(
-        [
-            TestContextBuilder,
-            TestContextManager,
-            TestEndToEnd,
-            TestMemoryContextSource,
-        ],
-        title="Context Builder/Manager Manual Test",
-    )
-    exit_with_status(ok)
+    test=TestContextBuilder()
+    test.test_build_messages_history_and_system_context()
+    

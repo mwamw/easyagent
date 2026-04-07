@@ -1,13 +1,17 @@
 import datetime
 from heapq import heappush
 from typing_extensions import override
-from .BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
 import logging
 import heapq
 from typing import Optional,Any
 from abc import abstractmethod
-from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 import numpy as np
+try:
+    from .BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
+    from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
+except ImportError:
+    from BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
+    from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 logger = logging.getLogger(__name__)
 """
 工作记忆：

@@ -4,7 +4,7 @@
 
 ## 📦 特性
 
-- **多种 Agent 类型**：BasicAgent、ReactAgent、PlanningAgent、ConversationalAgent、RAGAgent、StructuredOutputAgent
+- **多种 Agent 类型**：BasicAgent、ReactAgent、PlanningAgent、ConversationalAgent、StructuredOutputAgent
 - **V2 多层记忆系统**：情景记忆、语义记忆、感知记忆、工作记忆（仿人类认知架构）
 - **多模态感知**：支持文本、图像 (CLIP)、音频 (CLAP) 的编码与跨模态检索
 - **知识图谱**：LLM 实体关系提取 + Neo4j 图数据库存储
@@ -23,8 +23,11 @@
 git clone https://github.com/your-repo/EasyAgent.git
 cd EasyAgent
 
-# 安装依赖
-pip install -r requirements.txt
+# 安装核心依赖
+pip install -r requirements/base.txt
+
+# 开发与测试依赖（可选）
+pip install -r requirements/dev.txt
 
 # 配置环境变量
 cp .env.example .env
@@ -38,7 +41,7 @@ from agent import BasicAgent
 from core.llm import EasyLLM
 
 # 创建 LLM 和 Agent
-llm = EasyLLM(model="gemini-2.5-flash", provide="google")
+llm = EasyLLM(model="gemini-2.5-flash", provider="google")
 agent = BasicAgent(name="assistant", llm=llm)
 
 # 对话
@@ -83,7 +86,7 @@ from core.llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import register_mcp_tools
 
-llm = EasyLLM(model="gemini-2.5-flash", provide="google")
+llm = EasyLLM(model="gemini-2.5-flash", provider="google")
 registry = ToolRegistry()
 
 # 示例 1: 通过本地 Python MCP Server 脚本接入（stdio）
@@ -164,23 +167,30 @@ agent.invoke("你还记得我的名字和年龄吗？")  # 能记住上下文
 ### RAG 知识问答
 
 ```python
-from agent import RAGAgent
-from rag import TextLoader, RecursiveCharacterTextSplitter
-from rag import ChromaVectorStore, VectorStoreRetriever
+from rag import RAGPipeline
+from rag.loader import DocumentLoader
+from rag.chunker import RecursiveCharacterChunker
+from rag.vectorstore import ChromaVectorStore
+from rag.retriever import VectorRetriever
+from rag.embedding import OpenAIEmbedding
 
-# 加载和分割文档
-docs = TextLoader("knowledge.txt").load()
-chunks = RecursiveCharacterTextSplitter(chunk_size=500).split_documents(docs)
-
-# 创建向量存储
+loader = DocumentLoader()
+chunker = RecursiveCharacterChunker(chunk_size=500)
+embedding = OpenAIEmbedding()
 store = ChromaVectorStore(collection_name="knowledge_base")
-store.add_documents(chunks)
+retriever = VectorRetriever(vectorstore=store, embedding=embedding, k=5)
 
-# 创建检索器和 RAG Agent
-retriever = VectorStoreRetriever(vectorstore=store, k=5)
-agent = RAGAgent(name="rag_agent", llm=llm, retriever=retriever)
+pipeline = RAGPipeline(
+    llm=llm,
+    embedding=embedding,
+    vectorstore=store,
+    loader=loader,
+    chunker=chunker,
+    retriever=retriever,
+)
 
-answer = agent.invoke("什么是机器学习？")
+pipeline.ingest_from_path("knowledge.txt")
+answer = pipeline.query("什么是机器学习？")
 ```
 
 ### V2 情景记忆使用
@@ -254,7 +264,6 @@ EasyAgent/
 │   ├── ReactAgent.py              # 显式思考链 Agent (ReAct)
 │   ├── PlanningAgent.py           # 规划执行 Agent
 │   ├── ConversationalAgent.py     # 对话记忆 Agent
-│   ├── RAGAgent.py                # 检索增强 Agent
 │   └── StructuredOutputAgent.py   # 结构化输出 Agent
 ├── memory/                        # 记忆系统
 │   ├── base.py                    # V1 记忆基类
@@ -350,7 +359,6 @@ AUDIO_ENCODER=laion/clap-htsat-unfused
 | ReactAgent | 复杂推理任务 | 显式思考链 (Thought → Action → Observation) |
 | PlanningAgent | 多步骤任务 | 任务分解和逐步执行 |
 | ConversationalAgent | 多轮对话 | 集成记忆系统 |
-| RAGAgent | 知识问答 | 检索增强生成 |
 | StructuredOutputAgent | 信息提取 | Pydantic Schema 强制输出 |
 
 ## 🧠 V2 记忆系统架构

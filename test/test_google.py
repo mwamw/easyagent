@@ -1,20 +1,9 @@
-import sys
-import os  
+import os
+import serpapi
 from dotenv import load_dotenv
 load_dotenv()
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from Tool.ToolRegistry import ToolRegistry
-from Tool.BaseTool import Tool
-from pydantic import BaseModel,Field
-import json
-import serpapi
-from core.llm import EasyLLM
-class SearchParameters(BaseModel):
-    query: str=Field(description="搜索查询")
-
-registry=ToolRegistry()
-@registry.tool("search","搜索工具",SearchParameters)
+# 定义搜索函数
 def search(query: str) -> str:
     """
     一个基于SerpApi的实战网页搜索引擎工具。
@@ -26,15 +15,14 @@ def search(query: str) -> str:
         if not api_key:
             return "错误：SERPAPI_API_KEY 未在 .env 文件中配置。"
 
-        client = serpapi.Client(api_key=api_key)
-        results = client.search({
+        serpapi_client = serpapi.Client(api_key=api_key)
+        results = serpapi_client.search({
             "engine": "google",
             "q": query,
-            "gl": "cn",  # 国家代码
-            "hl": "zh-cn", # 语言代码
+            "gl": "cn",
+            "hl": "zh-cn",
         })
         
-        # 智能解析：优先寻找最直接的答案
         if "answer_box_list" in results:
             return "\n".join(results["answer_box_list"])
         if "answer_box" in results and "answer" in results["answer_box"]:
@@ -42,7 +30,6 @@ def search(query: str) -> str:
         if "knowledge_graph" in results and "description" in results["knowledge_graph"]:
             return results["knowledge_graph"]["description"]
         if "organic_results" in results and results["organic_results"]:
-            # 如果没有直接答案，则返回前三个有机结果的摘要
             snippets = [
                 f"[{i+1}] {res.get('title', '')}\n{res.get('snippet', '')}"
                 for i, res in enumerate(results["organic_results"][:3])
@@ -55,21 +42,25 @@ def search(query: str) -> str:
         return f"搜索时发生错误: {e}"
 
 def main() -> None:
-    llm = EasyLLM(model="claude-sonnet-4.5")
-    message = llm.invoke_with_tools(
-        [
-            {
-                "role": "system",
-                "content": "你是一个智能助手，能够帮助用户回答问题和完成任务,并拥有调用工具的能力,如果需要调用工具,请同时给出你的思考过程。",
-            },
-            {"role": "user", "content": "解释一下LangGraph是什么"},
-        ],
-        registry.get_openai_tools(),
+    from google import genai
+    from google.genai import types
+
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY 未配置，无法运行该示例脚本。")
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents="查一下GraphRAG是什么",
+        config=types.GenerateContentConfig(
+            tools=[search],
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                disable=False
+            ),
+        ),
     )
-    print(f"content:{message}")
-    if message.tool_calls:
-        for function_call in message.tool_calls:
-            print(f"function_call:{function_call}")
+    print(f"\n✅ 最终回答:\n{response.text}")
 
 
 if __name__ == "__main__":

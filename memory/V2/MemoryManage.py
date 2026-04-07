@@ -1,79 +1,129 @@
 from datetime import datetime
-import uuid
-from pydantic import config
-from .BaseMemory import MemoryConfig, MemoryItem,BaseMemory
-from .WorkingMemory import WorkingMemory
-from .EpisodicMemory import EpisodicMemory
-from .SemanticMemory import SemanticMemory
-from .PerceptualMemory import PerceptualMemory
-from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
-from typing import Optional
-import os
-from typing import Dict,Any
 import logging
-from .BaseMemory import ForgetType
-logger=logging.getLogger(__name__)
+import os
+import uuid
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
+try:
+    from .BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from .WorkingMemory import WorkingMemory
+except ImportError:
+    from BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from WorkingMemory import WorkingMemory
+
+if TYPE_CHECKING:
+    try:
+        from .EpisodicMemory import EpisodicMemory
+        from .PerceptualMemory import PerceptualMemory
+        from .SemanticMemory import SemanticMemory
+    except ImportError:
+        from EpisodicMemory import EpisodicMemory
+        from PerceptualMemory import PerceptualMemory
+        from SemanticMemory import SemanticMemory
+
+logger = logging.getLogger(__name__)
+
+
 class MemoryManage:
     def __init__(
         self,
-        config:MemoryConfig,
-        user_id:str="default_user",
-        enable_working:bool=True,
-        working_memory:Optional[WorkingMemory]=None,
-        enable_episodic:bool=True,
-        episodic_memory:Optional[EpisodicMemory]=None,
-        enable_semantic:bool=True,
-        semantic_memory:Optional[SemanticMemory]=None,
-        enable_perceptual:bool=False,
-        perceptual_memory:Optional[PerceptualMemory]=None,
+        config: MemoryConfig,
+        user_id: str = "default_user",
+        enable_working: bool = True,
+        working_memory: Optional[WorkingMemory] = None,
+        enable_episodic: bool = True,
+        episodic_memory: Optional["EpisodicMemory"] = None,
+        enable_semantic: bool = False,
+        semantic_memory: Optional["SemanticMemory"] = None,
+        enable_perceptual: bool = False,
+        perceptual_memory: Optional["PerceptualMemory"] = None,
     ):
-        self.config=config or MemoryConfig()
-        self.user_id=user_id
-        self.memory_types:Dict[str,BaseMemory]={}
+        self.config = config or MemoryConfig()
+        self.user_id = user_id
+        self.memory_types: Dict[str, BaseMemory] = {}
+
         if enable_working:
-            if working_memory:
-                self.memory_types['working']=working_memory
-            else:
-                self.memory_types['working']=WorkingMemory(self.config)
+            self.memory_types["working"] = working_memory or WorkingMemory(self.config)
+
         if enable_episodic:
-            if episodic_memory:
-                self.memory_types['episodic']=episodic_memory
-            else:
-                from .Store import SQLiteDocumentStore,QdrantVectorStore
-                from .Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
-                episode_document_store=SQLiteDocumentStore(os.getenv("EPISODIC_SQLITE_PATH") or "./EpisodicMemory.db")
-                episodic_vector_store=QdrantVectorStore(way="local",collection_name="episodic_memory",host=os.getenv("QDRANT_HOST") or "localhost",port=int(os.getenv("QDRANT_PORT") or 6379),vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384))
-                embedding_model=HuggingfaceEmbeddingModel(os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2")
-                self.memory_types['episodic']=EpisodicMemory(self.config,episode_document_store,episodic_vector_store,embedding_model)
+            self.memory_types["episodic"] = episodic_memory or self._build_default_episodic_memory()
+
         if enable_semantic:
-            if semantic_memory:
-                self.memory_types['semantic']=semantic_memory
-            else:
-                from .Store import SQLiteDocumentStore,Neo4jGraphStore,QdrantVectorStore
-                from .Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
-                semantic_vector_store=QdrantVectorStore(way="local",collection_name="semantic_memory",host=os.getenv("QDRANT_HOST") or "localhost",port=int(os.getenv("QDRANT_PORT") or 6379),vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384))
-                semantic_graph_store=Neo4jGraphStore(uri=os.getenv("NEO4J_URI") or "bolt://localhost:7687",username=os.getenv("NEO4J_USER") or "neo4j",password=os.getenv("NEO4J_PASSWORD") or "password",database=os.getenv("NEO4J_DATABASE") or "neo4j")
-                embedding_model=HuggingfaceEmbeddingModel(os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2")
-                from Extractor.Extractor import Extractor
-                from core.llm import EasyLLM
-                llm=EasyLLM()
-                extractor=Extractor(llm)
-                self.memory_types['semantic']=SemanticMemory(self.config,semantic_vector_store,semantic_graph_store,extractor,embedding_model)
+            if semantic_memory is None:
+                raise ValueError(
+                    "启用 semantic memory 时必须显式提供 semantic_memory，"
+                    "避免在 MemoryManage 初始化阶段自动创建 LLM、Neo4j 和 Qdrant 依赖。"
+                )
+            self.memory_types["semantic"] = semantic_memory
+
         if enable_perceptual:
-            if perceptual_memory:
-                self.memory_types['perceptual']=perceptual_memory
-            else:
-                from Store import SQLiteDocumentStore,QdrantVectorStore
-                from Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
-                perceptual_document_store=SQLiteDocumentStore(os.getenv("PERCEPTUAL_SQLITE_PATH") or "./PerceptualMemory.db")
-                perceptual_vector_store=QdrantVectorStore(way="local",collection_name="perceptual_memory",host=os.getenv("QDRANT_HOST") or "localhost",port=int(os.getenv("QDRANT_PORT") or 6379),vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384))
-                embedding_model=HuggingfaceEmbeddingModel(os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2")
-                self.memory_types['perceptual']=PerceptualMemory(memory_config=self.config,
-                    document_store=perceptual_document_store,
-                    vector_stores={"text":perceptual_vector_store},
-                    embedding_model=embedding_model)
+            if perceptual_memory is None:
+                raise ValueError(
+                    "启用 perceptual memory 时必须显式提供 perceptual_memory，"
+                    "避免在 MemoryManage 初始化阶段自动创建多模态持久层依赖。"
+                )
+            self.memory_types["perceptual"] = perceptual_memory
+
         logger.info("MemoryManage init success")
-        logger.info(f"MemoryManage init success, memory types: {self.memory_types.keys()}")
+        logger.info("MemoryManage init success, memory types: %s", self.memory_types.keys())
+
+    @classmethod
+    def from_env(
+        cls,
+        config: Optional[MemoryConfig] = None,
+        user_id: str = "default_user",
+        enable_working: bool = True,
+        working_memory: Optional[WorkingMemory] = None,
+        enable_episodic: bool = True,
+        episodic_memory: Optional["EpisodicMemory"] = None,
+        enable_semantic: bool = False,
+        semantic_memory: Optional["SemanticMemory"] = None,
+        enable_perceptual: bool = False,
+        perceptual_memory: Optional["PerceptualMemory"] = None,
+    ) -> "MemoryManage":
+        """兼容旧便捷初始化方式的显式入口。"""
+        return cls(
+            config=config or MemoryConfig(),
+            user_id=user_id,
+            enable_working=enable_working,
+            working_memory=working_memory,
+            enable_episodic=enable_episodic,
+            episodic_memory=episodic_memory,
+            enable_semantic=enable_semantic,
+            semantic_memory=semantic_memory,
+            enable_perceptual=enable_perceptual,
+            perceptual_memory=perceptual_memory,
+        )
+
+    def _build_default_episodic_memory(self) -> "EpisodicMemory":
+        try:
+            from .EpisodicMemory import EpisodicMemory
+            from .Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
+            from .Store import QdrantVectorStore, SQLiteDocumentStore
+        except ImportError:
+            from EpisodicMemory import EpisodicMemory
+            from Embedding.HuggingfaceEmbeddingModel import HuggingfaceEmbeddingModel
+            from Store import QdrantVectorStore, SQLiteDocumentStore
+
+        episode_document_store = SQLiteDocumentStore(
+            os.getenv("EPISODIC_SQLITE_PATH") or "./EpisodicMemory.db"
+        )
+        episodic_vector_store = QdrantVectorStore(
+            way="local",
+            collection_name="episodic_memory",
+            host=os.getenv("QDRANT_HOST") or "localhost",
+            port=int(os.getenv("QDRANT_PORT") or 6379),
+            vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384),
+        )
+        embedding_model = HuggingfaceEmbeddingModel(
+            os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
+        )
+        return EpisodicMemory(
+            self.config,
+            episode_document_store,
+            episodic_vector_store,
+            embedding_model,
+        )
 
     def get_supported_type(self):
         return self.memory_types.keys()
@@ -248,4 +298,3 @@ class MemoryManage:
         for memory_type,memory_instance in self.memory_types.items():
             memory_instance.load_from_store()
         logger.info("Loaded all memories")
-
