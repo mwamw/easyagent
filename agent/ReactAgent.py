@@ -67,6 +67,8 @@ class ReactAgent(BasicAgent):
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
+        callback_manager=None,
+        skill_manager=None,
     ):
         """
         初始化 ReAct Agent
@@ -92,9 +94,50 @@ class ReactAgent(BasicAgent):
             memory_manage=memory_manage,
             context_manager=context_manager,
             history_via_context_manager=history_via_context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
         )
         self.verbose = verbose
         self.scratchpad: List[str] = []  # 记录推理过程
+
+    def _get_serializable_state(self) -> dict[str, Any]:
+        state = super()._get_serializable_state()
+        state.update(
+            {
+                "verbose": self.verbose,
+                "scratchpad": self.scratchpad,
+            }
+        )
+        return state
+
+    def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
+        super()._restore_serializable_state(state)
+        state = state or {}
+        self.scratchpad = list(state.get("scratchpad", []))
+
+    @classmethod
+    def _build_constructor_kwargs_from_snapshot(
+        cls,
+        snapshot: dict[str, Any],
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager=None,
+        skill_manager=None,
+    ) -> dict[str, Any]:
+        kwargs = super()._build_constructor_kwargs_from_snapshot(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+        state = snapshot.get("state") or {}
+        kwargs["verbose"] = state.get("verbose", True)
+        return kwargs
     
     @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:

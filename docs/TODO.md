@@ -7,7 +7,7 @@
 
 ## 🔴 高优先级 (P1)
 
-### 1. 原生异步支持
+### 1. 原生异步支持 (已完成)
 当前异步只是 `run_in_executor` 包装，需要原生 `async/await`。
 
 - `AsyncOpenAI` 客户端支持
@@ -28,7 +28,7 @@ async def main():
 
 ---
 
-### 2. 对话持久化与会话管理
+### 2. 对话持久化与会话管理 (部分完成 后续完善)
 对话历史和 Agent 状态目前只存在内存中，需要支持持久化。
 
 - SQLite / Redis 对话存储
@@ -44,6 +44,14 @@ agent = BasicAgent.load_session("session_001")
 - `db/session_store.py` - 会话存储
 - `db/conversation_store.py` - 对话持久化
 - `core/agent.py` - Agent 状态序列化
+
+**已完成功能:**
+- SQLite 对话存储
+- 会话管理（创建、恢复、列表、过期清理）
+- Agent 状态快照与恢复
+
+**后续完善：**
+- Redis 对话存储
 
 ---
 

@@ -5,6 +5,7 @@ from core.Exception import ToolExecutionError
 from .Message import Message
 from typing import Optional, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
+from datetime import datetime
 from .Config import Config
 from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
@@ -20,6 +21,8 @@ from Tool.BaseTool import Tool
 from .Exception import *
 import logging
 logger = logging.getLogger(__name__)
+
+
 class BaseAgent(ABC):
     """
     Agent 抽象基类
@@ -349,6 +352,283 @@ class BaseAgent(ABC):
         self.history.clear()
         self._unextracted_msg_count = 0
         logger.info("对话历史已清空")
+
+    def _get_serializable_state(self) -> dict[str, Any]:
+        """返回子类需要补充持久化的状态。"""
+        return {}
+
+    def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
+        """恢复子类持久化状态。"""
+        return None
+
+    @classmethod
+    def _supports_session_restore(cls) -> bool:
+        """当前 Agent 类型是否支持从会话快照恢复。"""
+        return True
+
+    @staticmethod
+    def _make_json_safe(value: Any) -> Any:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+    def _build_session_snapshot(self) -> dict[str, Any]:
+        tool_names = []
+        if self.tool_registry is not None:
+            try:
+                tool_names = self.tool_registry.get_tool_names()
+            except Exception:
+                tool_names = []
+
+        registered_skills: list[str] = []
+        active_skills: list[str] = []
+        try:
+            registered_skills = [item["name"] for item in self.skill_manager.list_skills()]
+            active_skills = [skill.name for skill in self.skill_manager.get_active_skills()]
+        except Exception:
+            registered_skills = []
+            active_skills = []
+
+        return {
+            "schema_version": 1,
+            "agent_type": self.__class__.__name__,
+            "name": self.name,
+            "system_prompt": self.system_prompt,
+            "description": self.description,
+            "config": self.config.to_dict(),
+            "enable_tool": self.enable_tool,
+            "llm": self._make_json_safe(
+                {
+                    "provider_name": getattr(self.llm, "provider_name", None),
+                    "model": getattr(self.llm, "model", None),
+                    "base_url": getattr(self.llm, "base_url", None),
+                }
+            ),
+            "tool_names": tool_names,
+            "registered_skills": registered_skills,
+            "active_skills": active_skills,
+            "has_memory_manage": self.memory_manage is not None,
+            "has_context_manager": self.context_manager is not None,
+            "state": self._make_json_safe(self._get_serializable_state()),
+        }
+
+    @classmethod
+    def _build_base_constructor_kwargs(
+        cls,
+        snapshot: dict[str, Any],
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
+        skill_manager: Optional["SkillManager"] = None,
+    ) -> dict[str, Any]:
+        config_data = snapshot.get("config") or {}
+        config = Config(**config_data) if config_data else None
+        requested_enable_tool = bool(snapshot.get("enable_tool", False))
+        effective_enable_tool = requested_enable_tool and tool_registry is not None
+
+        return {
+            "name": snapshot["name"],
+            "llm": llm,
+            "system_prompt": snapshot.get("system_prompt"),
+            "enable_tool": effective_enable_tool,
+            "tool_registry": tool_registry,
+            "description": snapshot.get("description"),
+            "config": config,
+            "memory_manage": memory_manage,
+            "context_manager": context_manager,
+            "callback_manager": callback_manager,
+            "skill_manager": skill_manager,
+        }
+
+    @classmethod
+    def _build_constructor_kwargs_from_snapshot(
+        cls,
+        snapshot: dict[str, Any],
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
+        skill_manager: Optional["SkillManager"] = None,
+    ) -> dict[str, Any]:
+        return cls._build_base_constructor_kwargs(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+
+    @classmethod
+    def _iter_agent_subclasses(cls) -> list[type["BaseAgent"]]:
+        result: list[type["BaseAgent"]] = []
+        for subclass in cls.__subclasses__():
+            result.append(subclass)
+            result.extend(subclass._iter_agent_subclasses())
+        return result
+
+    @classmethod
+    def _resolve_agent_class(cls, agent_type: str) -> type["BaseAgent"]:
+        if cls is not BaseAgent:
+            return cls
+
+        try:
+            __import__("agent")
+        except Exception:
+            pass
+
+        for candidate in [BaseAgent] + BaseAgent._iter_agent_subclasses():
+            if candidate.__name__ == agent_type:
+                return candidate
+
+        raise SessionSerializationError(f"无法解析 Agent 类型: {agent_type}")
+
+    @staticmethod
+    def _resolve_session_store(store: Any = None):
+        from db.session_store import SessionStore
+
+        if store is None:
+            return SessionStore()
+        if isinstance(store, SessionStore):
+            return store
+        if isinstance(store, str):
+            return SessionStore(db_path=store)
+        raise SessionSerializationError(f"不支持的 store 类型: {type(store).__name__}")
+
+    @classmethod
+    def list_sessions(
+        cls,
+        *,
+        store: Any = None,
+        limit: int = 100,
+        include_expired: bool = False,
+    ) -> list[dict[str, Any]]:
+        session_store = cls._resolve_session_store(store)
+        return session_store.list_sessions(limit=limit, include_expired=include_expired)
+
+    @classmethod
+    def delete_session(cls, session_id: str, *, store: Any = None) -> bool:
+        session_store = cls._resolve_session_store(store)
+        return session_store.delete_session(session_id)
+
+    @classmethod
+    def cleanup_expired_sessions(
+        cls,
+        *,
+        store: Any = None,
+        now: Optional[datetime] = None,
+    ) -> int:
+        session_store = cls._resolve_session_store(store)
+        return session_store.cleanup_expired_sessions(now=now)
+
+    def save_session(
+        self,
+        session_id: str,
+        *,
+        store: Any = None,
+        metadata: Optional[dict[str, Any]] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> str:
+        if not session_id or not isinstance(session_id, str):
+            raise SessionSerializationError("session_id 必须是非空字符串")
+
+        from db.conversation_store import ConversationStore
+
+        session_store = self._resolve_session_store(store)
+        conversation_store = ConversationStore(db_path=session_store.db_path)
+
+        snapshot = self._build_session_snapshot()
+        session_metadata = self._make_json_safe(metadata or {})
+
+        session_store.create_or_update_session(
+            session_id=session_id,
+            agent_type=self.__class__.__name__,
+            agent_name=self.name,
+            snapshot=snapshot,
+            metadata=session_metadata,
+            expires_at=expires_at,
+        )
+        conversation_store.replace_messages(session_id, self.history)
+        logger.info("会话已保存: %s", session_id)
+        return session_id
+
+    @classmethod
+    def load_session(
+        cls,
+        session_id: str,
+        *,
+        llm: EasyLLM,
+        store: Any = None,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager: Optional["CallbackManager"] = None,
+        skill_manager: Optional["SkillManager"] = None,
+    ) -> "BaseAgent":
+        if not session_id or not isinstance(session_id, str):
+            raise SessionSerializationError("session_id 必须是非空字符串")
+
+        from db.conversation_store import ConversationStore
+
+        session_store = cls._resolve_session_store(store)
+        record = session_store.get_session(session_id)
+        if record is None:
+            raise SessionNotFoundError(f"会话不存在: {session_id}")
+
+        snapshot = record["snapshot"]
+        target_cls = cls._resolve_agent_class(snapshot["agent_type"])
+
+        if cls is not BaseAgent and target_cls is not cls:
+            raise SessionSerializationError(
+                f"会话 {session_id} 属于 {target_cls.__name__}，无法按 {cls.__name__} 恢复"
+            )
+        if not target_cls._supports_session_restore():
+            raise SessionSerializationError(
+                f"{target_cls.__name__} 暂不支持自动恢复，请手动重建实例"
+            )
+
+        init_kwargs = target_cls._build_constructor_kwargs_from_snapshot(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+        agent = target_cls(**init_kwargs)
+        agent._restore_serializable_state(snapshot.get("state") or {})
+
+        conversation_store = ConversationStore(db_path=session_store.db_path)
+        agent.history = conversation_store.load_messages(session_id)
+
+        missing_tools = []
+        expected_tools = snapshot.get("tool_names") or []
+        if expected_tools:
+            if tool_registry is None:
+                missing_tools = expected_tools
+            else:
+                missing_tools = [name for name in expected_tools if not tool_registry.has_tool(name)]
+        if missing_tools:
+            logger.warning("恢复会话时缺少工具实现: %s", missing_tools)
+
+        expected_skills = snapshot.get("active_skills") or []
+        if expected_skills:
+            if skill_manager is None:
+                logger.warning("恢复会话时未提供 skill_manager，以下 Skill 需手动恢复: %s", expected_skills)
+            else:
+                missing_skills = [name for name in expected_skills if not skill_manager.has_skill(name)]
+                if missing_skills:
+                    logger.warning("恢复会话时缺少 Skill 实现: %s", missing_skills)
+
+        if snapshot.get("enable_tool") and tool_registry is None:
+            logger.warning("会话原本启用了工具，但恢复时未注入 ToolRegistry，已降级为无工具模式")
+
+        logger.info("会话已恢复: %s", session_id)
+        return agent
+
     def get_history(self):
         """获取对话历史"""
         return self.history

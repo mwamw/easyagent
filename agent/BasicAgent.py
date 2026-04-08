@@ -34,6 +34,8 @@ class BasicAgent(BaseAgent):
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
+        callback_manager=None,
+        skill_manager=None,
     ):
         """
         初始化 BasicAgent
@@ -72,6 +74,8 @@ class BasicAgent(BaseAgent):
             tool_registry=tool_registry,
             memory_manage=memory_manage,
             context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
         )
         
 
@@ -81,6 +85,46 @@ class BasicAgent(BaseAgent):
         self.history_via_context_manager = history_via_context_manager
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
+
+    def _get_serializable_state(self) -> dict[str, Any]:
+        return {
+            "verbose_thinking": self.verbose_thinking,
+            "history_via_context_manager": self.history_via_context_manager,
+            "thinking_history": self.thinking_history,
+        }
+
+    def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
+        state = state or {}
+        self.verbose_thinking = state.get("verbose_thinking", False)
+        self.thinking_history = list(state.get("thinking_history", []))
+
+    @classmethod
+    def _build_constructor_kwargs_from_snapshot(
+        cls,
+        snapshot: dict[str, Any],
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager=None,
+        skill_manager=None,
+    ) -> dict[str, Any]:
+        kwargs = super()._build_constructor_kwargs_from_snapshot(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+        state = snapshot.get("state") or {}
+        kwargs.update(
+            {
+                "history_via_context_manager": state.get("history_via_context_manager", False),
+            }
+        )
+        return kwargs
 
 
     # @override

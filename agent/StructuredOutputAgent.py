@@ -68,6 +68,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
+        callback_manager=None,
+        skill_manager=None,
     ):
         """
         初始化结构化输出 Agent
@@ -94,6 +96,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
             memory_manage=memory_manage,
             context_manager=context_manager,
             history_via_context_manager=history_via_context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
         )
         
         self.output_model = output_model
@@ -101,6 +105,10 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         self.max_retries = max_retries
         
         logger.info(f"StructuredOutputAgent '{name}' 初始化完成，输出模型: {output_model.__name__}")
+
+    @classmethod
+    def _supports_session_restore(cls) -> bool:
+        return False
     
     @override
     def invoke(

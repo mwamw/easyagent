@@ -66,6 +66,8 @@ class ConversationalAgent(BasicAgent):
         auto_save_to_working: bool = True,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
+        callback_manager=None,
+        skill_manager=None,
     ):
         """
         初始化对话 Agent
@@ -92,9 +94,40 @@ class ConversationalAgent(BasicAgent):
             memory_manage=memory_manage,
             context_manager=context_manager,
             history_via_context_manager=history_via_context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
         )
-        
+
         self.auto_save_to_working = auto_save_to_working
+
+    def _get_serializable_state(self) -> dict:
+        state = super()._get_serializable_state()
+        state["auto_save_to_working"] = self.auto_save_to_working
+        return state
+
+    @classmethod
+    def _build_constructor_kwargs_from_snapshot(
+        cls,
+        snapshot: dict,
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager=None,
+        skill_manager=None,
+    ) -> dict:
+        kwargs = super()._build_constructor_kwargs_from_snapshot(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+        state = snapshot.get("state") or {}
+        kwargs["auto_save_to_working"] = state.get("auto_save_to_working", True)
+        return kwargs
     
     @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:

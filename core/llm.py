@@ -491,6 +491,11 @@ class EasyLLM:
         """向后兼容：旧属性名 provide，请改用 provider_name"""
         return self.provider_name
 
+    @provide.setter
+    def provide(self, value: str | None) -> None:
+        """向后兼容：允许旧测试/Mock 通过 provide 写入 provider_name。"""
+        self.provider_name = value
+
     @property
     def resovle_api_key(self) -> str:
         """向后兼容：旧属性名 resovle_api_key，请改用 resolve_api_key"""

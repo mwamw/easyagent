@@ -59,6 +59,8 @@ class PlanningAgent(BasicAgent):
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
+        callback_manager=None,
+        skill_manager=None,
     ):
         """
         初始化规划 Agent
@@ -85,12 +87,61 @@ class PlanningAgent(BasicAgent):
             memory_manage=memory_manage,
             context_manager=context_manager,
             history_via_context_manager=history_via_context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
         )
         self.max_steps = max_steps
         self.allow_replan = allow_replan
         self.current_plan: List[str] = []
         self.execution_log: List[Dict[str, Any]] = []
         self.json_parser=JsonOutputParser()
+
+    def _get_serializable_state(self) -> dict[str, Any]:
+        state = super()._get_serializable_state()
+        state.update(
+            {
+                "max_steps": self.max_steps,
+                "allow_replan": self.allow_replan,
+                "current_plan": self.current_plan,
+                "execution_log": self.execution_log,
+            }
+        )
+        return state
+
+    def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
+        super()._restore_serializable_state(state)
+        state = state or {}
+        self.current_plan = list(state.get("current_plan", []))
+        self.execution_log = list(state.get("execution_log", []))
+
+    @classmethod
+    def _build_constructor_kwargs_from_snapshot(
+        cls,
+        snapshot: dict[str, Any],
+        llm: EasyLLM,
+        tool_registry: Optional["ToolRegistry"] = None,
+        memory_manage: Optional["MemoryManage"] = None,
+        context_manager: Optional["ContextManager"] = None,
+        callback_manager=None,
+        skill_manager=None,
+    ) -> dict[str, Any]:
+        kwargs = super()._build_constructor_kwargs_from_snapshot(
+            snapshot,
+            llm=llm,
+            tool_registry=tool_registry,
+            memory_manage=memory_manage,
+            context_manager=context_manager,
+            callback_manager=callback_manager,
+            skill_manager=skill_manager,
+        )
+        state = snapshot.get("state") or {}
+        kwargs.update(
+            {
+                "max_steps": state.get("max_steps", 10),
+                "allow_replan": state.get("allow_replan", True),
+            }
+        )
+        return kwargs
     
     @override
     def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
