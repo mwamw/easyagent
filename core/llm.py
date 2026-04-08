@@ -325,6 +325,23 @@ class EasyLLM:
         except Exception as e:
             logger.error(f"LLM工具调用失败 当前消息{messages[-1]}")
             raise e
+
+    def stream_with_tools(
+        self,
+        messages: list[dict[str, str] | Message],
+        tools: list[dict],
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Generator[dict[str, Any], None, None]:
+        """同步流式带工具调用，返回统一事件流。"""
+        messages = self._convert_messages(messages) # type: ignore
+        yield from self._provider.stream_with_tools(
+            messages,
+            tools,
+            temperature=temperature,
+            **kwargs,
+        )
+
     def format_tool_result(
         self,
         content: str,
@@ -362,6 +379,22 @@ class EasyLLM:
         
         # 默认：直接返回原始响应（OpenAI 兼容格式可以直接使用）
         return response
+
+    def format_assistant_message(
+        self,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None
+    ) -> Any:
+        """基于统一 tool call 结构构造 assistant 消息。"""
+        if hasattr(self._provider, "format_assistant_message"):
+            return self._provider.format_assistant_message( # type: ignore
+                content=content,
+                tool_calls=tool_calls,
+            )
+        return {
+            "role": "assistant",
+            "content": content or "",
+        }
     
     # ==================== 异步 API ====================
 
@@ -429,6 +462,23 @@ class EasyLLM:
         except Exception as e:
             logger.error(f"LLM 异步工具调用失败 当前消息{messages[-1]}")
             raise e
+
+    async def astream_with_tools(
+        self,
+        messages: list[dict[str, str] | Message],
+        tools: list[dict],
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """异步流式带工具调用，返回统一事件流。"""
+        messages = self._convert_messages(messages) # type: ignore
+        async for event in self._provider.async_stream_with_tools(
+            messages,
+            tools,
+            temperature=temperature,
+            **kwargs,
+        ):
+            yield event
 
     # ==================== 向后兼容的方法 ====================
     

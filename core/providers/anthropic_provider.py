@@ -109,3 +109,38 @@ class AnthropicProvider(BaseProvider):
             "role": "assistant",
             "content": getattr(response, 'content', '') or ''
         }
+
+    def format_assistant_message(
+        self,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None
+    ) -> dict:
+        """根据统一 tool call 结构构造 Claude 风格 assistant 消息。"""
+        if tool_calls:
+            blocks = []
+            if content:
+                blocks.append({
+                    "type": "text",
+                    "text": content,
+                })
+            for tool_call in tool_calls:
+                try:
+                    input_data = json.loads(tool_call["arguments"])
+                except Exception:
+                    input_data = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["name"],
+                        "input": input_data,
+                    }
+                )
+            return {
+                "role": "assistant",
+                "content": blocks,
+            }
+        return {
+            "role": "assistant",
+            "content": content or "",
+        }

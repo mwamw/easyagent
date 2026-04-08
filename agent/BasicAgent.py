@@ -202,8 +202,14 @@ class BasicAgent(BaseAgent):
     def stream_invoke(self,query: str,temperature: float = 0.7, **kwargs):
         self._current_query = query
         if self.enable_tool:
-            logger.info("使用工具模式不支持流式调用智能体")
-            raise NotImplementedError("工具模式不支持流式调用智能体")
+            logger.info("使用工具模式流式调用智能体")
+            final_result = ""
+            for event in self.stream_invoke_with_tool(query, temperature=temperature, **kwargs):
+                if event["type"] == "text_delta":
+                    print(event["delta"], end="", flush=True)
+                elif event["type"] == "final":
+                    final_result = event["content"]
+            return final_result
         else:
             messages = self._build_start_messages(query)
             final_results=[]
@@ -213,6 +219,50 @@ class BasicAgent(BaseAgent):
             self.add_message(UserMessage(query))
             self.add_message(AssistantMessage("".join(final_results)))
             return "".join(final_results)
+
+    def stream_invoke_with_tool(
+        self,
+        query: str,
+        max_iter: int = 10,
+        temperature: float = 0.7,
+        **kwargs
+        ):
+        """同步流式工具调用，逐步产出统一事件。"""
+        async_gen = self.astream_invoke_with_tool(
+            query,
+            max_iter=max_iter,
+            temperature=temperature,
+            **kwargs,
+        )
+        loop = asyncio.new_event_loop()
+        previous_loop = None
+        try:
+            try:
+                previous_loop = asyncio.get_event_loop_policy().get_event_loop()
+            except RuntimeError:
+                previous_loop = None
+            asyncio.set_event_loop(loop)
+            while True:
+                try:
+                    event = loop.run_until_complete(async_gen.__anext__())
+                except StopAsyncIteration:
+                    break
+                yield event
+        finally:
+            try:
+                loop.run_until_complete(async_gen.aclose())
+            except Exception:
+                pass
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            try:
+                loop.run_until_complete(loop.shutdown_default_executor())
+            except Exception:
+                pass
+            asyncio.set_event_loop(previous_loop)
+            loop.close()
 
     def invoke_with_tool(
         self,
@@ -430,6 +480,7 @@ class BasicAgent(BaseAgent):
             logger.debug(f"异步工具调用迭代 {iteration_count}")
             
             try:
+                print("now messages:",messages[1:])
                 self.callback_manager.on_llm_start(messages)
                 response = await self.llm.ainvoke_with_tools(
                     messages,
@@ -537,7 +588,13 @@ class BasicAgent(BaseAgent):
         """
         self._current_query = query
         if self.enable_tool:
-            raise NotImplementedError("工具模式不支持流式调用，请使用 ainvoke")
+            final_result = ""
+            async for event in self.astream_invoke_with_tool(query, temperature=temperature, **kwargs):
+                if event["type"] == "text_delta":
+                    print(event["delta"], end="", flush=True)
+                elif event["type"] == "final":
+                    final_result = event["content"]
+            return final_result
         
         messages = self._build_start_messages(query)
         final_results = []
@@ -550,6 +607,144 @@ class BasicAgent(BaseAgent):
         self.add_message(AssistantMessage(result))
         return result
 
+    async def astream_invoke_with_tool(
+        self,
+        query: str,
+        max_iter: int = 10,
+        temperature: float = 0.7,
+        **kwargs
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """异步流式工具调用，逐步产出文本、工具与最终结果事件。"""
+        if self.verbose_thinking:
+            kwargs.setdefault("reasoning", {"effort": "medium", "summary": "auto"})
+        self._validate_invoke_params(query, max_iter, temperature)
+        self._current_query = query
+        query = self.skill_manager.on_before_invoke(query)
+        self.callback_manager.on_agent_start(self.name, query)
+
+        if self.tool_registry is None:
+            error = ToolRegistryError("工具调用需要提供 ToolRegistry!")
+            self.callback_manager.on_agent_end(self.name, "", success=False, error=error)
+            raise error
+
+        messages = self._build_start_messages(query)
+        final_response = ""
+
+        try:
+            while max_iter > 0:
+                # print("now messages:",messages[1:])
+
+                self.callback_manager.on_llm_start(messages)
+                llm_stream = self.llm.astream_with_tools(
+                    messages,
+                    self.tool_registry.get_openai_tools(),
+                    temperature=temperature,
+                    **kwargs
+                )
+                should_continue = False
+                try:
+                    async for event in llm_stream:
+                        event_type = event.get("type")
+
+                        if event_type == "stream_end":
+                            continue
+
+                        if event_type == "text_delta":
+                            yield event
+                            continue
+
+                        if event_type == "thinking_delta":
+                            delta = event.get("delta", "")
+                            if delta:
+                                self.thinking_history.append(delta)
+                            if self.verbose_thinking:
+                                yield event
+                            continue
+
+                        if event_type == "tool_calls":
+                            assistant_message = self.llm.format_assistant_message(
+                                content=event.get("content"),
+                                tool_calls=event.get("tool_calls"),
+                            )
+                            if isinstance(assistant_message, list):
+                                messages.extend(assistant_message)
+                            else:
+                                messages.append(assistant_message)
+
+                            self.callback_manager.on_llm_end(event.get("content", "") or "")
+
+                            for tool_call in event.get("tool_calls", []):
+                                tool_name = self._safe_get_tool_name(tool_call)
+                                tool_args = self._safe_parse_tool_args(tool_call)
+                                tool_id = tool_call.get("id", "unknown") if isinstance(tool_call, dict) else (
+                                    getattr(tool_call, "call_id", None)
+                                    or getattr(tool_call, "id", "unknown")
+                                )
+                                yield {
+                                    "type": "tool_call",
+                                    "tool_name": tool_name,
+                                    "tool_args": tool_args,
+                                    "tool_id": tool_id,
+                                }
+                                try:
+                                    tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
+                                except Exception as e:
+                                    logger.error(f"流式工具 '{tool_name}' 执行失败: {e}")
+                                    tool_result = f"工具 '{tool_name}' 执行失败: {e}"
+                                yield {
+                                    "type": "tool_result",
+                                    "tool_name": tool_name,
+                                    "tool_id": tool_id,
+                                    "tool_args": tool_args,
+                                    "content": tool_result,
+                                }
+                                messages.append(
+                                    self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                                )
+
+                            max_iter -= 1
+                            should_continue = True
+                            break
+
+                        if event_type == "final_response":
+                            final_response = event.get("content", "") or ""
+                            self.callback_manager.on_llm_end(final_response)
+                            self.add_message(UserMessage(query))
+                            self.add_message(AssistantMessage(final_response))
+                            final_response = self.skill_manager.on_after_invoke(query, final_response)
+                            self.callback_manager.on_agent_end(self.name, final_response, success=True)
+                            yield {
+                                "type": "final",
+                                "content": final_response,
+                                "thinking": event.get("thinking", ""),
+                            }
+                            return
+                finally:
+                    await llm_stream.aclose()
+
+                if should_continue:
+                    continue
+                break
+
+            if not final_response:
+                final_response = "超过最大迭代次数，智能体调用失败!"
+            self.add_message(UserMessage(query))
+            self.add_message(AssistantMessage(final_response))
+            final_response = self.skill_manager.on_after_invoke(query, final_response)
+            self.callback_manager.on_agent_end(self.name, final_response, success=True)
+            yield {
+                "type": "final",
+                "content": final_response,
+                "thinking": "",
+            }
+        except Exception as e:
+            self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+            yield {
+                "type": "error",
+                "error": str(e),
+            }
+            raise
+
  
     @override
     def get_enhanced_prompt(self) -> str:
@@ -560,11 +755,7 @@ class BasicAgent(BaseAgent):
         Returns:
             增强后的系统提示词
         """
-        thinking_prompt:str=""
-        if self.verbose_thinking:
-            thinking_prompt="""在申请工具调用或者回复的同时，需要给出思考过程"""
-        else:
-            thinking_prompt="""如何需要使用工具，请直接调用工具"""
+        thinking_prompt="""在申请工具调用或者回复的同时，需要给出思考过程,但输出最终结果时不要含有思考内容"""
         if not self.enable_tool or not self.tool_registry:
             return self.system_prompt or "你是一个有用的AI助手，帮助用户回答问题，完成任务。"
         

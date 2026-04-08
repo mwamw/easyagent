@@ -9,7 +9,6 @@ from datetime import datetime
 from .Config import Config
 from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
-from memory.V2.MemoryManage import MemoryManage
 from context.manager import ContextManager
 from context.source.base import BaseContextSource
 from .callbacks import CallbackManager
@@ -17,9 +16,14 @@ from skill.manager import SkillManager
 import json
 import asyncio
 import threading
+import concurrent.futures
 from Tool.BaseTool import Tool
 from .Exception import *
 import logging
+
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
+
 logger = logging.getLogger(__name__)
 
 
@@ -153,7 +157,7 @@ class BaseAgent(ABC):
             self.context_manager.add_source(memory_source)
         return self
     
-    def with_tool(self, tool_registry: Optional[ToolRegistry]) -> None:
+    def with_tool(self, tool_registry: Optional[ToolRegistry]=None) -> None:
         """设置工具注册表"""
         if(self.tool_registry is not None):
             logger.warning("工具注册表已存在!")
@@ -664,6 +668,13 @@ class BaseAgent(ABC):
             ToolExecutionError: 无法获取工具名称
         """
         try:
+            if isinstance(tool_call, dict):
+                if isinstance(tool_call.get("function"), dict) and tool_call["function"].get("name"):
+                    return tool_call["function"]["name"]
+                name = tool_call.get("name")
+                if name and isinstance(name, str):
+                    return name
+
             # Chat API: tool_call.function.name
             if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
                 name = tool_call.function.name
@@ -700,13 +711,21 @@ class BaseAgent(ABC):
             ToolExecutionError: 参数解析失败
         """
         try:
+            if isinstance(tool_call, dict):
+                if isinstance(tool_call.get("function"), dict):
+                    arguments = tool_call["function"].get("arguments")
+                else:
+                    arguments = tool_call.get("arguments")
+            else:
+                arguments = None
+
             # Chat API: tool_call.function.arguments
-            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
+            if arguments is None and hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
                 arguments = tool_call.function.arguments
             # Responses API: tool_call.arguments (flat structure)
-            elif hasattr(tool_call, 'arguments'):
+            elif arguments is None and hasattr(tool_call, 'arguments'):
                 arguments = tool_call.arguments
-            else:
+            elif arguments is None:
                 raise ToolExecutionError("工具调用对象中没有 arguments 属性")
 
             # 处理不同类型的参数
@@ -772,7 +791,8 @@ class BaseAgent(ABC):
         """
         异步安全执行工具
         
-        工具本身是同步的 tool.run()，通过 asyncio.to_thread 放到线程池以避免阻塞事件循环。
+        工具本身是同步的 tool.run()，通过独立线程池执行以避免阻塞事件循环。
+        这里避免使用默认线程池，实测在严格 asyncio 测试环境下可能导致关闭阶段挂起。
         """
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
@@ -780,9 +800,14 @@ class BaseAgent(ABC):
         self.callback_manager.on_tool_start(tool_name, tool_args)
         
         try:
-            result = await asyncio.to_thread(
-                self.tool_registry.execute_tool, tool_name, tool_args
-            )
+            loop = asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                result = await loop.run_in_executor(
+                    executor,
+                    self.tool_registry.execute_tool,
+                    tool_name,
+                    tool_args,
+                )
             
             if result is None:
                 result = "工具执行完成，无返回结果"

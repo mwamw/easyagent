@@ -1,7 +1,7 @@
 # EasyAgent 待实现功能 (Roadmap)
 
 本文档记录 EasyAgent 框架后续计划实现的功能。
-> 最后更新：2026-04-06
+> 最后更新：2026-04-08
 
 ---
 
@@ -93,12 +93,24 @@ agent = BasicAgent.load_session("session_001")
 
 ---
 
-### 6. 流式 + 工具调用组合
-当前 `stream_invoke` 不支持工具模式。需要支持「边流式输出边触发工具」的 Streaming Tool Call 模式。
+### 6. 流式 + 工具调用组合 (已完成)
+已支持「边流式输出边触发工具」的 Streaming Tool Call 模式，`BasicAgent` 的同步/异步流式入口都可在工具模式下工作。
 
 **涉及文件:**
 - `agent/BasicAgent.py` - `stream_invoke_with_tool`
 - `core/providers/base.py` - `stream_with_tools`
+- `core/providers/openai_responses_provider.py` - Responses API 流式工具事件解析
+- `core/llm.py` - 统一流式工具调用入口
+
+**已完成功能:**
+- `BasicAgent.stream_invoke()` / `astream_invoke()` 支持工具模式
+- OpenAI-compatible Provider 流式工具调用
+- OpenAI Responses Provider 流式工具调用
+- Anthropic / Google Provider 消息格式适配
+- 统一事件流：`thinking_delta` / `text_delta` / `tool_call` / `tool_result` / `final`
+
+**说明文档:**
+- `docs/streaming.md`
 
 ---
 
@@ -204,6 +216,8 @@ agent = BasicAgent.load_session("session_001")
 | 功能 | 完成日期 | 版本 |
 |------|----------|------|
 | **Skill 技能系统** | 2026-04 | v2.2-dev |
+| 流式输出 + 工具调用组合 | 2026-04 | v2.2-dev |
+| SQLite 会话持久化与恢复 | 2026-04 | v2.2-dev |
 | Skill 基础架构 (BaseSkill, SkillConfig, SkillManager) | 2026-04 | v2.2-dev |
 | SkillRegistry 注册中心（关键词/标签搜索） | 2026-04 | v2.2-dev |
 | YAMLSkill / MarkdownSkill 声明式加载 | 2026-04 | v2.2-dev |

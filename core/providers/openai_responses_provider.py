@@ -13,6 +13,7 @@ Chat Completions API (client.chat.completions.create)。
 """
 from typing import Optional, Any, Generator
 import logging
+import json
 from .base import BaseProvider
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,35 @@ class OpenAIResponsesProvider(BaseProvider):
             logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
             raise
 
+    def stream_with_tools(
+        self,
+        messages: list,
+        tools: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Generator[dict[str, Any], None, None]:
+        """同步流式工具调用（Responses API 格式）。"""
+        try:
+            flat_tools = self._convert_tools(tools)
+            params = self._base_params(temperature, **kwargs)
+            converted_input = self._convert_input(messages)
+            response = self.client.responses.create(
+                model=self.model,
+                input=converted_input,
+                tools=flat_tools,
+                stream=True,
+                **params
+            )
+            logger.info(f"✅ {self.provider_name} Provider 流式工具调用开始")
+            state = self._init_responses_tool_stream_state()
+            for event in response:
+                for item in self._extract_responses_stream_events(event, state):
+                    yield item
+            yield self._finalize_responses_tool_stream_state(state)
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 流式工具调用失败: {e}")
+            raise
+
 
     # ==================== 异步调用实现 ====================
 
@@ -208,6 +238,36 @@ class OpenAIResponsesProvider(BaseProvider):
             return response
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 异步工具调用失败: {e}")
+            raise
+
+    async def async_stream_with_tools(
+        self,
+        messages: list,
+        tools: list,
+        temperature: Optional[float] = None,
+        **kwargs
+    ):
+        """异步流式工具调用（Responses API 格式）。"""
+        async_client = self._get_async_client()
+        try:
+            flat_tools = self._convert_tools(tools)
+            params = self._base_params(temperature, **kwargs)
+            converted_input = self._convert_input(messages)
+            response = await async_client.responses.create(
+                model=self.model,
+                input=converted_input,
+                tools=flat_tools,
+                stream=True,
+                **params
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步流式工具调用开始")
+            state = self._init_responses_tool_stream_state()
+            async for event in response:
+                for item in self._extract_responses_stream_events(event, state):
+                    yield item
+            yield self._finalize_responses_tool_stream_state(state)
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步流式工具调用失败: {e}")
             raise
 
 
@@ -338,7 +398,200 @@ class OpenAIResponsesProvider(BaseProvider):
         """
         return list(getattr(response, "output", []))
 
+    def format_assistant_message(
+        self,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        if tool_calls:
+            for tool_call in tool_calls:
+                result.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call["id"],
+                        "name": tool_call["name"],
+                        "arguments": tool_call["arguments"],
+                    }
+                )
+        if content:
+            result.append(
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": content,
+                        }
+                    ],
+                }
+            )
+        return result
+
     # ==================== 私有辅助 ====================
+
+    def _init_responses_tool_stream_state(self) -> dict[str, Any]:
+        return {
+            "text_parts": [],
+            "thinking_parts": [],
+            "tool_calls": {},
+            "terminal_emitted": False,
+        }
+
+    def _extract_responses_stream_events(
+        self,
+        event: Any,
+        state: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        event_type = getattr(event, "type", None)
+        if not event_type:
+            return events
+
+        if event_type in {
+            "response.output_text.delta",
+            "response.refusal.delta",
+        }:
+            delta = getattr(event, "delta", None) or ""
+            if delta:
+                state["text_parts"].append(delta)
+                events.append({"type": "text_delta", "delta": delta})
+            return events
+
+        if event_type in {
+            "response.reasoning.delta",
+            "response.reasoning_summary_text.delta",
+        }:
+            delta = getattr(event, "delta", None) or ""
+            if delta:
+                state["thinking_parts"].append(delta)
+                events.append({"type": "thinking_delta", "delta": delta})
+            return events
+
+        if event_type == "response.function_call_arguments.delta":
+            self._merge_responses_function_call_delta(event, state)
+            return events
+
+        if event_type in {
+            "response.output_item.added",
+            "response.output_item.done",
+        }:
+            item = getattr(event, "item", None)
+            if item is not None:
+                self._merge_responses_output_item(item, state)
+                if getattr(item, "type", None) == "function_call" and event_type.endswith(".done"):
+                    state["terminal_emitted"] = True
+            return events
+
+        if event_type == "response.completed":
+            tool_calls = self._normalize_responses_tool_calls(state["tool_calls"])
+            if tool_calls:
+                events.append(
+                    {
+                        "type": "tool_calls",
+                        "tool_calls": tool_calls,
+                        "content": "".join(state["text_parts"]),
+                        "thinking": "".join(state["thinking_parts"]),
+                    }
+                )
+            else:
+                response = getattr(event, "response", None)
+                content = "".join(state["text_parts"]) or self.get_response_content(response) or ""
+                events.append(
+                    {
+                        "type": "final_response",
+                        "content": content,
+                        "thinking": "".join(state["thinking_parts"]),
+                    }
+                )
+            state["terminal_emitted"] = True
+            return events
+
+        return events
+
+    def _merge_responses_function_call_delta(self, event: Any, state: dict[str, Any]) -> None:
+        key = (
+            getattr(event, "item_id", None)
+            or getattr(event, "call_id", None)
+            or str(getattr(event, "output_index", 0))
+        )
+        current = state["tool_calls"].setdefault(
+            key,
+            {
+                "id": getattr(event, "call_id", None),
+                "name": "",
+                "arguments": "",
+                "type": "function",
+            },
+        )
+        if getattr(event, "call_id", None):
+            current["id"] = event.call_id
+        delta = getattr(event, "delta", None) or ""
+        if delta:
+            current["arguments"] += delta
+
+    def _merge_responses_output_item(self, item: Any, state: dict[str, Any]) -> None:
+        item_type = getattr(item, "type", None)
+        if item_type == "function_call":
+            key = (
+                getattr(item, "id", None)
+                or getattr(item, "call_id", None)
+                or getattr(item, "name", None)
+                or str(len(state["tool_calls"]))
+            )
+            current = state["tool_calls"].setdefault(
+                key,
+                {
+                    "id": getattr(item, "call_id", None),
+                    "name": "",
+                    "arguments": "",
+                    "type": "function",
+                },
+            )
+            if getattr(item, "call_id", None):
+                current["id"] = item.call_id
+            if getattr(item, "name", None):
+                current["name"] = item.name
+            arguments = getattr(item, "arguments", None)
+            if arguments:
+                current["arguments"] = arguments
+        elif item_type == "message":
+            content = getattr(item, "content", None)
+            if isinstance(content, list):
+                for block in content:
+                    if getattr(block, "type", None) == "output_text":
+                        text = getattr(block, "text", None) or ""
+                        if text:
+                            state["text_parts"].append(text)
+
+    def _normalize_responses_tool_calls(self, tool_calls_by_key: dict[Any, dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for index, key in enumerate(tool_calls_by_key):
+            tool_call = dict(tool_calls_by_key[key])
+            if not tool_call.get("id"):
+                tool_call["id"] = f"call_{index}"
+            if not tool_call.get("arguments"):
+                tool_call["arguments"] = json.dumps({})
+            normalized.append(tool_call)
+        return normalized
+
+    def _finalize_responses_tool_stream_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        if state.get("terminal_emitted"):
+            return {"type": "stream_end"}
+        tool_calls = self._normalize_responses_tool_calls(state["tool_calls"])
+        if tool_calls:
+            return {
+                "type": "tool_calls",
+                "tool_calls": tool_calls,
+                "content": "".join(state["text_parts"]),
+                "thinking": "".join(state["thinking_parts"]),
+            }
+        return {
+            "type": "final_response",
+            "content": "".join(state["text_parts"]),
+            "thinking": "".join(state["thinking_parts"]),
+        }
 
     def _base_params(self, temperature: Optional[float] = None, **kwargs) -> dict:
         """整理传给 responses.create 的通用参数"""
