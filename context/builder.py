@@ -158,11 +158,12 @@ class ContextBuilder:
         self,
         query: str,
         system_prompt: Optional[str] = None,
+        history: Optional[List[Any]] = None,
         include_history: bool = True,
         include_query: bool = True,
         max_turns: Optional[int] = None,
         **kwargs,
-    ) -> List[Dict[str, str]]:
+    ) -> List[Dict[str, Any]]:
         """构建多轮 messages。
 
         规则：
@@ -171,13 +172,16 @@ class ContextBuilder:
         3. 当前 query 作为最后一条 user 消息。
         """
         window = self.build(query, **kwargs)
-        history =[]
+        history_items: List[Any] = []
         # 非 history 来源统一拼成 system 上下文
         non_history_groups: Dict[str, List[ContextItem]] = {}
         for item in window.items:
             if item.source == "history":
-                temp={"role": item.metadata.get('role', 'user'), "content": item.content}
-                history.append(temp)
+                temp = item.metadata.get("raw_message") or {
+                    "role": item.metadata.get('role', 'user'),
+                    "content": item.content,
+                }
+                history_items.append(temp)
                 continue
             non_history_groups.setdefault(item.source, []).append(item)
 
@@ -197,7 +201,22 @@ class ContextBuilder:
             })
 
         if include_history:
-            messages.extend(self._normalize_history_messages(history, max_turns=max_turns))
+            if history is not None:
+                messages.extend(
+                    self._normalize_history_messages(
+                        history,
+                        max_turns=max_turns,
+                        newest_first=False,
+                    )
+                )
+            else:
+                messages.extend(
+                    self._normalize_history_messages(
+                        history_items,
+                        max_turns=max_turns,
+                        newest_first=True,
+                    )
+                )
 
         if include_query and query:
             messages.append({"role": "user", "content": query})
@@ -208,22 +227,27 @@ class ContextBuilder:
         self,
         history: Optional[List[Any]],
         max_turns: Optional[int] = None,
-    ) -> List[Dict[str, str]]:
+        newest_first: bool = True,
+    ) -> List[Dict[str, Any]]:
         """将输入历史标准化为消息字典列表。"""
         if not history:
             return []
 
         selected = history[-max_turns:] if (max_turns and max_turns > 0) else history
-        selected = list(reversed(selected))  # 最新消息优先
-        normalized: List[Dict[str, str]] = []
+        if newest_first:
+            selected = list(reversed(selected))
+        normalized: List[Dict[str, Any]] = []
 
         for msg in selected:
-            if hasattr(msg, "role") and hasattr(msg, "content"):
+            if hasattr(msg, "to_dict"):
+                normalized.append(msg.to_dict())
+                continue
+            elif isinstance(msg, dict):
+                normalized.append(dict(msg))
+                continue
+            elif hasattr(msg, "role") and hasattr(msg, "content"):
                 role = getattr(msg, "role", "user")
                 content = getattr(msg, "content", "")
-            elif isinstance(msg, dict):
-                role = msg.get("role", "user")
-                content = msg.get("content", "")
             else:
                 role = "user"
                 content = str(msg)

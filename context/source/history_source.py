@@ -3,6 +3,7 @@
 
 将 agent 的消息历史转为 ContextItem 列表。
 """
+import json
 from typing import List, Optional
 from context.window import ContextItem
 from context.source.base import BaseContextSource
@@ -39,13 +40,19 @@ class HistoryContextSource(BaseContextSource):
             # 兼容 Message 对象和 dict
             if hasattr(msg, "to_dict"):
                 role = msg.role
+                raw_message = msg.to_dict()
                 content = msg.content
             elif isinstance(msg, dict):
                 role = msg.get("role", "user")
+                raw_message = dict(msg)
                 content = msg.get("content", "")
             else:
                 role = "unknown"
+                raw_message = {"role": role, "content": str(msg)}
                 content = str(msg)
+
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False, default=str)
 
             # 越新的消息优先级越高
             priority = 0.3 + 0.6 * (i / max(n - 1, 1))
@@ -54,7 +61,7 @@ class HistoryContextSource(BaseContextSource):
                 content=content,
                 source="history",
                 priority=priority,
-                metadata={"role": role, "turn_index": i},
+                metadata={"role": role, "turn_index": i, "raw_message": raw_message},
             ))
 
         return items

@@ -75,13 +75,20 @@ class ConversationStore:
                     metadata TEXT,
                     tool_call_id TEXT,
                     name TEXT,
+                    raw_message TEXT,
                     FOREIGN KEY(session_id) REFERENCES sessions(session_id) ON DELETE CASCADE,
                     UNIQUE(session_id, position)
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            if "raw_message" not in columns:
+                conn.execute("ALTER TABLE messages ADD COLUMN raw_message TEXT")
 
-    def replace_messages(self, session_id: str, messages: list[Message]) -> None:
+    def replace_messages(self, session_id: str, messages: list[Any]) -> None:
         rows = [self._message_to_row(session_id, position, message) for position, message in enumerate(messages)]
 
         with self._connect() as conn:
@@ -90,18 +97,18 @@ class ConversationStore:
                 conn.executemany(
                     """
                     INSERT INTO messages (
-                        session_id, position, role, content, time, metadata, tool_call_id, name
+                        session_id, position, role, content, time, metadata, tool_call_id, name, raw_message
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     rows,
                 )
 
-    def load_messages(self, session_id: str) -> list[Message]:
+    def load_messages(self, session_id: str) -> list[Any]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT role, content, time, metadata, tool_call_id, name
+                SELECT role, content, time, metadata, tool_call_id, name, raw_message
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY position ASC
@@ -123,20 +130,48 @@ class ConversationStore:
         self,
         session_id: str,
         position: int,
-        message: Message,
+        message: Any,
     ) -> tuple[Any, ...]:
+        if isinstance(message, Message):
+            role = message.role
+            content = message.content
+            time = message.time.isoformat() if message.time else None
+            metadata = _json_dumps(message.metadata or {})
+            tool_call_id = getattr(message, "tool_call_id", None)
+            name = getattr(message, "name", None)
+            raw_message = None
+        else:
+            payload = message.to_dict() if hasattr(message, "to_dict") else message
+            if not isinstance(payload, dict):
+                payload = {"role": "unknown", "content": str(payload)}
+            role = str(payload.get("role") or payload.get("type") or "__raw__")
+            content_value = payload.get("content", "")
+            if isinstance(content_value, str):
+                content = content_value
+            else:
+                content = _json_dumps(content_value)
+            time = None
+            metadata = _json_dumps({})
+            tool_call_id = payload.get("tool_call_id")
+            name = payload.get("name")
+            raw_message = _json_dumps(payload)
+
         return (
             session_id,
             position,
-            message.role,
-            message.content,
-            message.time.isoformat() if message.time else None,
-            _json_dumps(message.metadata or {}),
-            getattr(message, "tool_call_id", None),
-            getattr(message, "name", None),
+            role,
+            content,
+            time,
+            metadata,
+            tool_call_id,
+            name,
+            raw_message,
         )
 
-    def _row_to_message(self, row: sqlite3.Row) -> Message:
+    def _row_to_message(self, row: sqlite3.Row) -> Any:
+        if row["raw_message"]:
+            return _json_loads(row["raw_message"])
+
         role = row["role"]
         kwargs = {
             "time": datetime.fromisoformat(row["time"]) if row["time"] else None,

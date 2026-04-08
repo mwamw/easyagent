@@ -50,7 +50,6 @@ class OpenAIResponsesProvider(BaseProvider):
                 **self._base_params(temperature, **kwargs)
             )
             logger.info(f"✅ {self.provider_name} Provider 响应成功")
-            print("OUTPUT IS:", repr(response))
             return response.output_text
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
@@ -298,7 +297,6 @@ class OpenAIResponsesProvider(BaseProvider):
         如果原生 reasoning 不存在，但包含工具调用且有伴随的 message，
         也将这个 message 视作“执行工具前的思考文本”。
         """
-        print(f"get_thinking_content:{response.output}")
         output = getattr(response, "output", None)
         if not output:
             return None
@@ -396,7 +394,26 @@ class OpenAIResponsesProvider(BaseProvider):
 
         Responses API 支持将上一轮的 output 直接作为下一轮 input 的元素。
         """
-        return list(getattr(response, "output", []))
+        result = []
+        for item in getattr(response, "output", []):
+            if hasattr(item, "to_dict"):
+                result.append(item.to_dict())
+            elif isinstance(item, dict):
+                result.append(dict(item))
+            else:
+                payload = {"type": getattr(item, "type", "unknown")}
+                if hasattr(item, "id"):
+                    payload["id"] = item.id
+                if hasattr(item, "call_id"):
+                    payload["call_id"] = item.call_id
+                if hasattr(item, "name"):
+                    payload["name"] = item.name
+                if hasattr(item, "arguments"):
+                    payload["arguments"] = item.arguments
+                if hasattr(item, "content"):
+                    payload["content"] = item.content
+                result.append(payload)
+        return result
 
     def format_assistant_message(
         self,

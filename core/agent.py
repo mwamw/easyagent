@@ -75,7 +75,7 @@ class BaseAgent(ABC):
         self.system_prompt = system_prompt
         self.description = description
         self.config = config or Config.from_env()
-        self.history = []
+        self.history: list[Any] = []
         
         # 回调系统
         self.callback_manager = callback_manager or CallbackManager()
@@ -215,14 +215,37 @@ class BaseAgent(ABC):
         """异步执行 Agent（子类可覆写，默认回退到同步）"""
         return self.invoke(query, max_iter=max_iter, temperature=temperature, **kwargs)
     
-    def add_message(self, message: Message) -> None:
-        """添加消息到历史"""
+    def _append_history_entry(self, message: Any) -> None:
+        """向 history 追加一条消息，支持 Message 或 provider-specific dict。"""
         self.history.append(message)
         if len(self.history) > self.config.max_history_length:
             self.history.pop(0)
-            
+
         # 触发后台记忆提炼
         self._check_and_trigger_background_memory()
+
+    def add_message(self, message: Any) -> None:
+        """添加消息到历史"""
+        self._append_history_entry(message)
+
+    def add_messages(self, messages: list[Any]) -> None:
+        """批量添加消息到历史。"""
+        for message in messages:
+            self._append_history_entry(message)
+
+    @staticmethod
+    def _history_entry_to_role_content(message: Any) -> tuple[str, str]:
+        """提取 history 条目的 role/content，用于摘要与调试。"""
+        if isinstance(message, dict):
+            role = message.get("role") or message.get("type") or "unknown"
+            content = message.get("content", "")
+        else:
+            role = getattr(message, "role", "unknown")
+            content = getattr(message, "content", "")
+
+        if isinstance(content, str):
+            return str(role), content
+        return str(role), json.dumps(content, ensure_ascii=False, default=str)
         
     def _check_and_trigger_background_memory(self) -> None:
         """检查并触发后台记忆提炼"""
@@ -238,7 +261,14 @@ class BaseAgent(ABC):
             
             # 提取需要提炼的对话内容
             recent_msgs = self.history[-trigger_threshold:]
-            dialogue_text = "\n".join([f"{msg.role}: {msg.content}" for msg in recent_msgs])
+            dialogue_text = "\n".join(
+                [
+                    f"{role}: {content}"
+                    for role, content in (
+                        self._history_entry_to_role_content(msg) for msg in recent_msgs
+                    )
+                ]
+            )
             
             # 使用独立线程异步处理，不阻塞主流程
             threading.Thread(

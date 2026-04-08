@@ -211,6 +211,61 @@ class TestContextBuilder(unittest.TestCase):
         self.assertEqual(messages[2]["role"], "assistant")
         self.assertEqual(messages[-1], {"role": "user", "content": "什么是RAG?"})
 
+    def test_build_messages_preserves_history_tool_fields(self):
+        """build_messages 会保留 history 中的工具消息附加字段。"""
+        builder = ContextBuilder()
+        history = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "calc", "arguments": "{\"x\":1}"},
+                    }
+                ],
+            },
+            {
+                "role": "function",
+                "content": "2",
+                "tool_call_id": "call_1",
+                "name": "calc",
+            },
+        ]
+
+        messages = builder.build_messages(
+            query="继续",
+            history=history,
+            system_prompt="你是测试助手",
+        )
+
+        self.assertEqual(messages[1]["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(messages[2]["tool_call_id"], "call_1")
+        self.assertEqual(messages[2]["name"], "calc")
+
+    def test_build_messages_preserves_non_string_history_content(self):
+        """Claude/Responses 风格的 list content 不应在 build_messages 中被拍平。"""
+        builder = ContextBuilder()
+        history = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "checking"},
+                    {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "Beijing"}},
+                ],
+            }
+        ]
+
+        messages = builder.build_messages(
+            query="继续",
+            history=history,
+            system_prompt="你是测试助手",
+        )
+
+        self.assertIsInstance(messages[1]["content"], list)
+        self.assertEqual(messages[1]["content"][1]["type"], "tool_use")
+
     def test_budget_limits_window(self):
         """预算限制窗口大小"""
         budget = TokenBudget(max_tokens=50)

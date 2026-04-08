@@ -107,6 +107,39 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(loaded[-1].tool_call_id, "call-1")
         self.assertEqual(loaded[-1].name, "echo")
 
+    def test_conversation_store_round_trip_raw_provider_messages(self):
+        self.session_store.create_or_update_session(
+            session_id="conv-raw",
+            agent_type="BasicAgent",
+            agent_name="assistant",
+            snapshot={"agent_type": "BasicAgent", "name": "assistant"},
+        )
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "echo", "arguments": "{\"text\":\"hi\"}"},
+                    }
+                ],
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call-1",
+                "output": "hi",
+            },
+        ]
+
+        self.conversation_store.replace_messages("conv-raw", messages)
+        loaded = self.conversation_store.load_messages("conv-raw")
+
+        self.assertEqual(loaded[0]["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(loaded[1]["type"], "function_call_output")
+        self.assertEqual(loaded[1]["call_id"], "call-1")
+
     def test_basic_agent_save_and_restore(self):
         registry = build_registry()
         agent = BasicAgent(

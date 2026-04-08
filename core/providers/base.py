@@ -347,6 +347,28 @@ class BaseProvider(ABC):
             ]
         return message
 
+    def format_assistant_response(self, response: Any) -> dict[str, Any]:
+        """将 provider 响应对象转换为可复用、可序列化的 assistant 消息。"""
+        content = getattr(response, "content", None) or ""
+        tool_calls_data = getattr(response, "tool_calls", None) or []
+        tool_calls: list[dict[str, Any]] = []
+
+        for index, tool_call in enumerate(tool_calls_data):
+            function = getattr(tool_call, "function", None)
+            tool_calls.append(
+                {
+                    "id": getattr(tool_call, "id", None) or f"tool_call_{index}",
+                    "type": getattr(tool_call, "type", None) or "function",
+                    "name": getattr(function, "name", None) or "",
+                    "arguments": getattr(function, "arguments", None) or "",
+                }
+            )
+
+        return self.format_assistant_message(
+            content=content,
+            tool_calls=tool_calls or None,
+        )
+
     # ==================== 通用辅助方法 ====================
 
     def _init_chat_tool_stream_state(self) -> dict[str, Any]:

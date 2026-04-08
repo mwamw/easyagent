@@ -54,7 +54,7 @@ class EasyLLM:
             api_key: API 密钥
             base_url: API 地址
             timeout: 超时时间
-            provider: Provider 类型 (auto, openai, google, anthropic, ...)
+            provider: Provider 类型 (auto, openai, openai_responses,google, anthropic, ...)
         """
         self.provider_name = provider
         self.model = model or os.getenv("LLM_MODEL_ID")

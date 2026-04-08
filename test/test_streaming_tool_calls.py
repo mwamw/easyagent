@@ -112,7 +112,12 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[1]["tool_name"], "echo")
         self.assertEqual(events[2]["content"], "tool:ping")
         self.assertEqual(events[-1]["content"], "pong")
-        self.assertEqual(agent.get_history_length(), 2)
+        self.assertEqual(agent.get_history_length(), 4)
+        history = agent.get_history()
+        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[1]["tool_calls"][0]["function"]["name"], "echo")
+        self.assertEqual(history[2]["tool_call_id"], "call_1")
+        self.assertEqual(history[3].role, "assistant")
 
     async def test_astream_invoke_tool_mode_returns_final_text(self):
         from agent.BasicAgent import BasicAgent

@@ -98,6 +98,18 @@ class BasicAgent(BaseAgent):
         self.verbose_thinking = state.get("verbose_thinking", False)
         self.thinking_history = list(state.get("thinking_history", []))
 
+    @staticmethod
+    def _as_history_entries(message: Any) -> list[Any]:
+        """将单条或多条 provider 消息统一展开为 history 条目列表。"""
+        if message is None:
+            return []
+        if isinstance(message, list):
+            entries: list[Any] = []
+            for item in message:
+                entries.extend(BasicAgent._as_history_entries(item))
+            return entries
+        return [message]
+
     @classmethod
     def _build_constructor_kwargs_from_snapshot(
         cls,
@@ -184,10 +196,10 @@ class BasicAgent(BaseAgent):
                     logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
                     response = str(response)
                 
-                self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(response))
                 # Skill 后置拦截
                 response = self.skill_manager.on_after_invoke(query, response)
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(response))
                 self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
@@ -211,14 +223,25 @@ class BasicAgent(BaseAgent):
                     final_result = event["content"]
             return final_result
         else:
+            self._validate_invoke_params(query, 1, temperature)
+            query = self.skill_manager.on_before_invoke(query)
+            self.callback_manager.on_agent_start(self.name, query)
             messages = self._build_start_messages(query)
             final_results=[]
-            for chunk in self.llm.think(messages, temperature=temperature, **kwargs):
-                final_results.append(chunk)
-                
-            self.add_message(UserMessage(query))
-            self.add_message(AssistantMessage("".join(final_results)))
-            return "".join(final_results)
+            try:
+                self.callback_manager.on_llm_start(messages)
+                for chunk in self.llm.think(messages, temperature=temperature, **kwargs):
+                    final_results.append(chunk)
+                result = "".join(final_results)
+                self.callback_manager.on_llm_end(result)
+                result = self.skill_manager.on_after_invoke(query, result)
+                self.add_message(UserMessage(query))
+                self.add_message(AssistantMessage(result))
+                self.callback_manager.on_agent_end(self.name, result, success=True)
+                return result
+            except Exception as e:
+                self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+                raise
 
     def stream_invoke_with_tool(
         self,
@@ -292,6 +315,7 @@ class BasicAgent(BaseAgent):
         messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
+        turn_history: list[Any] = [UserMessage(query)]
         iteration_count = 0
         
         while max_iter > 0:
@@ -310,13 +334,6 @@ class BasicAgent(BaseAgent):
                 
                 if response is None:
                     raise LLMInvokeError("LLM 返回了空响应!")
-
-                formatted_response = self.llm.format_assistant_response(response)
-                # print(f"formatted_response:{formatted_response}")
-                if isinstance(formatted_response, list):
-                    messages.extend(formatted_response)
-                else:
-                    messages.append(formatted_response)
 
                 _output = getattr(response, "output", None)
                 if _output is not None:
@@ -337,6 +354,13 @@ class BasicAgent(BaseAgent):
                 # messages.append(AssistantMessage(thinking_content))
 
             if self.llm.has_tool_calls(response):
+                formatted_response = self.llm.format_assistant_response(response)
+                if isinstance(formatted_response, list):
+                    messages.extend(formatted_response)
+                else:
+                    messages.append(formatted_response)
+                turn_history.extend(self._as_history_entries(formatted_response))
+
                 for tool_call in self.llm.get_tool_calls(response):
                     tool_name = "unknown_tool"
                     tool_id = (
@@ -359,21 +383,23 @@ class BasicAgent(BaseAgent):
                         tool_result = self._safe_execute_tool(tool_name, tool_args)
                         tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                         messages.append(tool_msg)
+                        turn_history.append(tool_msg)
 
                     except ToolExecutionError as e:
                         logger.error(f"工具 '{tool_name}' 执行失败: {e}")
                         error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
+                        turn_history.append(tool_msg)
                     except Exception as e:
                         logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                         error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
+                        turn_history.append(tool_msg)
             else:
                 content = self.llm.get_response_content(response) or getattr(response, 'content', None)
                 if content is not None:
-                    messages.append(AssistantMessage(content))
                     final_response = content
                 else:
                     logger.warning("LLM 响应中没有内容")
@@ -386,8 +412,9 @@ class BasicAgent(BaseAgent):
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
         
-        self.add_message(UserMessage(query))
-        self.add_message(AssistantMessage(final_response))
+        final_response = self.skill_manager.on_after_invoke(query, final_response)
+        turn_history.append(AssistantMessage(final_response))
+        self.add_messages(turn_history)
         return final_response
 
     async def ainvoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
@@ -438,9 +465,9 @@ class BasicAgent(BaseAgent):
                     logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
                     response = str(response)
                 
+                response = self.skill_manager.on_after_invoke(query, response)
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(response))
-                response = self.skill_manager.on_after_invoke(query, response)
                 self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
@@ -473,6 +500,7 @@ class BasicAgent(BaseAgent):
         messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
+        turn_history: list[Any] = [UserMessage(query)]
         iteration_count = 0
         
         while max_iter > 0:
@@ -480,7 +508,6 @@ class BasicAgent(BaseAgent):
             logger.debug(f"异步工具调用迭代 {iteration_count}")
             
             try:
-                print("now messages:",messages[1:])
                 self.callback_manager.on_llm_start(messages)
                 response = await self.llm.ainvoke_with_tools(
                     messages,
@@ -492,12 +519,6 @@ class BasicAgent(BaseAgent):
                 
                 if response is None:
                     raise LLMInvokeError("LLM 返回了空响应!")
-
-                formatted_response = self.llm.format_assistant_response(response)
-                if isinstance(formatted_response, list):
-                    messages.extend(formatted_response)
-                else:
-                    messages.append(formatted_response)
 
             except LLMInvokeError:
                 raise
@@ -512,10 +533,16 @@ class BasicAgent(BaseAgent):
                 self.thinking_history.append(thinking_content)
                 if self.verbose_thinking:
                     logger.info(f"💭 模型思考: {thinking_content}")
-                messages.append(AssistantMessage(thinking_content))
 
             # 检查是否有工具调用
             if self.llm.has_tool_calls(response):
+                formatted_response = self.llm.format_assistant_response(response)
+                if isinstance(formatted_response, list):
+                    messages.extend(formatted_response)
+                else:
+                    messages.append(formatted_response)
+                turn_history.extend(self._as_history_entries(formatted_response))
+
                 async def _process_single_tool(tool_call) -> Message | dict:
                     tool_name = "unknown_tool"
                     tool_id = (
@@ -554,11 +581,11 @@ class BasicAgent(BaseAgent):
                 ]
                 tool_msgs = await asyncio.gather(*tasks)
                 messages.extend(tool_msgs)
+                turn_history.extend(tool_msgs)
 
             else:
                 content = self.llm.get_response_content(response) or getattr(response, 'content', None)
                 if content is not None:
-                    messages.append(AssistantMessage(content))
                     final_response = content
                 else:
                     logger.warning("LLM 响应中没有内容")
@@ -571,8 +598,9 @@ class BasicAgent(BaseAgent):
             logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
             final_response = "超过最大迭代次数，智能体调用失败!"
         
-        self.add_message(UserMessage(query))
-        self.add_message(AssistantMessage(final_response))
+        final_response = self.skill_manager.on_after_invoke(query, final_response)
+        turn_history.append(AssistantMessage(final_response))
+        self.add_messages(turn_history)
         return final_response
 
     async def astream_invoke(self, query: str, temperature: float = 0.7, **kwargs) -> str:
@@ -596,16 +624,27 @@ class BasicAgent(BaseAgent):
                     final_result = event["content"]
             return final_result
         
+        self._validate_invoke_params(query, 1, temperature)
+        query = self.skill_manager.on_before_invoke(query)
+        self.callback_manager.on_agent_start(self.name, query)
         messages = self._build_start_messages(query)
         final_results = []
-        async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
-            print(chunk, end="", flush=True)
-            final_results.append(chunk)
-        
-        result = "".join(final_results)
-        self.add_message(UserMessage(query))
-        self.add_message(AssistantMessage(result))
-        return result
+        try:
+            self.callback_manager.on_llm_start(messages)
+            async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
+                print(chunk, end="", flush=True)
+                final_results.append(chunk)
+            
+            result = "".join(final_results)
+            self.callback_manager.on_llm_end(result)
+            result = self.skill_manager.on_after_invoke(query, result)
+            self.add_message(UserMessage(query))
+            self.add_message(AssistantMessage(result))
+            self.callback_manager.on_agent_end(self.name, result, success=True)
+            return result
+        except Exception as e:
+            self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
+            raise
 
     async def astream_invoke_with_tool(
         self,
@@ -629,6 +668,7 @@ class BasicAgent(BaseAgent):
 
         messages = self._build_start_messages(query)
         final_response = ""
+        turn_history: list[Any] = [UserMessage(query)]
 
         try:
             while max_iter > 0:
@@ -670,6 +710,8 @@ class BasicAgent(BaseAgent):
                                 messages.extend(assistant_message)
                             else:
                                 messages.append(assistant_message)
+                            turn_history_entries = self._as_history_entries(assistant_message)
+                            turn_history.extend(turn_history_entries)
 
                             self.callback_manager.on_llm_end(event.get("content", "") or "")
 
@@ -698,9 +740,9 @@ class BasicAgent(BaseAgent):
                                     "tool_args": tool_args,
                                     "content": tool_result,
                                 }
-                                messages.append(
-                                    self.llm.format_tool_result(tool_result, tool_id, tool_name)
-                                )
+                                tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                                messages.append(tool_message)
+                                turn_history.append(tool_message)
 
                             max_iter -= 1
                             should_continue = True
@@ -709,9 +751,9 @@ class BasicAgent(BaseAgent):
                         if event_type == "final_response":
                             final_response = event.get("content", "") or ""
                             self.callback_manager.on_llm_end(final_response)
-                            self.add_message(UserMessage(query))
-                            self.add_message(AssistantMessage(final_response))
                             final_response = self.skill_manager.on_after_invoke(query, final_response)
+                            turn_history.append(AssistantMessage(final_response))
+                            self.add_messages(turn_history)
                             self.callback_manager.on_agent_end(self.name, final_response, success=True)
                             yield {
                                 "type": "final",
@@ -728,9 +770,9 @@ class BasicAgent(BaseAgent):
 
             if not final_response:
                 final_response = "超过最大迭代次数，智能体调用失败!"
-            self.add_message(UserMessage(query))
-            self.add_message(AssistantMessage(final_response))
             final_response = self.skill_manager.on_after_invoke(query, final_response)
+            turn_history.append(AssistantMessage(final_response))
+            self.add_messages(turn_history)
             self.callback_manager.on_agent_end(self.name, final_response, success=True)
             yield {
                 "type": "final",
