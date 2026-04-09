@@ -110,6 +110,130 @@ class BasicAgent(BaseAgent):
             return entries
         return [message]
 
+    @staticmethod
+    def _new_stream_display_state() -> dict[str, Any]:
+        return {
+            "current_round": 0,
+            "current_section": None,
+            "thinking_text": "",
+            "content_text": "",
+        }
+
+    @staticmethod
+    def _start_stream_round(state: dict[str, Any], round_number: int) -> None:
+        if state["current_round"] > 0:
+            print()
+        print(f"round {round_number}")
+        state["current_round"] = round_number
+        state["current_section"] = "round"
+        state["thinking_text"] = ""
+        state["content_text"] = ""
+        state["tool_calls"] = ""
+    @staticmethod
+    def _print_stream_header(state: dict[str, Any], header: str) -> None:
+        if state["current_section"] is None:
+            print(f"{header}:")
+        elif state["current_section"] != header:
+            print()
+            print(f"{header}:")
+        state["current_section"] = header
+
+    @classmethod
+    def _append_stream_text(
+        cls,
+        state: dict[str, Any],
+        header: str,
+        state_key: str,
+        text: str,
+    ) -> None:
+        if not text:
+            return
+        cls._print_stream_header(state, header)
+        print(text, end="", flush=True)
+        state[state_key] += text
+
+    @classmethod
+    def _append_stream_snapshot(
+        cls,
+        state: dict[str, Any],
+        header: str,
+        state_key: str,
+        full_text: str,
+    ) -> None:
+        if not full_text:
+            return
+        delta = cls._snapshot_suffix(state[state_key], full_text)
+        if not delta:
+            return
+        cls._append_stream_text(state, header, state_key, delta)
+
+    @staticmethod
+    def _snapshot_suffix(displayed: str, full_text: str) -> str:
+        # 截取 full_text 中从 displayed 之后开始的后缀
+        if not full_text:
+            return ""
+        if full_text.startswith(displayed):
+            return full_text[len(displayed):]
+        if displayed:
+            return ""
+        return full_text
+
+    @classmethod
+    def _display_stream_event(
+        cls,
+        state: dict[str, Any],
+        event: dict[str, Any],
+    ) -> None:
+        event_type = event.get("type")
+        if event_type == "round_start":
+            cls._start_stream_round(state, int(event.get("round", 1) or 1))
+            return
+        if event_type == "thinking_delta":
+            cls._append_stream_text(
+                state,
+                "thinking content",
+                "thinking_text",
+                event.get("delta", "") or "",
+            )
+            return
+        if event_type == "text_delta":
+            cls._append_stream_text(
+                state,
+                "content",
+                "content_text",
+                event.get("delta", "") or "",
+            )
+            return
+        if event_type in {"tool_calls", "final_response", "final"}:
+            cls._append_stream_snapshot(
+                state,
+                "thinking content",
+                "thinking_text",
+                event.get("thinking", "") or "",
+            )
+            cls._append_stream_snapshot(
+                state,
+                "content",
+                "content_text",
+                event.get("content", "") or "",
+            )
+        if event_type == "tool_call":
+            cls._append_stream_text(
+                state,
+                "tool_calls",
+                "tool_calls",
+                f"{event.get('tool_name','')} : {event.get('tool_args','')}\n"
+            )
+    @staticmethod
+    def _print_stream_final(state: dict[str, Any], final_text: str) -> None:
+        if state["current_section"] is None:
+            print("final res:")
+        else:
+            print()
+            print("final res:")
+        print(final_text)
+        state["current_section"] = "final res"
+
     @classmethod
     def _build_constructor_kwargs_from_snapshot(
         cls,
@@ -215,12 +339,13 @@ class BasicAgent(BaseAgent):
         self._current_query = query
         if self.enable_tool:
             logger.info("使用工具模式流式调用智能体")
+            display_state = self._new_stream_display_state()
             final_result = ""
             for event in self.stream_invoke_with_tool(query, temperature=temperature, **kwargs):
-                if event["type"] == "text_delta":
-                    print(event["delta"], end="", flush=True)
-                elif event["type"] == "final":
+                self._display_stream_event(display_state, event)
+                if event["type"] == "final":
                     final_result = event["content"]
+                    self._print_stream_final(display_state, final_result)
             return final_result
         else:
             self._validate_invoke_params(query, 1, temperature)
@@ -228,9 +353,11 @@ class BasicAgent(BaseAgent):
             self.callback_manager.on_agent_start(self.name, query)
             messages = self._build_start_messages(query)
             final_results=[]
+            display_state = self._new_stream_display_state()
             try:
                 self.callback_manager.on_llm_start(messages)
-                for chunk in self.llm.think(messages, temperature=temperature, **kwargs):
+                for chunk in self.llm.stream(messages, temperature=temperature, **kwargs):
+                    self._append_stream_text(display_state, "content", "content_text", chunk)
                     final_results.append(chunk)
                 result = "".join(final_results)
                 self.callback_manager.on_llm_end(result)
@@ -238,6 +365,7 @@ class BasicAgent(BaseAgent):
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(result))
                 self.callback_manager.on_agent_end(self.name, result, success=True)
+                self._print_stream_final(display_state, result)
                 return result
             except Exception as e:
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
@@ -616,12 +744,13 @@ class BasicAgent(BaseAgent):
         """
         self._current_query = query
         if self.enable_tool:
+            display_state = self._new_stream_display_state()
             final_result = ""
             async for event in self.astream_invoke_with_tool(query, temperature=temperature, **kwargs):
-                if event["type"] == "text_delta":
-                    print(event["delta"], end="", flush=True)
-                elif event["type"] == "final":
+                self._display_stream_event(display_state, event)
+                if event["type"] == "final":
                     final_result = event["content"]
+                    self._print_stream_final(display_state, final_result)
             return final_result
         
         self._validate_invoke_params(query, 1, temperature)
@@ -629,10 +758,11 @@ class BasicAgent(BaseAgent):
         self.callback_manager.on_agent_start(self.name, query)
         messages = self._build_start_messages(query)
         final_results = []
+        display_state = self._new_stream_display_state()
         try:
             self.callback_manager.on_llm_start(messages)
             async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
-                print(chunk, end="", flush=True)
+                self._append_stream_text(display_state, "content", "content_text", chunk)
                 final_results.append(chunk)
             
             result = "".join(final_results)
@@ -641,6 +771,7 @@ class BasicAgent(BaseAgent):
             self.add_message(UserMessage(query))
             self.add_message(AssistantMessage(result))
             self.callback_manager.on_agent_end(self.name, result, success=True)
+            self._print_stream_final(display_state, result)
             return result
         except Exception as e:
             self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
@@ -669,10 +800,11 @@ class BasicAgent(BaseAgent):
         messages = self._build_start_messages(query)
         final_response = ""
         turn_history: list[Any] = [UserMessage(query)]
+        round_index = 0
 
         try:
             while max_iter > 0:
-                # print("now messages:",messages[1:])
+                round_index += 1
 
                 self.callback_manager.on_llm_start(messages)
                 llm_stream = self.llm.astream_with_tools(
@@ -682,7 +814,13 @@ class BasicAgent(BaseAgent):
                     **kwargs
                 )
                 should_continue = False
+                streamed_thinking = ""
+                streamed_content = ""
                 try:
+                    yield {
+                        "type": "round_start",
+                        "round": round_index,
+                    }
                     async for event in llm_stream:
                         event_type = event.get("type")
 
@@ -690,11 +828,13 @@ class BasicAgent(BaseAgent):
                             continue
 
                         if event_type == "text_delta":
+                            streamed_content += event.get("delta", "") or ""
                             yield event
                             continue
 
                         if event_type == "thinking_delta":
                             delta = event.get("delta", "")
+                            streamed_thinking += delta
                             if delta:
                                 self.thinking_history.append(delta)
                             if self.verbose_thinking:
@@ -702,6 +842,30 @@ class BasicAgent(BaseAgent):
                             continue
 
                         if event_type == "tool_calls":
+                            thinking_suffix = self._snapshot_suffix(
+                                streamed_thinking,
+                                event.get("thinking", "") or "",
+                            )
+                            if thinking_suffix:
+                                streamed_thinking += thinking_suffix
+                                self.thinking_history.append(thinking_suffix)
+                                if self.verbose_thinking:
+                                    yield {
+                                        "type": "thinking_delta",
+                                        "delta": thinking_suffix,
+                                    }
+
+                            content_suffix = self._snapshot_suffix(
+                                streamed_content,
+                                event.get("content", "") or "",
+                            )
+                            if content_suffix:
+                                streamed_content += content_suffix
+                                yield {
+                                    "type": "text_delta",
+                                    "delta": content_suffix,
+                                }
+
                             assistant_message = self.llm.format_assistant_message(
                                 content=event.get("content"),
                                 tool_calls=event.get("tool_calls"),

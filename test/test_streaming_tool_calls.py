@@ -4,6 +4,8 @@
 import os
 import sys
 import unittest
+import io
+from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 from pydantic import BaseModel
@@ -72,6 +74,54 @@ class ScriptedStreamingProvider:
         }
 
 
+class ScriptedStreamingProviderNoThinking:
+    def __init__(self):
+        self.round = 0
+
+    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
+        if self.round == 0:
+            self.round += 1
+            yield {
+                "type": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "name": "echo",
+                        "arguments": "{\"text\": \"ping\"}",
+                    }
+                ],
+                "content": "准备调用工具",
+                "thinking": "",
+            }
+            return
+
+        yield {"type": "final_response", "content": "pong", "thinking": ""}
+
+    def format_tool_result(self, content, tool_id, tool_name):
+        return {
+            "role": "tool",
+            "content": content,
+            "tool_call_id": tool_id,
+        }
+
+    def format_assistant_message(self, content=None, tool_calls=None):
+        return {
+            "role": "assistant",
+            "content": content or "",
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tool_call["name"],
+                        "arguments": tool_call["arguments"],
+                    },
+                }
+                for tool_call in (tool_calls or [])
+            ],
+        }
+
+
 class DummyLLM(EasyLLM):
     def __init__(self, provider):
         self.provider_name = "mock"
@@ -80,6 +130,16 @@ class DummyLLM(EasyLLM):
         self.api_key = "mock-key"
         self._provider = provider
         self.client = None
+
+
+class PlainStreamingProvider:
+    def stream(self, messages, temperature=None, **kwargs):
+        yield "hello "
+        yield "world"
+
+    async def async_stream(self, messages, temperature=None, **kwargs):
+        yield "hello "
+        yield "world"
 
 
 class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
@@ -107,10 +167,12 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [event["type"] for event in events],
-            ["thinking_delta", "tool_call", "tool_result", "text_delta", "final"],
+            ["round_start", "thinking_delta", "tool_call", "tool_result", "round_start", "text_delta", "final"],
         )
-        self.assertEqual(events[1]["tool_name"], "echo")
-        self.assertEqual(events[2]["content"], "tool:ping")
+        self.assertEqual(events[0]["round"], 1)
+        self.assertEqual(events[2]["tool_name"], "echo")
+        self.assertEqual(events[3]["content"], "tool:ping")
+        self.assertEqual(events[4]["round"], 2)
         self.assertEqual(events[-1]["content"], "pong")
         self.assertEqual(agent.get_history_length(), 4)
         history = agent.get_history()
@@ -139,6 +201,34 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         result = await agent.astream_invoke("say hi")
         self.assertEqual(result, "pong")
 
+    async def test_astream_invoke_tool_mode_displays_thinking_and_final(self):
+        from agent.BasicAgent import BasicAgent
+
+        registry = ToolRegistry()
+
+        @registry.tool("echo", "Echo tool", EchoParams)
+        def echo(text: str) -> str:
+            return text
+
+        llm = DummyLLM(ScriptedStreamingProvider())
+        agent = BasicAgent(
+            name="streamer",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+            verbose_thinking=True,
+        )
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = await agent.astream_invoke("say hi")
+
+        self.assertEqual(result, "pong")
+        self.assertEqual(
+            stdout.getvalue(),
+            "round 1\n\nthinking content:\nneed tool\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
+        )
+
     def test_stream_invoke_tool_mode_returns_final_text(self):
         from agent.BasicAgent import BasicAgent
 
@@ -158,6 +248,53 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
 
         result = agent.stream_invoke("say hi")
         self.assertEqual(result, "pong")
+
+    def test_stream_invoke_tool_mode_skips_empty_thinking_header(self):
+        from agent.BasicAgent import BasicAgent
+
+        registry = ToolRegistry()
+
+        @registry.tool("echo", "Echo tool", EchoParams)
+        def echo(text: str) -> str:
+            return text
+
+        llm = DummyLLM(ScriptedStreamingProviderNoThinking())
+        agent = BasicAgent(
+            name="streamer",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+            verbose_thinking=True,
+        )
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = agent.stream_invoke("say hi")
+
+        self.assertEqual(result, "pong")
+        self.assertEqual(
+            stdout.getvalue(),
+            "round 1\n\ncontent:\n准备调用工具\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
+        )
+
+    def test_stream_invoke_plain_mode_displays_content_and_final(self):
+        from agent.BasicAgent import BasicAgent
+
+        llm = DummyLLM(PlainStreamingProvider())
+        agent = BasicAgent(
+            name="plain-streamer",
+            llm=llm,
+        )
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = agent.stream_invoke("say hi")
+
+        self.assertEqual(result, "hello world")
+        self.assertEqual(
+            stdout.getvalue(),
+            "content:\nhello world\nfinal res:\nhello world\n",
+        )
 
 
 class TestProviderStreamingHelpers(unittest.TestCase):
@@ -245,6 +382,34 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(events[0]["type"], "tool_calls")
         self.assertEqual(events[0]["tool_calls"][0]["name"], "weather")
         self.assertEqual(events[0]["tool_calls"][0]["arguments"], "{\"city\": \"Beijing\"}")
+
+    def test_responses_provider_deduplicates_message_done_after_text_delta(self):
+        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
+        state = provider._init_responses_tool_stream_state()
+
+        delta_event = SimpleNamespace(
+            type="response.output_text.delta",
+            delta="我先计算",
+        )
+        message_done_event = SimpleNamespace(
+            type="response.output_item.done",
+            item=SimpleNamespace(
+                type="message",
+                content=[SimpleNamespace(type="output_text", text="我先计算")],
+            ),
+        )
+        complete_event = SimpleNamespace(
+            type="response.completed",
+            response=None,
+        )
+
+        self.assertEqual(
+            provider._extract_responses_stream_events(delta_event, state),
+            [{"type": "text_delta", "delta": "我先计算"}],
+        )
+        self.assertEqual(provider._extract_responses_stream_events(message_done_event, state), [])
+        events = provider._extract_responses_stream_events(complete_event, state)
+        self.assertEqual(events[0]["content"], "我先计算")
 
     def test_google_provider_format_tool_result(self):
         provider = GoogleProvider(model="mock", api_key="k", base_url="http://localhost")

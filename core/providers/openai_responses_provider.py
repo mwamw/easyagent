@@ -574,13 +574,27 @@ class OpenAIResponsesProvider(BaseProvider):
             if arguments:
                 current["arguments"] = arguments
         elif item_type == "message":
-            content = getattr(item, "content", None)
-            if isinstance(content, list):
-                for block in content:
-                    if getattr(block, "type", None) == "output_text":
-                        text = getattr(block, "text", None) or ""
-                        if text:
-                            state["text_parts"].append(text)
+            message_text = self._extract_output_message_text(item)
+            if message_text:
+                current_text = "".join(state["text_parts"])
+                if not current_text.endswith(message_text):
+                    state["text_parts"].append(message_text)
+
+    @staticmethod
+    def _extract_output_message_text(item: Any) -> str:
+        if getattr(item, "type", None) != "message":
+            return ""
+        content = getattr(item, "content", None)
+        parts: list[str] = []
+        if isinstance(content, list):
+            for block in content:
+                if getattr(block, "type", None) == "output_text":
+                    text = getattr(block, "text", None) or ""
+                    if text:
+                        parts.append(text)
+        elif isinstance(content, str):
+            parts.append(content)
+        return "".join(parts)
 
     def _normalize_responses_tool_calls(self, tool_calls_by_key: dict[Any, dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
