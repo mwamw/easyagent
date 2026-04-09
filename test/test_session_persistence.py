@@ -172,6 +172,10 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(restored.get_history_length(), 2)
         self.assertEqual(restored.get_history()[0].content, "hello")
         self.assertEqual(restored.get_thinking_history(), ["thought 1", "thought 2"])
+        self.assertEqual(
+            [event["type"] for event in restored.get_trace_history()],
+            ["thinking", "thinking"],
+        )
         self.assertTrue(restored.history_via_context_manager)
 
         listed = BasicAgent.list_sessions(store=self.session_store)

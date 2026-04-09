@@ -95,8 +95,6 @@ class BaseProvider(ABC):
             )
             msg = response.choices[0].message
             content = msg.content
-            if not content and self.get_thinking_content(response):
-                content = self.get_thinking_content(response)
             logger.info(f"✅ {self.provider_name} Provider 响应成功")
             return content or ""
         except Exception as e:
@@ -198,7 +196,6 @@ class BaseProvider(ABC):
         async_client = self._get_async_client()
         
         try:
-            logger.info(f"messages:{messages}")
             response = await async_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -206,12 +203,8 @@ class BaseProvider(ABC):
                 max_tokens=self.max_tokens,
                 stream=False
             )
-            logger.info(f"response:{response}")
             msg = response.choices[0].message
             content = msg.content
-            
-            if not content and self.get_thinking_content(response):
-                content = self.get_thinking_content(response)
             logger.info(f"✅ {self.provider_name} Provider 异步响应成功")
             return content or ""
         except Exception as e:
@@ -489,11 +482,8 @@ class BaseProvider(ABC):
     def get_thinking_content(self, response: Any) -> Optional[str]:
         """提取思考内容（如果模型支持）"""
         thinking= getattr(response, 'reasoning_content', None)
-        content= getattr(response, 'content', None)
         if thinking:
             return thinking
-        elif content:
-            return content
         else:
             return None
     def get_response_content(self, response: Any) -> Optional[str]:
@@ -502,7 +492,7 @@ class BaseProvider(ABC):
     
     def has_tool_calls(self, response: Any) -> bool:
         """检查响应是否包含工具调用"""
-        return hasattr(response, 'tool_calls') and response.tool_calls
+        return bool(hasattr(response, 'tool_calls') and response.tool_calls)
     
     def get_tool_calls(self, response: Any) -> list:
         """获取工具调用列表"""

@@ -302,14 +302,9 @@ class OpenAIResponsesProvider(BaseProvider):
             return None
             
         reasoning_text = []
-        message_text = []
-        has_tool = False
-        
         for item in output:
             item_type = getattr(item, "type", None)
-            if item_type == "function_call":
-                has_tool = True
-            elif item_type == "reasoning":
+            if item_type == "reasoning":
                 summary = getattr(item, "summary", None)
                 if summary:
                     # summary 是一个列表，每个元素有 text 字段
@@ -323,27 +318,11 @@ class OpenAIResponsesProvider(BaseProvider):
                             reasoning_text.append("\n".join(parts))
                     else:
                         reasoning_text.append(str(summary))
-            elif item_type == "message":
-                content = getattr(item, "content", None)
-                if isinstance(content, list):
-                    parts = []
-                    for block in content:
-                        text = getattr(block, "text", None)
-                        if text:
-                            parts.append(text)
-                    if parts:
-                        message_text.append("\n".join(parts))
-                elif isinstance(content, str):
-                    message_text.append(content)
 
         # 优先返回原生的 reasoning
         if reasoning_text:
             return "\n".join(reasoning_text)
-            
-        # 如果模型没有给出 reasoning，但在调用工具前输出了常规文字，将其当作 thinking content
-        if has_tool and message_text:
-            return "\n".join(message_text)
-            
+
         return None
 
     def get_response_content(self, response: Any) -> Optional[str]:
@@ -351,17 +330,10 @@ class OpenAIResponsesProvider(BaseProvider):
         output = getattr(response, "output", None)
         if not output:
             return None
-        for item in output:
-            if getattr(item, "type", None) == "message":
-                content = getattr(item, "content", None)
-                if isinstance(content, list):
-                    # content 是 ContentBlock 列表
-                    parts = []
-                    for block in content:
-                        text = getattr(block, "text", None)
-                        if text:
-                            parts.append(text)
-                    return "\n".join(parts) if parts else None
+        selected = self._select_message_item(output)
+        if selected is not None:
+            content = self._extract_output_message_text(selected)
+            if content:
                 return content
         # 兜底：output_text 属性
         return getattr(response, "output_text", None)
@@ -396,23 +368,9 @@ class OpenAIResponsesProvider(BaseProvider):
         """
         result = []
         for item in getattr(response, "output", []):
-            if hasattr(item, "to_dict"):
-                result.append(item.to_dict())
-            elif isinstance(item, dict):
-                result.append(dict(item))
-            else:
-                payload = {"type": getattr(item, "type", "unknown")}
-                if hasattr(item, "id"):
-                    payload["id"] = item.id
-                if hasattr(item, "call_id"):
-                    payload["call_id"] = item.call_id
-                if hasattr(item, "name"):
-                    payload["name"] = item.name
-                if hasattr(item, "arguments"):
-                    payload["arguments"] = item.arguments
-                if hasattr(item, "content"):
-                    payload["content"] = item.content
-                result.append(payload)
+            serialized = self._serialize_assistant_history_item(item)
+            if serialized is not None:
+                result.append(serialized)
         return result
 
     def format_assistant_message(
@@ -453,6 +411,8 @@ class OpenAIResponsesProvider(BaseProvider):
             "text_parts": [],
             "thinking_parts": [],
             "tool_calls": {},
+            "output_items": [],
+            "output_item_keys": {},
             "terminal_emitted": False,
         }
 
@@ -510,16 +470,23 @@ class OpenAIResponsesProvider(BaseProvider):
                         "tool_calls": tool_calls,
                         "content": "".join(state["text_parts"]),
                         "thinking": "".join(state["thinking_parts"]),
+                        "assistant_items": self._build_stream_assistant_items(state, tool_calls),
                     }
                 )
             else:
                 response = getattr(event, "response", None)
-                content = "".join(state["text_parts"]) or self.get_response_content(response) or ""
+                selected_message = self._select_message_item(state.get("output_items", []))
+                content = (
+                    self._extract_output_message_text(selected_message)
+                    if selected_message is not None
+                    else ""
+                ) or "".join(state["text_parts"]) or self.get_response_content(response) or ""
                 events.append(
                     {
                         "type": "final_response",
                         "content": content,
                         "thinking": "".join(state["thinking_parts"]),
+                        "assistant_items": self._build_stream_assistant_items(state, tool_calls),
                     }
                 )
             state["terminal_emitted"] = True
@@ -547,9 +514,19 @@ class OpenAIResponsesProvider(BaseProvider):
         delta = getattr(event, "delta", None) or ""
         if delta:
             current["arguments"] += delta
+        output_item = self._get_stream_output_item(state, key)
+        if output_item is not None:
+            output_item["type"] = "function_call"
+            if current.get("id"):
+                output_item["call_id"] = current["id"]
+            if current.get("name"):
+                output_item["name"] = current["name"]
+            output_item["arguments"] = current["arguments"]
 
     def _merge_responses_output_item(self, item: Any, state: dict[str, Any]) -> None:
         item_type = getattr(item, "type", None)
+        serialized_item = self._serialize_output_item(item)
+        self._set_stream_output_item(state, item, serialized_item)
         if item_type == "function_call":
             key = (
                 getattr(item, "id", None)
@@ -617,12 +594,168 @@ class OpenAIResponsesProvider(BaseProvider):
                 "tool_calls": tool_calls,
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
+                "assistant_items": self._build_stream_assistant_items(state, tool_calls),
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
+            "assistant_items": self._build_stream_assistant_items(state, tool_calls),
         }
+
+    def _build_stream_assistant_items(
+        self,
+        state: dict[str, Any],
+        tool_calls: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        assistant_items = []
+        for item in state.get("output_items", []):
+            if not isinstance(item, dict):
+                continue
+            serialized = self._serialize_assistant_history_item(item)
+            if serialized is not None:
+                assistant_items.append(serialized)
+        if assistant_items:
+            return assistant_items
+        return self.format_assistant_message(
+            content="".join(state.get("text_parts", [])),
+            tool_calls=tool_calls or None,
+        )
+
+    def _set_stream_output_item(
+        self,
+        state: dict[str, Any],
+        item: Any,
+        serialized_item: dict[str, Any],
+    ) -> None:
+        key = self._get_stream_output_item_key(item)
+        if key in state["output_item_keys"]:
+            state["output_items"][state["output_item_keys"][key]] = serialized_item
+            return
+        state["output_item_keys"][key] = len(state["output_items"])
+        state["output_items"].append(serialized_item)
+
+    @staticmethod
+    def _get_stream_output_item_key(item: Any) -> str:
+        return (
+            str(getattr(item, "id", None) or "")
+            or str(getattr(item, "call_id", None) or "")
+            or f"{getattr(item, 'type', 'unknown')}:{getattr(item, 'name', None) or ''}:{getattr(item, 'role', None) or ''}"
+        )
+
+    def _get_stream_output_item(
+        self,
+        state: dict[str, Any],
+        key: Any,
+    ) -> Optional[dict[str, Any]]:
+        index = state["output_item_keys"].get(str(key))
+        if index is None:
+            return None
+        item = state["output_items"][index]
+        if isinstance(item, dict):
+            return item
+        return None
+
+    def _serialize_output_item(self, item: Any) -> dict[str, Any]:
+        if hasattr(item, "to_dict"):
+            payload = item.to_dict()
+            if isinstance(payload, dict):
+                return self._to_serializable(payload)
+        if isinstance(item, dict):
+            return self._to_serializable(dict(item))
+
+        payload = {"type": getattr(item, "type", "unknown")}
+        for attr in ("id", "call_id", "name", "arguments", "role", "status", "phase"):
+            value = getattr(item, attr, None)
+            if value is not None:
+                payload[attr] = self._to_serializable(value)
+        if hasattr(item, "content"):
+            payload["content"] = self._to_serializable(getattr(item, "content"))
+        if hasattr(item, "summary"):
+            payload["summary"] = self._to_serializable(getattr(item, "summary"))
+        if hasattr(item, "text"):
+            payload["text"] = self._to_serializable(getattr(item, "text"))
+        if hasattr(item, "encrypted_content"):
+            payload["encrypted_content"] = self._to_serializable(getattr(item, "encrypted_content"))
+        return payload
+
+    def _serialize_assistant_history_item(self, item: Any) -> Optional[dict[str, Any]]:
+        payload = self._serialize_output_item(item)
+        item_type = payload.get("type")
+        if item_type == "reasoning":
+            return None
+        if item_type == "message":
+            message: dict[str, Any] = {
+                "type": "message",
+                "role": payload.get("role", "assistant"),
+                "content": self._to_serializable(payload.get("content", [])),
+            }
+            phase = payload.get("phase")
+            if phase:
+                message["phase"] = phase
+            return message
+        if item_type == "function_call":
+            return {
+                "type": "function_call",
+                "call_id": payload.get("call_id") or payload.get("id"),
+                "name": payload.get("name", ""),
+                "arguments": payload.get("arguments", ""),
+            }
+        if item_type == "function_call_output":
+            return {
+                "type": "function_call_output",
+                "call_id": payload.get("call_id"),
+                "output": payload.get("output", ""),
+            }
+        return payload
+
+    @staticmethod
+    def _select_message_item(items: list[Any]) -> Optional[Any]:
+        if not items:
+            return None
+        assistant_messages = []
+        final_messages = []
+        for item in items:
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if item_type != "message":
+                continue
+            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            phase = item.get("phase") if isinstance(item, dict) else getattr(item, "phase", None)
+            if role == "assistant":
+                assistant_messages.append(item)
+                if phase == "final_answer":
+                    final_messages.append(item)
+        if final_messages:
+            return final_messages[-1]
+        if assistant_messages:
+            return assistant_messages[-1]
+        return None
+
+    @classmethod
+    def _to_serializable(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, list):
+            return [cls._to_serializable(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._to_serializable(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: cls._to_serializable(item)
+                for key, item in value.items()
+            }
+        if hasattr(value, "to_dict"):
+            payload = value.to_dict()
+            if isinstance(payload, dict):
+                return cls._to_serializable(payload)
+        payload: dict[str, Any] = {}
+        for attr in ("type", "text", "id", "call_id", "name", "arguments", "content", "summary", "role", "status", "phase"):
+            attr_value = getattr(value, attr, None)
+            if attr_value is not None:
+                payload[attr] = cls._to_serializable(attr_value)
+        if payload:
+            return payload
+        return str(value)
 
     def _base_params(self, temperature: Optional[float] = None, **kwargs) -> dict:
         """整理传给 responses.create 的通用参数"""
@@ -686,11 +819,48 @@ class OpenAIResponsesProvider(BaseProvider):
         for item in messages:
             # 如果是我们的 Message 对象，转换为字典
             if hasattr(item, 'to_dict'):
-                result.append(item.to_dict())
+                sanitized = OpenAIResponsesProvider._sanitize_input_item(item.to_dict())
             elif hasattr(item, 'role') and hasattr(item, 'content') and not isinstance(item, dict):
                 # 备用：手动构建字典
-                result.append({"role": item.role, "content": item.content or ""})
+                sanitized = OpenAIResponsesProvider._sanitize_input_item(
+                    {"role": item.role, "content": item.content or ""}
+                )
             else:
                 # 已经是字典或 SDK 对象，直接保留
-                result.append(item)
+                sanitized = OpenAIResponsesProvider._sanitize_input_item(item)
+            if sanitized is not None:
+                result.append(sanitized)
         return result
+
+    @staticmethod
+    def _sanitize_input_item(item: Any) -> Any:
+        if not isinstance(item, dict):
+            return item
+        item_type = item.get("type")
+        if item_type == "message":
+            return {
+                "type": "message",
+                "role": item.get("role", "assistant"),
+                "content": item.get("content", []),
+            }
+        if item_type == "function_call":
+            return {
+                "type": "function_call",
+                "call_id": item.get("call_id") or item.get("id"),
+                "name": item.get("name", ""),
+                "arguments": item.get("arguments", ""),
+            }
+        if item_type == "function_call_output":
+            return {
+                "type": "function_call_output",
+                "call_id": item.get("call_id"),
+                "output": item.get("output", ""),
+            }
+        if item_type == "reasoning":
+            return None
+        if "role" in item and "content" in item:
+            return {
+                "role": item.get("role"),
+                "content": item.get("content", ""),
+            }
+        return item

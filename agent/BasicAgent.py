@@ -9,6 +9,7 @@ from Tool.ToolRegistry import ToolRegistry
 import asyncio
 import json
 import logging
+from datetime import datetime
 from core.Exception import *
 
 
@@ -80,23 +81,44 @@ class BasicAgent(BaseAgent):
         
 
         self.verbose_thinking = verbose_thinking
-        self.thinking_history: list[str] = []  # 记录思考过程
+        self.trace_history: list[dict[str, Any]] = []  # 记录完整调试轨迹
+        self.thinking_history: list[str] = []  # 兼容旧接口，保存聚合后的思考过程
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
     def _get_serializable_state(self) -> dict[str, Any]:
+        thinking_history = self.get_thinking_history()
+        if not thinking_history and self.thinking_history:
+            thinking_history = list(self.thinking_history)
         return {
             "verbose_thinking": self.verbose_thinking,
             "history_via_context_manager": self.history_via_context_manager,
-            "thinking_history": self.thinking_history,
+            "thinking_history": thinking_history,
+            "trace_history": self.get_trace_history(),
         }
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         state = state or {}
         self.verbose_thinking = state.get("verbose_thinking", False)
-        self.thinking_history = list(state.get("thinking_history", []))
+        self.history_via_context_manager = state.get("history_via_context_manager", False)
+        self.trace_history = list(state.get("trace_history", []))
+        self.thinking_history = []
+
+        legacy_thinking = [str(item) for item in state.get("thinking_history", []) if item is not None]
+        if not self.trace_history and legacy_thinking:
+            for content in legacy_thinking:
+                self.trace_history.append(
+                    {
+                        "type": "thinking",
+                        "time": datetime.now().isoformat(),
+                        "round": None,
+                        "mode": "legacy",
+                        "content": content,
+                    }
+                )
+        self._rebuild_thinking_history()
 
     @staticmethod
     def _as_history_entries(message: Any) -> list[Any]:
@@ -109,6 +131,177 @@ class BasicAgent(BaseAgent):
                 entries.extend(BasicAgent._as_history_entries(item))
             return entries
         return [message]
+
+    @staticmethod
+    def _trace_safe(value: Any) -> Any:
+        if isinstance(value, Message):
+            return value.model_dump(mode="json")
+        if isinstance(value, list):
+            return [BasicAgent._trace_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [BasicAgent._trace_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {key: BasicAgent._trace_safe(item) for key, item in value.items()}
+        return BaseAgent._make_json_safe(value)
+
+    def _record_trace_event(self, event_type: str, **payload) -> None:
+        event: dict[str, Any] = {
+            "type": event_type,
+            "time": datetime.now().isoformat(),
+        }
+        for key, value in payload.items():
+            if value is None:
+                continue
+            event[key] = self._trace_safe(value)
+        self.trace_history.append(event)
+
+    def _rebuild_thinking_history(self) -> None:
+        self.thinking_history = [
+            str(event["content"])
+            for event in self.trace_history
+            if event.get("type") == "thinking" and event.get("content")
+        ]
+
+    def _set_round_thinking(
+        self,
+        content: str,
+        *,
+        round_number: Optional[int],
+        mode: str,
+        stream: bool,
+    ) -> None:
+        if not content:
+            return
+        for event in reversed(self.trace_history):
+            if (
+                event.get("type") == "thinking"
+                and event.get("round") == round_number
+                and event.get("mode") == mode
+                and event.get("stream") == stream
+            ):
+                event["content"] = content
+                self._rebuild_thinking_history()
+                return
+        self._record_trace_event(
+            "thinking",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            content=content,
+        )
+        self._rebuild_thinking_history()
+
+    def _record_round_start(
+        self,
+        round_number: int,
+        *,
+        mode: str,
+        stream: bool,
+        query: Optional[str] = None,
+    ) -> None:
+        self._record_trace_event(
+            "round_start",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            query=query,
+        )
+
+    def _record_llm_input(
+        self,
+        round_number: int,
+        messages: list[Any],
+        *,
+        mode: str,
+        stream: bool,
+    ) -> None:
+        self._record_trace_event(
+            "llm_input",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            messages=messages,
+        )
+
+    def _record_llm_output(
+        self,
+        round_number: int,
+        *,
+        mode: str,
+        stream: bool,
+        content: Optional[str] = None,
+        thinking: Optional[str] = None,
+        assistant_items: Optional[Any] = None,
+        tool_calls: Optional[Any] = None,
+    ) -> None:
+        self._record_trace_event(
+            "llm_output",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            content=content,
+            thinking=thinking,
+            assistant_items=assistant_items,
+            tool_calls=tool_calls,
+        )
+
+    def _record_tool_call(
+        self,
+        round_number: int,
+        tool_name: str,
+        tool_args: Any,
+        tool_id: str,
+        *,
+        mode: str,
+        stream: bool,
+    ) -> None:
+        self._record_trace_event(
+            "tool_call",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_id=tool_id,
+        )
+
+    def _record_tool_result(
+        self,
+        round_number: int,
+        tool_name: str,
+        tool_args: Any,
+        tool_id: str,
+        content: Any,
+        *,
+        mode: str,
+        stream: bool,
+    ) -> None:
+        self._record_trace_event(
+            "tool_result",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_id=tool_id,
+            content=content,
+        )
+
+    def _record_final_response(
+        self,
+        round_number: int,
+        content: str,
+        *,
+        mode: str,
+        stream: bool,
+    ) -> None:
+        self._record_trace_event(
+            "final",
+            round=round_number,
+            mode=mode,
+            stream=stream,
+            content=content,
+        )
 
     @staticmethod
     def _new_stream_display_state() -> dict[str, Any]:
@@ -307,6 +500,8 @@ class BasicAgent(BaseAgent):
             logger.info("使用普通模式调用智能体")
             try:
                 messages = self._build_start_messages(query)
+                self._record_round_start(1, mode="plain", stream=False, query=query)
+                self._record_llm_input(1, messages, mode="plain", stream=False)
                 
                 self.callback_manager.on_llm_start(messages)
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs)
@@ -320,10 +515,12 @@ class BasicAgent(BaseAgent):
                     logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
                     response = str(response)
                 
+                self._record_llm_output(1, mode="plain", stream=False, content=response)
                 # Skill 后置拦截
                 response = self.skill_manager.on_after_invoke(query, response)
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(response))
+                self._record_final_response(1, response, mode="plain", stream=False)
                 self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
@@ -355,15 +552,26 @@ class BasicAgent(BaseAgent):
             final_results=[]
             display_state = self._new_stream_display_state()
             try:
+                self._record_round_start(1, mode="plain", stream=True, query=query)
+                self._record_llm_input(1, messages, mode="plain", stream=True)
                 self.callback_manager.on_llm_start(messages)
                 for chunk in self.llm.stream(messages, temperature=temperature, **kwargs):
                     self._append_stream_text(display_state, "content", "content_text", chunk)
                     final_results.append(chunk)
+                    self._record_trace_event(
+                        "text_delta",
+                        round=1,
+                        mode="plain",
+                        stream=True,
+                        delta=chunk,
+                    )
                 result = "".join(final_results)
                 self.callback_manager.on_llm_end(result)
+                self._record_llm_output(1, mode="plain", stream=True, content=result)
                 result = self.skill_manager.on_after_invoke(query, result)
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(result))
+                self._record_final_response(1, result, mode="plain", stream=True)
                 self.callback_manager.on_agent_end(self.name, result, success=True)
                 self._print_stream_final(display_state, result)
                 return result
@@ -449,6 +657,8 @@ class BasicAgent(BaseAgent):
         while max_iter > 0:
             iteration_count += 1
             logger.debug(f"工具调用迭代 {iteration_count}")
+            self._record_round_start(iteration_count, mode="tool", stream=False, query=query)
+            self._record_llm_input(iteration_count, messages, mode="tool", stream=False)
             
             try:
                 self.callback_manager.on_llm_start(messages)
@@ -476,13 +686,27 @@ class BasicAgent(BaseAgent):
 
             thinking_content = self.llm.get_thinking_content(response)
             if thinking_content:
-                self.thinking_history.append(thinking_content)
+                self._set_round_thinking(
+                    thinking_content,
+                    round_number=iteration_count,
+                    mode="tool",
+                    stream=False,
+                )
                 if self.verbose_thinking:
                     logger.info(f"💭 模型思考: {thinking_content}")
                 # messages.append(AssistantMessage(thinking_content))
 
             if self.llm.has_tool_calls(response):
                 formatted_response = self.llm.format_assistant_response(response)
+                self._record_llm_output(
+                    iteration_count,
+                    mode="tool",
+                    stream=False,
+                    content=self.llm.get_response_content(response),
+                    thinking=thinking_content,
+                    assistant_items=formatted_response,
+                    tool_calls=self.llm.get_tool_calls(response),
+                )
                 if isinstance(formatted_response, list):
                     messages.extend(formatted_response)
                 else:
@@ -508,7 +732,24 @@ class BasicAgent(BaseAgent):
                     try:
                         tool_args = self._safe_parse_tool_args(tool_call)
                         logger.info(f"{self.name}执行工具: {tool_name}，参数: {tool_args}")
+                        self._record_tool_call(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            mode="tool",
+                            stream=False,
+                        )
                         tool_result = self._safe_execute_tool(tool_name, tool_args)
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            tool_result,
+                            mode="tool",
+                            stream=False,
+                        )
                         tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                         messages.append(tool_msg)
                         turn_history.append(tool_msg)
@@ -516,12 +757,30 @@ class BasicAgent(BaseAgent):
                     except ToolExecutionError as e:
                         logger.error(f"工具 '{tool_name}' 执行失败: {e}")
                         error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            error_msg,
+                            mode="tool",
+                            stream=False,
+                        )
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
                         turn_history.append(tool_msg)
                     except Exception as e:
                         logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                         error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            error_msg,
+                            mode="tool",
+                            stream=False,
+                        )
                         tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                         messages.append(tool_msg)
                         turn_history.append(tool_msg)
@@ -532,6 +791,13 @@ class BasicAgent(BaseAgent):
                 else:
                     logger.warning("LLM 响应中没有内容")
                     final_response = ""
+                self._record_llm_output(
+                    iteration_count,
+                    mode="tool",
+                    stream=False,
+                    content=final_response,
+                    thinking=thinking_content,
+                )
                 break
             
             max_iter -= 1
@@ -543,6 +809,7 @@ class BasicAgent(BaseAgent):
         final_response = self.skill_manager.on_after_invoke(query, final_response)
         turn_history.append(AssistantMessage(final_response))
         self.add_messages(turn_history)
+        self._record_final_response(iteration_count or 1, final_response, mode="tool", stream=False)
         return final_response
 
     async def ainvoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
@@ -581,6 +848,8 @@ class BasicAgent(BaseAgent):
             logger.info("使用异步普通模式调用智能体")
             try:
                 messages = self._build_start_messages(query)
+                self._record_round_start(1, mode="plain", stream=False, query=query)
+                self._record_llm_input(1, messages, mode="plain", stream=False)
                 
                 self.callback_manager.on_llm_start(messages)
                 response = await self.llm.ainvoke(messages, temperature=temperature, **kwargs)
@@ -593,9 +862,11 @@ class BasicAgent(BaseAgent):
                     logger.warning(f"LLM 响应类型不是字符串: {type(response).__name__}，尝试转换...")
                     response = str(response)
                 
+                self._record_llm_output(1, mode="plain", stream=False, content=response)
                 response = self.skill_manager.on_after_invoke(query, response)
                 self.add_message(UserMessage(query))
                 self.add_message(AssistantMessage(response))
+                self._record_final_response(1, response, mode="plain", stream=False)
                 self.callback_manager.on_agent_end(self.name, response, success=True)
                 return response
                 
@@ -634,6 +905,8 @@ class BasicAgent(BaseAgent):
         while max_iter > 0:
             iteration_count += 1
             logger.debug(f"异步工具调用迭代 {iteration_count}")
+            self._record_round_start(iteration_count, mode="tool", stream=False, query=query)
+            self._record_llm_input(iteration_count, messages, mode="tool", stream=False)
             
             try:
                 self.callback_manager.on_llm_start(messages)
@@ -658,13 +931,28 @@ class BasicAgent(BaseAgent):
             # 捕获 LLM 的思考过程
             thinking_content = self.llm.get_thinking_content(response)
             if thinking_content:
-                self.thinking_history.append(thinking_content)
+                self._set_round_thinking(
+                    thinking_content,
+                    round_number=iteration_count,
+                    mode="tool",
+                    stream=False,
+                )
                 if self.verbose_thinking:
                     logger.info(f"💭 模型思考: {thinking_content}")
 
             # 检查是否有工具调用
             if self.llm.has_tool_calls(response):
                 formatted_response = self.llm.format_assistant_response(response)
+                tool_calls = self.llm.get_tool_calls(response)
+                self._record_llm_output(
+                    iteration_count,
+                    mode="tool",
+                    stream=False,
+                    content=self.llm.get_response_content(response),
+                    thinking=thinking_content,
+                    assistant_items=formatted_response,
+                    tool_calls=tool_calls,
+                )
                 if isinstance(formatted_response, list):
                     messages.extend(formatted_response)
                 else:
@@ -690,22 +978,57 @@ class BasicAgent(BaseAgent):
                     try:
                         tool_args = self._safe_parse_tool_args(tool_call)
                         logger.info(f"{self.name} 并发异步执行工具: {tool_name}，参数: {tool_args}")
+                        self._record_tool_call(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            mode="tool",
+                            stream=False,
+                        )
                         tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            tool_result,
+                            mode="tool",
+                            stream=False,
+                        )
                         return self.llm.format_tool_result(tool_result, tool_id, tool_name)
 
                     except ToolExecutionError as e:
                         logger.error(f"工具 '{tool_name}' 执行失败: {e}")
                         error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            error_msg,
+                            mode="tool",
+                            stream=False,
+                        )
                         return self.llm.format_tool_result(error_msg, tool_id, tool_name)
                     except Exception as e:
                         logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                         error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
+                        self._record_tool_result(
+                            iteration_count,
+                            tool_name,
+                            tool_args,
+                            tool_id,
+                            error_msg,
+                            mode="tool",
+                            stream=False,
+                        )
                         return self.llm.format_tool_result(error_msg, tool_id, tool_name)
 
                 # 并发执行所有工具调用
                 tasks = [
                     _process_single_tool(tc) 
-                    for tc in self.llm.get_tool_calls(response)
+                    for tc in tool_calls
                 ]
                 tool_msgs = await asyncio.gather(*tasks)
                 messages.extend(tool_msgs)
@@ -718,6 +1041,13 @@ class BasicAgent(BaseAgent):
                 else:
                     logger.warning("LLM 响应中没有内容")
                     final_response = ""
+                self._record_llm_output(
+                    iteration_count,
+                    mode="tool",
+                    stream=False,
+                    content=final_response,
+                    thinking=thinking_content,
+                )
                 break
             
             max_iter -= 1
@@ -729,6 +1059,7 @@ class BasicAgent(BaseAgent):
         final_response = self.skill_manager.on_after_invoke(query, final_response)
         turn_history.append(AssistantMessage(final_response))
         self.add_messages(turn_history)
+        self._record_final_response(iteration_count or 1, final_response, mode="tool", stream=False)
         return final_response
 
     async def astream_invoke(self, query: str, temperature: float = 0.7, **kwargs) -> str:
@@ -760,16 +1091,27 @@ class BasicAgent(BaseAgent):
         final_results = []
         display_state = self._new_stream_display_state()
         try:
+            self._record_round_start(1, mode="plain", stream=True, query=query)
+            self._record_llm_input(1, messages, mode="plain", stream=True)
             self.callback_manager.on_llm_start(messages)
             async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
                 self._append_stream_text(display_state, "content", "content_text", chunk)
                 final_results.append(chunk)
+                self._record_trace_event(
+                    "text_delta",
+                    round=1,
+                    mode="plain",
+                    stream=True,
+                    delta=chunk,
+                )
             
             result = "".join(final_results)
             self.callback_manager.on_llm_end(result)
+            self._record_llm_output(1, mode="plain", stream=True, content=result)
             result = self.skill_manager.on_after_invoke(query, result)
             self.add_message(UserMessage(query))
             self.add_message(AssistantMessage(result))
+            self._record_final_response(1, result, mode="plain", stream=True)
             self.callback_manager.on_agent_end(self.name, result, success=True)
             self._print_stream_final(display_state, result)
             return result
@@ -805,6 +1147,8 @@ class BasicAgent(BaseAgent):
         try:
             while max_iter > 0:
                 round_index += 1
+                self._record_round_start(round_index, mode="tool", stream=True, query=query)
+                self._record_llm_input(round_index, messages, mode="tool", stream=True)
 
                 self.callback_manager.on_llm_start(messages)
                 llm_stream = self.llm.astream_with_tools(
@@ -829,14 +1173,25 @@ class BasicAgent(BaseAgent):
 
                         if event_type == "text_delta":
                             streamed_content += event.get("delta", "") or ""
+                            self._record_trace_event(
+                                "text_delta",
+                                round=round_index,
+                                mode="tool",
+                                stream=True,
+                                delta=event.get("delta", "") or "",
+                            )
                             yield event
                             continue
 
                         if event_type == "thinking_delta":
                             delta = event.get("delta", "")
                             streamed_thinking += delta
-                            if delta:
-                                self.thinking_history.append(delta)
+                            self._set_round_thinking(
+                                streamed_thinking,
+                                round_number=round_index,
+                                mode="tool",
+                                stream=True,
+                            )
                             if self.verbose_thinking:
                                 yield event
                             continue
@@ -848,7 +1203,12 @@ class BasicAgent(BaseAgent):
                             )
                             if thinking_suffix:
                                 streamed_thinking += thinking_suffix
-                                self.thinking_history.append(thinking_suffix)
+                                self._set_round_thinking(
+                                    streamed_thinking,
+                                    round_number=round_index,
+                                    mode="tool",
+                                    stream=True,
+                                )
                                 if self.verbose_thinking:
                                     yield {
                                         "type": "thinking_delta",
@@ -861,21 +1221,41 @@ class BasicAgent(BaseAgent):
                             )
                             if content_suffix:
                                 streamed_content += content_suffix
+                                self._record_trace_event(
+                                    "text_delta",
+                                    round=round_index,
+                                    mode="tool",
+                                    stream=True,
+                                    delta=content_suffix,
+                                )
                                 yield {
                                     "type": "text_delta",
                                     "delta": content_suffix,
                                 }
 
-                            assistant_message = self.llm.format_assistant_message(
-                                content=event.get("content"),
-                                tool_calls=event.get("tool_calls"),
-                            )
+                            assistant_items = event.get("assistant_items")
+                            if assistant_items:
+                                assistant_message = assistant_items
+                            else:
+                                assistant_message = self.llm.format_assistant_message(
+                                    content=event.get("content"),
+                                    tool_calls=event.get("tool_calls"),
+                                )
                             if isinstance(assistant_message, list):
                                 messages.extend(assistant_message)
                             else:
                                 messages.append(assistant_message)
                             turn_history_entries = self._as_history_entries(assistant_message)
                             turn_history.extend(turn_history_entries)
+                            self._record_llm_output(
+                                round_index,
+                                mode="tool",
+                                stream=True,
+                                content=event.get("content"),
+                                thinking=event.get("thinking"),
+                                assistant_items=assistant_message,
+                                tool_calls=event.get("tool_calls"),
+                            )
 
                             self.callback_manager.on_llm_end(event.get("content", "") or "")
 
@@ -892,6 +1272,14 @@ class BasicAgent(BaseAgent):
                                     "tool_args": tool_args,
                                     "tool_id": tool_id,
                                 }
+                                self._record_tool_call(
+                                    round_index,
+                                    tool_name,
+                                    tool_args,
+                                    tool_id,
+                                    mode="tool",
+                                    stream=True,
+                                )
                                 try:
                                     tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
                                 except Exception as e:
@@ -904,6 +1292,15 @@ class BasicAgent(BaseAgent):
                                     "tool_args": tool_args,
                                     "content": tool_result,
                                 }
+                                self._record_tool_result(
+                                    round_index,
+                                    tool_name,
+                                    tool_args,
+                                    tool_id,
+                                    tool_result,
+                                    mode="tool",
+                                    stream=True,
+                                )
                                 tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                                 messages.append(tool_message)
                                 turn_history.append(tool_message)
@@ -915,9 +1312,24 @@ class BasicAgent(BaseAgent):
                         if event_type == "final_response":
                             final_response = event.get("content", "") or ""
                             self.callback_manager.on_llm_end(final_response)
+                            if event.get("thinking"):
+                                self._set_round_thinking(
+                                    event.get("thinking", "") or "",
+                                    round_number=round_index,
+                                    mode="tool",
+                                    stream=True,
+                                )
+                            self._record_llm_output(
+                                round_index,
+                                mode="tool",
+                                stream=True,
+                                content=final_response,
+                                thinking=event.get("thinking", ""),
+                            )
                             final_response = self.skill_manager.on_after_invoke(query, final_response)
                             turn_history.append(AssistantMessage(final_response))
                             self.add_messages(turn_history)
+                            self._record_final_response(round_index, final_response, mode="tool", stream=True)
                             self.callback_manager.on_agent_end(self.name, final_response, success=True)
                             yield {
                                 "type": "final",
@@ -937,6 +1349,7 @@ class BasicAgent(BaseAgent):
             final_response = self.skill_manager.on_after_invoke(query, final_response)
             turn_history.append(AssistantMessage(final_response))
             self.add_messages(turn_history)
+            self._record_final_response(round_index or 1, final_response, mode="tool", stream=True)
             self.callback_manager.on_agent_end(self.name, final_response, success=True)
             yield {
                 "type": "final",
@@ -1054,10 +1467,16 @@ class BasicAgent(BaseAgent):
         Returns:
             思考过程列表
         """
+        if any(event.get("type") == "thinking" for event in self.trace_history):
+            self._rebuild_thinking_history()
         return self.thinking_history.copy()
     
     def clear_thinking_history(self) -> None:
         """清空思考历史"""
+        self.trace_history = [
+            event for event in self.trace_history
+            if event.get("type") != "thinking"
+        ]
         self.thinking_history.clear()
     
     def get_last_thinking(self) -> Optional[str]:
@@ -1067,4 +1486,14 @@ class BasicAgent(BaseAgent):
         Returns:
             最后一次思考内容，如果没有则返回 None
         """
-        return self.thinking_history[-1] if self.thinking_history else None
+        thinking_history = self.get_thinking_history()
+        return thinking_history[-1] if thinking_history else None
+
+    def get_trace_history(self) -> list[dict[str, Any]]:
+        """获取完整调试轨迹。"""
+        return self._make_json_safe(self.trace_history)
+
+    def clear_trace_history(self) -> None:
+        """清空完整调试轨迹与兼容的 thinking history。"""
+        self.trace_history.clear()
+        self.thinking_history.clear()

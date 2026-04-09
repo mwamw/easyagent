@@ -2,6 +2,10 @@
 
 本文档说明 EasyAgent 当前的流式调用能力，包括普通流式输出和流式工具调用。
 
+相关文档：
+
+- `docs/history_and_messages.md`：不同 Provider 的 `history`、thinking、工具消息回填与上下文裁剪规则
+
 ---
 
 ## 1. 支持范围
@@ -244,4 +248,4 @@ async def main():
 - 不同 Provider 的底层流事件格式不同，但 Agent 层看到的是统一事件格式
 - `thinking_delta` 是否可用取决于底层模型和 Provider 是否提供 reasoning 流
 - 如果某些 OpenAI-compatible 服务不返回标准的 `tool_calls delta`，流式工具能力可能受服务端兼容程度影响
-
+- 如果你要查看不同 Provider 下 `history` 的真实保存形态，请看 `docs/history_and_messages.md`

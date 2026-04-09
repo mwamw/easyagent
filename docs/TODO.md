@@ -111,6 +111,7 @@ agent = BasicAgent.load_session("session_001")
 
 **说明文档:**
 - `docs/streaming.md`
+- `docs/history_and_messages.md`
 
 ---
 

@@ -86,6 +86,12 @@ class AnthropicProvider(BaseProvider):
         # 如果有 tool_calls，转换为 Claude 的 tool_use 格式
         if hasattr(response, 'tool_calls') and response.tool_calls:
             content = []
+            response_text = getattr(response, 'content', '') or ''
+            if response_text:
+                content.append({
+                    "type": "text",
+                    "text": response_text,
+                })
             for tool_call in response.tool_calls:
                 try:
                     input_data = json.loads(tool_call.function.arguments)
