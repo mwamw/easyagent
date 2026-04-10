@@ -16,16 +16,22 @@
 当前框架已经统一了下面几条规则：
 
 - `history` 保存正式会话消息与工具轨迹
-- `thinking` 默认进入 `trace_history`，`thinking_history` 是从 trace 派生出的兼容视图
+- `thinking` 默认进入 `trace_history`
 - 工具轮次会把中间 assistant/tool 轨迹一并写回 `history`
 - `openai_responses` 不再把 `reasoning` item 直接回填进正式 `history`
 - 喂给下一轮模型时，会裁掉纯噪音字段，避免 `id` / `status` / `encrypted_content` 之类无意义元数据污染上下文
 
+`trace_history` 当前按“完整会话转录”设计：
+
+- 不保存 `system prompt`
+- 不保存发给 LLM 的完整 `messages`
+- 不保存流式 `text_delta`
+- 只保存用户原始输入、聚合后的 reasoning、assistant 消息、tool_call、tool_result 与 turn 结束信息
+
 可以把当前数据分成两层：
 
 - 正式会话层：`agent.history`
-- 调试轨迹层：`agent.trace_history`
-- 兼容 thinking 视图：`agent.thinking_history`
+- 会话转录层：`agent.trace_history`
 
 ---
 
@@ -71,7 +77,6 @@
 
 - 非流式：通过 `llm.get_thinking_content(...)` 提取，写入 `agent.trace_history`
 - 流式：通过 `thinking_delta` 事件增量输出，并在 round 结束后聚合写入 `agent.trace_history`
-- `agent.get_thinking_history()` 会从 trace 中提取 `"type": "thinking"` 的 `content`
 
 所以：
 
@@ -82,125 +87,123 @@
 这是一个有意的分层：
 
 - 正式 history 用于会话续写
-- trace 用于调试、回放和会话恢复
-- thinking_history 只是 trace 的简化视图
+- trace 用于会话转录、回放和会话恢复
 
 ### 3.1 Trace 的真实结构
 
-`trace_history` 现在保存的是完整事件流，而不是只有思考文本。一个工具调用轮次结束后，大致会看到：
+`trace_history` 现在保存的是完整会话转录。一个工具调用轮次结束后，大致会看到：
 
 ```python
 [
     {
-        "type": "round_start",
-        "round": 1,
-        "mode": "tool",
-        "stream": True,
-        "query": "帮我计算 3^22",
-        "time": "2026-04-09T20:00:00.000000",
+        "id": "evt_000001",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 1,
+        "type": "user_message",
+        "timestamp": "2026-04-09T20:00:00.000000",
+        "role": "user",
+        "content": "帮我计算 3^22",
+        "metadata": {},
     },
     {
-        "type": "llm_input",
-        "round": 1,
-        "mode": "tool",
-        "stream": True,
-        "messages": [
-            {
-                "role": "system",
-                "content": "...",
-                "time": "2026-04-09T20:00:00.000000",
-                "metadata": {},
-            },
-            {
-                "role": "user",
-                "content": "帮我计算 3^22",
-                "time": "2026-04-09T20:00:00.000000",
-                "metadata": {},
-            },
-        ],
-        "time": "2026-04-09T20:00:00.000000",
-    },
-    {
-        "type": "thinking",
-        "round": 1,
-        "mode": "tool",
-        "stream": True,
+        "id": "evt_000002",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 2,
+        "type": "reasoning",
+        "timestamp": "2026-04-09T20:00:01.000000",
+        "role": "assistant",
         "content": "我先调用计算工具。",
-        "time": "2026-04-09T20:00:01.000000",
-    },
-    {
-        "type": "llm_output",
         "round": 1,
-        "mode": "tool",
-        "stream": True,
-        "content": "我先调用计算工具。",
-        "assistant_items": [
-            {
-                "role": "assistant",
-                "content": "我先调用计算工具。",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "calculator",
-                            "arguments": "{\"expression\":\"3**22\"}",
-                        },
-                    }
-                ],
-            }
-        ],
-        "tool_calls": [
-            {
-                "id": "call_1",
-                "name": "calculator",
-                "arguments": "{\"expression\":\"3**22\"}",
-            }
-        ],
-        "time": "2026-04-09T20:00:01.000000",
+        "metadata": {"mode": "tool", "stream": True, "visibility": "internal"},
     },
     {
+        "id": "evt_000003",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 3,
+        "type": "assistant_message",
+        "timestamp": "2026-04-09T20:00:01.000000",
+        "role": "assistant",
+        "content": "我先调用计算工具。",
+        "parent_id": "evt_000002",
+        "round": 1,
+        "metadata": {"stage": "pre_tool", "mode": "tool", "stream": True},
+    },
+    {
+        "id": "evt_000004",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 4,
         "type": "tool_call",
+        "timestamp": "2026-04-09T20:00:01.000000",
+        "role": "assistant",
+        "content": "",
+        "parent_id": "evt_000003",
         "round": 1,
-        "mode": "tool",
-        "stream": True,
         "tool_name": "calculator",
         "tool_args": {"expression": "3**22"},
-        "tool_id": "call_1",
-        "time": "2026-04-09T20:00:01.000000",
+        "tool_call_id": "call_1",
+        "metadata": {"mode": "tool", "stream": True},
     },
     {
+        "id": "evt_000005",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 5,
         "type": "tool_result",
+        "timestamp": "2026-04-09T20:00:01.200000",
+        "role": "tool",
+        "parent_id": "evt_000004",
         "round": 1,
-        "mode": "tool",
-        "stream": True,
         "tool_name": "calculator",
         "tool_args": {"expression": "3**22"},
-        "tool_id": "call_1",
+        "tool_call_id": "call_1",
         "content": "31381059609",
-        "time": "2026-04-09T20:00:01.200000",
+        "metadata": {"mode": "tool", "stream": True, "success": True},
     },
     {
-        "type": "final",
+        "id": "evt_000006",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 6,
+        "type": "assistant_message",
+        "timestamp": "2026-04-09T20:00:02.000000",
+        "role": "assistant",
         "round": 2,
-        "mode": "tool",
-        "stream": True,
         "content": "3^22 = 31381059609",
-        "time": "2026-04-09T20:00:02.000000",
+        "parent_id": "evt_000005",
+        "metadata": {"stage": "final", "mode": "tool", "stream": True},
+    },
+    {
+        "id": "evt_000007",
+        "session_id": "trace_xxx",
+        "turn_id": "turn_0001",
+        "seq": 7,
+        "type": "turn_end",
+        "timestamp": "2026-04-09T20:00:02.000100",
+        "role": "assistant",
+        "content": "",
+        "metadata": {"mode": "tool", "stream": True, "status": "completed", "final_event_id": "evt_000006"},
     },
 ]
 ```
 
-如果只看 `thinking_history`，同一轮只会看到：
+如果你只关心推理文本，可以直接从 `trace_history` 中筛出 `type == "reasoning"` 的事件，例如：
 
 ```python
-["我先调用计算工具。"]
+[
+    event["content"]
+    for event in agent.get_trace_history()
+    if event["type"] == "reasoning"
+]
 ```
 
 也就是说：
 
-- `trace_history` 适合调试和会话恢复
-- `thinking_history` 只适合快速查看思考文本
+- `trace_history` 适合回放、会话恢复和可视化
+- reasoning 文本只是 trace 中的一类事件
 
 ---
 
@@ -239,7 +242,7 @@
 ]
 ```
 
-如果底层模型带有 `reasoning_content`，thinking 会进入 `agent.trace_history`，`agent.get_thinking_history()` 只返回其中提取出的纯文本。
+如果底层模型带有 `reasoning_content`，thinking 会进入 `agent.trace_history`，以 `type == "reasoning"` 的事件形式保存。
 
 ### 4.2 工具调用
 
@@ -476,7 +479,6 @@ response.output == [
 因为当前规则是：
 
 - reasoning 保留到 `trace_history`
-- `thinking_history` 只是从 trace 提取出的字符串列表
 - 不作为正式 history 条目保存
 - 也不再继续喂回下一轮模型
 
@@ -547,8 +549,7 @@ response.output == [
 所以当前设计是：
 
 - `history` 用于会话续写
-- `trace_history` 用于调试、回放和会话恢复
-- `thinking_history` 只是 trace 的简化视图
+- `trace_history` 用于会话转录、回放和会话恢复
 
 这是一个语义分层，不是信息丢失。
 
@@ -571,12 +572,12 @@ response.output == [
 - `encrypted_content`
 - 无语义价值的 `id/status`
 
-### 9.3 调试层会保留
+### 9.3 转录层会保留
 
-- `thinking_delta`
 - `trace_history`
-- `thinking_history`
-- 流式事件轨迹
+- reasoning 事件
+- assistant/tool 事件链
+- turn 结束信息
 
 ---
 
@@ -587,8 +588,7 @@ response.output == [
 1. 看控制台流式输出
 2. 看 `agent.get_trace_history()`
 3. 看 `agent.get_history()`
-4. 看 `agent.get_thinking_history()`
-5. 如果还不够，再打开 DEBUG/TRACE 日志看 provider 原始返回
+4. 如果还不够，再打开 DEBUG/TRACE 日志看 provider 原始返回
 
 示例脚本：
 

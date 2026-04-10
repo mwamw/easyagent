@@ -229,12 +229,16 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[4]["round"], 2)
         self.assertEqual(events[-1]["content"], "pong")
         self.assertEqual(agent.get_history_length(), 4)
-        self.assertEqual(agent.get_thinking_history(), ["need tool"])
-        trace_types = [event["type"] for event in agent.get_trace_history()]
-        self.assertIn("llm_input", trace_types)
+        trace = agent.get_trace_history()
+        reasoning = [event["content"] for event in trace if event["type"] == "reasoning"]
+        self.assertEqual(reasoning, ["need tool"])
+        trace_types = [event["type"] for event in trace]
+        self.assertEqual(trace_types[0], "user_message")
+        self.assertIn("reasoning", trace_types)
+        self.assertIn("assistant_message", trace_types)
         self.assertIn("tool_call", trace_types)
         self.assertIn("tool_result", trace_types)
-        self.assertIn("final", trace_types)
+        self.assertEqual(trace_types[-1], "turn_end")
         history = agent.get_history()
         self.assertEqual(history[0].role, "user")
         self.assertEqual(history[1]["tool_calls"][0]["function"]["name"], "echo")
@@ -288,7 +292,11 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
             stdout.getvalue(),
             "round 1\n\nthinking content:\nneed tool\ntool_calls:\necho : {'text': 'ping'}\n\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
         )
-        self.assertEqual(agent.get_thinking_history(), ["need tool"])
+        trace = agent.get_trace_history()
+        self.assertEqual(
+            [event["content"] for event in trace if event["type"] == "reasoning"],
+            ["need tool"],
+        )
 
     async def test_astream_invoke_with_tool_preserves_assistant_items_order(self):
         from agent.BasicAgent import BasicAgent
@@ -364,7 +372,11 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
             stdout.getvalue(),
             "round 1\n\ncontent:\n准备调用工具\ntool_calls:\necho : {'text': 'ping'}\n\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
         )
-        self.assertEqual(agent.get_thinking_history(), [])
+        trace = agent.get_trace_history()
+        self.assertEqual(
+            [event["content"] for event in trace if event["type"] == "reasoning"],
+            [],
+        )
 
     def test_stream_invoke_plain_mode_displays_content_and_final(self):
         from agent.BasicAgent import BasicAgent
@@ -385,9 +397,9 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
             "content:\nhello world\nfinal res:\nhello world\n",
         )
         trace = agent.get_trace_history()
-        self.assertEqual(trace[0]["type"], "round_start")
-        self.assertEqual(trace[1]["type"], "llm_input")
-        self.assertEqual(trace[-1]["type"], "final")
+        self.assertEqual(trace[0]["type"], "user_message")
+        self.assertEqual(trace[1]["type"], "assistant_message")
+        self.assertEqual(trace[-1]["type"], "turn_end")
 
 
 class TestProviderStreamingHelpers(unittest.TestCase):

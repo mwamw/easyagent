@@ -49,18 +49,6 @@ def print_history(agent: BasicAgent) -> None:
         )
 
 
-def print_thinking_history(agent: BasicAgent) -> None:
-    print("\n\n===== THINKING HISTORY =====")
-    print(
-        json.dumps(
-            agent.get_thinking_history(),
-            ensure_ascii=False,
-            indent=2,
-            default=str,
-        )
-    )
-
-
 def print_trace_history(agent: BasicAgent) -> None:
     print("\n\n===== TRACE HISTORY =====")
     print(
@@ -94,7 +82,6 @@ def main() -> None:
     print(final_result)
 
     print_history(agent)
-    print_thinking_history(agent)
     print_trace_history(agent)
 
 

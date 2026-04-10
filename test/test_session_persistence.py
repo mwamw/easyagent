@@ -154,7 +154,30 @@ class SessionPersistenceTestCase(unittest.TestCase):
         )
         agent.add_message(UserMessage("hello"))
         agent.add_message(AssistantMessage("world"))
-        agent.thinking_history = ["thought 1", "thought 2"]
+        agent.trace_history = [
+            {
+                "id": "evt_000001",
+                "session_id": "trace_test",
+                "turn_id": "turn_0001",
+                "seq": 1,
+                "type": "reasoning",
+                "timestamp": datetime.now().isoformat(),
+                "role": "assistant",
+                "content": "thought 1",
+                "metadata": {},
+            },
+            {
+                "id": "evt_000002",
+                "session_id": "trace_test",
+                "turn_id": "turn_0002",
+                "seq": 2,
+                "type": "reasoning",
+                "timestamp": datetime.now().isoformat(),
+                "role": "assistant",
+                "content": "thought 2",
+                "metadata": {},
+            },
+        ]
 
         agent.save_session("basic-1", store=self.session_store, metadata={"suite": "unit"})
 
@@ -171,10 +194,13 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertTrue(restored.enable_tool)
         self.assertEqual(restored.get_history_length(), 2)
         self.assertEqual(restored.get_history()[0].content, "hello")
-        self.assertEqual(restored.get_thinking_history(), ["thought 1", "thought 2"])
+        self.assertEqual(
+            [event["content"] for event in restored.get_trace_history() if event["type"] == "reasoning"],
+            ["thought 1", "thought 2"],
+        )
         self.assertEqual(
             [event["type"] for event in restored.get_trace_history()],
-            ["thinking", "thinking"],
+            ["reasoning", "reasoning"],
         )
         self.assertTrue(restored.history_via_context_manager)
 
