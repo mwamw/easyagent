@@ -1,11 +1,12 @@
 # Skill 技能系统模块
-from .base import BaseSkill, SkillConfig
+from .base import BaseSkill, SkillConfig, SkillManifest
 from .manager import SkillManager
 from .registry import SkillRegistry
 from .yaml_loader import YAMLSkill, YAMLSkillLoader, MarkdownSkill, MarkdownSkillLoader
 from .folder_loader import FolderSkill, FolderSkillLoader
 from .meta_tools import (
     SkillDiscoveryTool,
+    SkillTool,
     LoadSkillTool,
     UnloadSkillTool,
     MetaSkill,
@@ -14,6 +15,7 @@ from .meta_tools import (
 __all__ = [
     "BaseSkill",
     "SkillConfig",
+    "SkillManifest",
     "SkillManager",
     "SkillRegistry",
     "YAMLSkill",
@@ -23,8 +25,8 @@ __all__ = [
     "FolderSkill",
     "FolderSkillLoader",
     "SkillDiscoveryTool",
+    "SkillTool",
     "LoadSkillTool",
     "UnloadSkillTool",
     "MetaSkill",
 ]
-

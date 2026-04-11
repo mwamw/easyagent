@@ -179,7 +179,8 @@ class TestMetaToolsSkill(TestSkillBase):
             llm=self.llm,
             system_prompt=(
                 "你是一个具有自主意识的 Agent。如果用户交给你的任务你目前没有合适的工具去完成，"
-                "请首先使用 skill_discovery_tool 寻找对应的技能。找到后使用 load_skill_tool 加载它，然后再使用新装载的工具完成任务。"
+                "请先查看系统提示词中的可用 Skills 列表，优先直接使用 skill_tool 调用合适的技能。"
+                "只有当列表不足以判断时，再使用 skill_discovery_tool；只有确实需要长期挂载时，再使用 load_skill_tool。"
             ),
             verbose_thinking=False
         )

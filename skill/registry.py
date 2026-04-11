@@ -12,7 +12,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional, Type
 
-from .base import BaseSkill, SkillConfig
+from .base import BaseSkill, SkillConfig, SkillManifest
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class SkillRegistry:
         self._skill_factories: Dict[str, Callable[..., BaseSkill]] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}  # 名称 → 元信息
         self._skill_descriptions: Dict[str, str] = {}  # 名称 → 描述
+        self._manifests: Dict[str, SkillManifest] = {}
 
     @classmethod
     def instance(cls) -> "SkillRegistry":
@@ -92,6 +93,13 @@ class SkillRegistry:
         # 从类 docstring 获取默认描述
         desc = skill_class.__doc__.strip() if skill_class.__doc__ else ""
         self._skill_descriptions[reg_name] = desc
+        self._manifests[reg_name] = SkillManifest(
+            name=reg_name,
+            description=desc,
+            listing_description=desc or reg_name,
+            source_type="python",
+            metadata=dict(self._metadata[reg_name]),
+        )
 
         logger.debug("SkillRegistry: 注册类 '%s' → %s", reg_name, skill_class.__name__)
 
@@ -112,6 +120,15 @@ class SkillRegistry:
 
         self._skill_factories[name] = factory
         self._metadata[name] = {"type": "factory", "callable": repr(factory)}
+        self._manifests.setdefault(
+            name,
+            SkillManifest(
+                name=name,
+                listing_description=name,
+                source_type="factory",
+                metadata=dict(self._metadata[name]),
+            ),
+        )
         logger.debug("SkillRegistry: 注册工厂 '%s'", name)
     def skill(self, name: Optional[str] = None, **default_kwargs):
         """
@@ -238,12 +255,19 @@ class SkillRegistry:
 
     def list_available(self) -> List[Dict[str, Any]]:
         """列出所有可用的 Skill 信息"""
-        result = []
-        for name in self.list_available_names():
-            info = {"name": name}
-            info.update(self._metadata.get(name, {}))
-            result.append(info)
-        return result
+        return [manifest.model_dump(mode="json") for manifest in self.list_manifests()]
+
+    def list_manifests(self) -> List[SkillManifest]:
+        """列出所有已注册 Skill 的 manifest。"""
+        manifests = [self._manifests[name] for name in self.list_available_names() if name in self._manifests]
+        manifests.sort(key=lambda item: (item.priority, item.name), reverse=True)
+        return manifests
+
+    def get_manifest(self, name: str) -> SkillManifest:
+        """获取指定 Skill 的 manifest。"""
+        if name not in self._manifests:
+            raise KeyError(f"Skill '{name}' 的 manifest 不存在")
+        return self._manifests[name].model_copy(deep=True)
 
     def has(self, name: str) -> bool:
         """检查名称是否已注册"""
@@ -273,28 +297,45 @@ class SkillRegistry:
         query_keywords = query_lower.split() if query_lower else []
         tag_set = {t.lower() for t in tags} if tags else set()
 
-        results = []
-        for name in self.list_available_names():
-            meta = self._metadata.get(name, {})
-            skill_desc = str(meta.get("description", "")).lower()
-            skill_tags = [t.lower() for t in meta.get("tags", [])]
+        scored_results: list[tuple[int, int, dict[str, Any]]] = []
+        for manifest in self.list_manifests():
+            searchable_parts = [
+                manifest.name,
+                manifest.description,
+                manifest.listing_description,
+                manifest.when_to_use,
+                " ".join(manifest.tags),
+                " ".join(manifest.tool_names),
+                " ".join(f"{key} {value}" for key, value in manifest.metadata.items()),
+            ]
+            searchable = " ".join(part for part in searchable_parts if part).lower()
+            manifest_tags = {tag.lower() for tag in manifest.tags}
 
-            # 构建搜索文本
-            searchable = f"{name} {skill_desc} {' '.join(skill_tags)}"
+            if query_keywords and not all(keyword in searchable for keyword in query_keywords):
+                continue
 
-            # 关键词匹配：所有关键词都需要出现
-            if query_keywords:
-                if not all(kw in searchable for kw in query_keywords):
-                    continue
+            if tag_set and not tag_set.intersection(manifest_tags):
+                continue
 
-            # 标签过滤：至少匹配一个
-            if tag_set:
-                if not tag_set.intersection(skill_tags):
-                    continue
+            score = 0
+            if query_lower:
+                if manifest.name.lower() == query_lower:
+                    score += 100
+                if query_lower in manifest.name.lower():
+                    score += 40
+                if query_lower in manifest.listing_description.lower():
+                    score += 30
+                if query_lower in manifest.when_to_use.lower():
+                    score += 20
+                if query_lower in manifest.description.lower():
+                    score += 10
+                score += sum(5 for keyword in query_keywords if keyword in searchable)
+            score += manifest.priority
 
-            results.append({"name": name, **meta})
+            scored_results.append((score, manifest.priority, manifest.model_dump(mode="json")))
 
-        return results
+        scored_results.sort(key=lambda item: (item[0], item[1], item[2]["name"]), reverse=True)
+        return [item[2] for item in scored_results]
 
     def update_metadata(
         self,
@@ -317,9 +358,24 @@ class SkillRegistry:
         if description:
             self._metadata[name]["description"] = description
             self._skill_descriptions[name] = description
+            manifest = self._manifests.get(name)
+            if manifest is not None:
+                manifest.description = description
+                if not manifest.listing_description:
+                    manifest.listing_description = description
         if tags is not None:
             self._metadata[name]["tags"] = tags
+            manifest = self._manifests.get(name)
+            if manifest is not None:
+                manifest.tags = list(tags)
         self._metadata[name].update(extra)
+        manifest = self._manifests.get(name)
+        if manifest is not None:
+            for key, value in extra.items():
+                if hasattr(manifest, key):
+                    setattr(manifest, key, value)
+                else:
+                    manifest.metadata[key] = value
 
     # ==================== 内部 ====================
 
@@ -355,10 +411,24 @@ class SkillRegistry:
         try:
             skill = YAMLSkillLoader.load(filepath)
             name = skill.name
-            desc = getattr(skill.config, "description", "")
+            manifest = skill.build_manifest()
+            desc = manifest.description
             if not self.has(name):
                 self._skill_descriptions[name] = desc
                 self.register_factory(name, lambda fp=filepath: YAMLSkillLoader.load(fp))
+                manifest.source_path = filepath
+                self._manifests[name] = manifest
+                self.update_metadata(
+                    name,
+                    description=manifest.description,
+                    tags=manifest.tags,
+                    listing_description=manifest.listing_description,
+                    when_to_use=manifest.when_to_use,
+                    exposure_mode=manifest.exposure_mode,
+                    execution_mode=manifest.execution_mode,
+                    source_type=manifest.source_type,
+                    source_path=manifest.source_path,
+                )
                 return [name]
         except Exception as e:
             logger.warning("加载 YAML Skill '%s' 失败: %s", filepath, e)
@@ -372,10 +442,24 @@ class SkillRegistry:
         try:
             skill = MarkdownSkillLoader.load(filepath)
             name = skill.name
-            desc = getattr(skill.config, "description", "")
+            manifest = skill.build_manifest()
+            desc = manifest.description
             if not self.has(name):
                 self._skill_descriptions[name] = desc
                 self.register_factory(name, lambda fp=filepath: MarkdownSkillLoader.load(fp))
+                manifest.source_path = filepath
+                self._manifests[name] = manifest
+                self.update_metadata(
+                    name,
+                    description=manifest.description,
+                    tags=manifest.tags,
+                    listing_description=manifest.listing_description,
+                    when_to_use=manifest.when_to_use,
+                    exposure_mode=manifest.exposure_mode,
+                    execution_mode=manifest.execution_mode,
+                    source_type=manifest.source_type,
+                    source_path=manifest.source_path,
+                )
                 return [name]
         except Exception as e:
             logger.warning("加载 Markdown Skill '%s' 失败: %s", filepath, e)
@@ -389,10 +473,24 @@ class SkillRegistry:
         try:
             skill = FolderSkillLoader.load(dirpath)
             name = skill.name
-            desc = getattr(skill.config, "description", "")
+            manifest = skill.build_manifest()
+            desc = manifest.description
             if not self.has(name):
                 self._skill_descriptions[name] = desc
                 self.register_factory(name, lambda dp=dirpath: FolderSkillLoader.load(dp))
+                manifest.source_path = dirpath
+                self._manifests[name] = manifest
+                self.update_metadata(
+                    name,
+                    description=manifest.description,
+                    tags=manifest.tags,
+                    listing_description=manifest.listing_description,
+                    when_to_use=manifest.when_to_use,
+                    exposure_mode=manifest.exposure_mode,
+                    execution_mode=manifest.execution_mode,
+                    source_type=manifest.source_type,
+                    source_path=manifest.source_path,
+                )
                 return [name]
         except Exception as e:
             logger.warning("加载 Folder Skill '%s' 失败: %s", dirpath, e)
@@ -417,3 +515,7 @@ class SkillRegistry:
     def get_skills_description(self) -> dict:
         """获取 Skill 的描述"""
         return self._skill_descriptions
+
+    def load_body(self, name: str, **kwargs: Any) -> str:
+        """加载指定 Skill 的正文 prompt。"""
+        return self.create(name, **kwargs).get_body_prompt()

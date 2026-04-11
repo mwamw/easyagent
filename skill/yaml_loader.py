@@ -154,7 +154,7 @@ class YAMLSkillLoader:
         if not isinstance(data, dict):
             raise ValueError(f"YAML 文件顶层必须是字典: {yaml_path}")
 
-        return YAMLSkillLoader._parse_data(data)
+        return YAMLSkillLoader._parse_data(data, source_path=yaml_path)
 
     @staticmethod
     def load_directory(dir_path: str) -> List[YAMLSkill]:
@@ -183,7 +183,7 @@ class YAMLSkillLoader:
         return skills
 
     @staticmethod
-    def _parse_data(data: Dict[str, Any]) -> YAMLSkill:
+    def _parse_data(data: Dict[str, Any], source_path: str = "") -> YAMLSkill:
         """解析 YAML 数据为 YAMLSkill"""
         name = data.get("name")
         if not name:
@@ -197,6 +197,12 @@ class YAMLSkillLoader:
             priority=int(data.get("priority", 0)),
             auto_activate=data.get("auto_activate", True),
             dependencies=data.get("dependencies", []),
+            listing_description=data.get("listing_description", ""),
+            when_to_use=data.get("when_to_use", ""),
+            exposure_mode=data.get("exposure_mode", "on_demand"),
+            execution_mode=data.get("execution_mode", "inline"),
+            source_type="yaml",
+            source_path=source_path or str(data.get("source_path", "")),
             extra=data.get("config", {}),
         )
 
@@ -366,6 +372,12 @@ class MarkdownSkillLoader:
             priority=int(data.get("priority", 0)),
             auto_activate=data.get("auto_activate", True),
             dependencies=data.get("dependencies", []),
+            listing_description=data.get("listing_description", ""),
+            when_to_use=data.get("when_to_use", ""),
+            exposure_mode=data.get("exposure_mode", "on_demand"),
+            execution_mode=data.get("execution_mode", "inline"),
+            source_type="markdown",
+            source_path=source_path,
             extra=data.get("config", {}),
         )
 

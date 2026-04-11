@@ -1,7 +1,7 @@
 from typing_extensions import override
 from core.agent import BaseAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
+from core.Message import Message, UserMessage, SystemMessage, AssistantMessage, MetaUserMessage
 from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool
@@ -628,6 +628,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
         self._current_query = query  # 供 get_enhanced_prompt 使用
+        self._clear_ephemeral_skill_state()
         
         # Skill 前置拦截
         query = self.skill_manager.on_before_invoke(query)
@@ -652,6 +653,8 @@ class BasicAgent(BaseAgent):
             except Exception as e:
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise
+            finally:
+                self._clear_ephemeral_skill_state()
         else:
             logger.info("使用普通模式调用智能体")
             try:
@@ -700,20 +703,26 @@ class BasicAgent(BaseAgent):
                 logger.error(f"LLM 调用失败: {e}")
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise LLMInvokeError(f"LLM 调用失败: {e}") from e
+            finally:
+                self._clear_ephemeral_skill_state()
 
     def stream_invoke(self,query: str,temperature: float = 0.7, **kwargs):
         original_query = query
         self._current_query = query
+        self._clear_ephemeral_skill_state()
         if self.enable_tool:
             logger.info("使用工具模式流式调用智能体")
             display_state = self._new_stream_display_state()
             final_result = ""
-            for event in self.stream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
-                self._display_stream_event(display_state, event)
-                if event["type"] == "final":
-                    final_result = event["content"]
-                    self._print_stream_final(display_state, final_result)
-            return final_result
+            try:
+                for event in self.stream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
+                    self._display_stream_event(display_state, event)
+                    if event["type"] == "final":
+                        final_result = event["content"]
+                        self._print_stream_final(display_state, final_result)
+                return final_result
+            finally:
+                self._clear_ephemeral_skill_state()
         else:
             self._validate_invoke_params(query, 1, temperature)
             original_query = query
@@ -755,6 +764,8 @@ class BasicAgent(BaseAgent):
             except Exception as e:
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise
+            finally:
+                self._clear_ephemeral_skill_state()
 
     def stream_invoke_with_tool(
         self,
@@ -822,6 +833,7 @@ class BasicAgent(BaseAgent):
             智能体返回结果
         """
         self.enable_tool = True
+        self._clear_ephemeral_skill_state()
         
         if self.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
@@ -834,184 +846,188 @@ class BasicAgent(BaseAgent):
         turn_id, turn_root_event_id = self._begin_trace_turn(raw_query)
         iteration_count = 0
         
-        while max_iter > 0:
-            iteration_count += 1
-            logger.debug(f"工具调用迭代 {iteration_count}")
-            
-            try:
-                self._capture_context_usage(messages, label="invoke_tool")
-                self.callback_manager.on_llm_start(messages)
-                response = self.llm.invoke_with_tools(
-                    messages,
-                    self.tool_registry.get_openai_tools(),
-                    temperature=temperature,
-                    **kwargs
-                )
-                self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
+        try:
+            while max_iter > 0:
+                iteration_count += 1
+                logger.debug(f"工具调用迭代 {iteration_count}")
                 
-                if response is None:
-                    raise LLMInvokeError("LLM 返回了空响应!")
+                try:
+                    self._capture_context_usage(messages, label="invoke_tool")
+                    self.callback_manager.on_llm_start(messages)
+                    response = self.llm.invoke_with_tools(
+                        messages,
+                        self.tool_registry.get_openai_tools(),
+                        temperature=temperature,
+                        **kwargs
+                    )
+                    self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
+                    
+                    if response is None:
+                        raise LLMInvokeError("LLM 返回了空响应!")
 
-                _output = getattr(response, "output", None)
-                if _output is not None:
-                    _types = [getattr(item, "type", repr(item)) for item in _output]
-                    logger.info(f"📦 response.output 类型列表: {_types}")
-            except LLMInvokeError:
-                raise
-            except Exception as e:
-                logger.error(f"智能体调用失败: {e}")
-                final_response = f"智能体调用失败: {str(e)}"
-                break
+                    _output = getattr(response, "output", None)
+                    if _output is not None:
+                        _types = [getattr(item, "type", repr(item)) for item in _output]
+                        logger.info(f"📦 response.output 类型列表: {_types}")
+                except LLMInvokeError:
+                    raise
+                except Exception as e:
+                    logger.error(f"智能体调用失败: {e}")
+                    final_response = f"智能体调用失败: {str(e)}"
+                    break
 
-            thinking_content = self.llm.get_thinking_content(response)
-            reasoning_event_id: Optional[str] = None
-            if thinking_content:
-                reasoning_event_id = self._set_round_reasoning(
-                    thinking_content,
-                    turn_id=turn_id,
-                    round_number=iteration_count,
-                    mode="tool",
-                    stream=False,
-                )
-                if self.verbose_thinking:
-                    logger.info(f"💭 模型思考: {thinking_content}")
-                # messages.append(AssistantMessage(thinking_content))
+                thinking_content = self.llm.get_thinking_content(response)
+                reasoning_event_id: Optional[str] = None
+                if thinking_content:
+                    reasoning_event_id = self._set_round_reasoning(
+                        thinking_content,
+                        turn_id=turn_id,
+                        round_number=iteration_count,
+                        mode="tool",
+                        stream=False,
+                    )
+                    if self.verbose_thinking:
+                        logger.info(f"💭 模型思考: {thinking_content}")
+                    # messages.append(AssistantMessage(thinking_content))
 
-            if self.llm.has_tool_calls(response):
-                formatted_response = self.llm.format_assistant_response(response)
-                if isinstance(formatted_response, list):
-                    messages.extend(formatted_response)
-                else:
-                    messages.append(formatted_response)
-                turn_history.extend(self._as_history_entries(formatted_response))
-                assistant_parent_id = reasoning_event_id or turn_root_event_id
-                assistant_event_id = self._record_assistant_trace(
-                    turn_id,
-                    self.llm.get_response_content(response),
-                    parent_id=assistant_parent_id,
-                    stage="pre_tool",
-                    round_number=iteration_count,
-                    mode="tool",
-                    stream=False,
-                )
-
-                for tool_call in self.llm.get_tool_calls(response):
-                    tool_name = "unknown_tool"
-                    tool_args: dict[str, Any] = {}
-                    tool_id = (
-                        getattr(tool_call, 'call_id', None)
-                        or getattr(tool_call, 'id', 'unknown')
+                if self.llm.has_tool_calls(response):
+                    formatted_response = self.llm.format_assistant_response(response)
+                    if isinstance(formatted_response, list):
+                        messages.extend(formatted_response)
+                    else:
+                        messages.append(formatted_response)
+                    turn_history.extend(self._as_history_entries(formatted_response))
+                    assistant_parent_id = reasoning_event_id or turn_root_event_id
+                    assistant_event_id = self._record_assistant_trace(
+                        turn_id,
+                        self.llm.get_response_content(response),
+                        parent_id=assistant_parent_id,
+                        stage="pre_tool",
+                        round_number=iteration_count,
+                        mode="tool",
+                        stream=False,
                     )
 
-                    try:
-                        tool_name = self._safe_get_tool_name(tool_call)
-                    except Exception as e:
-                        logger.warning(f"获取工具名称失败: {e}，使用默认名称")
-                        if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
-                            tool_name = tool_call.function.name or "unknown_tool"
-                        elif hasattr(tool_call, 'name'):
-                            tool_name = tool_call.name or "unknown_tool"
+                    for tool_call in self.llm.get_tool_calls(response):
+                        tool_name = "unknown_tool"
+                        tool_args: dict[str, Any] = {}
+                        tool_id = (
+                            getattr(tool_call, 'call_id', None)
+                            or getattr(tool_call, 'id', 'unknown')
+                        )
 
-                    try:
-                        tool_args = self._safe_parse_tool_args(tool_call)
-                        logger.info(f"{self.name}执行工具: {tool_name}，参数: {tool_args}")
-                        tool_call_event_id = self._record_tool_call(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                        )
-                        tool_result = self._safe_execute_tool(tool_name, tool_args)
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            tool_result,
-                            parent_id=tool_call_event_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=True,
-                        )
-                        tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
-                        messages.append(tool_msg)
-                        turn_history.append(tool_msg)
+                        try:
+                            tool_name = self._safe_get_tool_name(tool_call)
+                        except Exception as e:
+                            logger.warning(f"获取工具名称失败: {e}，使用默认名称")
+                            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
+                                tool_name = tool_call.function.name or "unknown_tool"
+                            elif hasattr(tool_call, 'name'):
+                                tool_name = tool_call.name or "unknown_tool"
 
-                    except ToolExecutionError as e:
-                        logger.error(f"工具 '{tool_name}' 执行失败: {e}")
-                        error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            error_msg,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=False,
-                        )
-                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
-                        messages.append(tool_msg)
-                        turn_history.append(tool_msg)
-                    except Exception as e:
-                        logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
-                        error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            error_msg,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=False,
-                        )
-                        tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
-                        messages.append(tool_msg)
-                        turn_history.append(tool_msg)
-            else:
-                content = self.llm.get_response_content(response) or getattr(response, 'content', None)
-                if content is not None:
-                    final_response = content
+                        try:
+                            tool_args = self._safe_parse_tool_args(tool_call)
+                            logger.info(f"{self.name}执行工具: {tool_name}，参数: {tool_args}")
+                            tool_call_event_id = self._record_tool_call(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                            )
+                            tool_result = self._safe_execute_tool(tool_name, tool_args)
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                tool_result,
+                                parent_id=tool_call_event_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=True,
+                            )
+                            tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                            messages.append(tool_msg)
+                            turn_history.append(tool_msg)
+                            self._maybe_inject_runtime_skill_context(tool_name=tool_name, messages=messages)
+
+                        except ToolExecutionError as e:
+                            logger.error(f"工具 '{tool_name}' 执行失败: {e}")
+                            error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                error_msg,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=False,
+                            )
+                            tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                            messages.append(tool_msg)
+                            turn_history.append(tool_msg)
+                        except Exception as e:
+                            logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
+                            error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                error_msg,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=False,
+                            )
+                            tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                            messages.append(tool_msg)
+                            turn_history.append(tool_msg)
                 else:
-                    logger.warning("LLM 响应中没有内容")
-                    final_response = ""
-                break
+                    content = self.llm.get_response_content(response) or getattr(response, 'content', None)
+                    if content is not None:
+                        final_response = content
+                    else:
+                        logger.warning("LLM 响应中没有内容")
+                        final_response = ""
+                    break
+                
+                max_iter -= 1
             
-            max_iter -= 1
-        
-        if final_response is None:
-            logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
-            final_response = "超过最大迭代次数，智能体调用失败!"
-        
-        final_response = self.skill_manager.on_after_invoke(query, final_response)
-        turn_history.append(AssistantMessage(final_response))
-        self.add_messages(turn_history)
-        final_event_id = self._record_assistant_trace(
-            turn_id,
-            final_response,
-            parent_id=self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"}),
-            stage="final",
-            round_number=iteration_count or 1,
-            mode="tool",
-            stream=False,
-        )
-        self._record_turn_end(
-            turn_id,
-            final_event_id=final_event_id,
-            mode="tool",
-            stream=False,
-        )
-        return final_response
+            if final_response is None:
+                logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
+                final_response = "超过最大迭代次数，智能体调用失败!"
+            
+            final_response = self.skill_manager.on_after_invoke(query, final_response)
+            turn_history.append(AssistantMessage(final_response))
+            self.add_messages(turn_history)
+            final_event_id = self._record_assistant_trace(
+                turn_id,
+                final_response,
+                parent_id=self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"}),
+                stage="final",
+                round_number=iteration_count or 1,
+                mode="tool",
+                stream=False,
+            )
+            self._record_turn_end(
+                turn_id,
+                final_event_id=final_event_id,
+                mode="tool",
+                stream=False,
+            )
+            return final_response
+        finally:
+            self._clear_ephemeral_skill_state()
 
     async def ainvoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs) -> str:
         """
@@ -1031,6 +1047,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
         self._current_query = query
+        self._clear_ephemeral_skill_state()
         
         # Skill 前置拦截
         query = self.skill_manager.on_before_invoke(query)
@@ -1053,6 +1070,8 @@ class BasicAgent(BaseAgent):
             except Exception as e:
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise
+            finally:
+                self._clear_ephemeral_skill_state()
         else:
             logger.info("使用异步普通模式调用智能体")
             try:
@@ -1099,6 +1118,8 @@ class BasicAgent(BaseAgent):
                 logger.error(f"LLM 异步调用失败: {e}")
                 self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
                 raise LLMInvokeError(f"LLM 异步调用失败: {e}") from e
+            finally:
+                self._clear_ephemeral_skill_state()
 
     async def ainvoke_with_tool(
         self,
@@ -1115,6 +1136,7 @@ class BasicAgent(BaseAgent):
         与 invoke_with_tool 对称，但 LLM 调用和工具执行均为异步。
         """
         self.enable_tool = True
+        self._clear_ephemeral_skill_state()
         
         if self.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
@@ -1127,186 +1149,188 @@ class BasicAgent(BaseAgent):
         turn_id, turn_root_event_id = self._begin_trace_turn(raw_query)
         iteration_count = 0
         
-        while max_iter > 0:
-            iteration_count += 1
-            logger.debug(f"异步工具调用迭代 {iteration_count}")
-            
-            try:
-                self._capture_context_usage(messages, label="ainvoke_tool")
-                self.callback_manager.on_llm_start(messages)
-                response = await self.llm.ainvoke_with_tools(
-                    messages,
-                    self.tool_registry.get_openai_tools(),
-                    temperature=temperature,
-                    **kwargs
-                )
-                self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
+        try:
+            while max_iter > 0:
+                iteration_count += 1
+                logger.debug(f"异步工具调用迭代 {iteration_count}")
                 
-                if response is None:
-                    raise LLMInvokeError("LLM 返回了空响应!")
+                try:
+                    self._capture_context_usage(messages, label="ainvoke_tool")
+                    self.callback_manager.on_llm_start(messages)
+                    response = await self.llm.ainvoke_with_tools(
+                        messages,
+                        self.tool_registry.get_openai_tools(),
+                        temperature=temperature,
+                        **kwargs
+                    )
+                    self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
+                    
+                    if response is None:
+                        raise LLMInvokeError("LLM 返回了空响应!")
 
-            except LLMInvokeError:
-                raise
-            except Exception as e:
-                logger.error(f"异步智能体调用失败: {e}")
-                final_response = f"智能体调用失败: {str(e)}"
-                break
+                except LLMInvokeError:
+                    raise
+                except Exception as e:
+                    logger.error(f"异步智能体调用失败: {e}")
+                    final_response = f"智能体调用失败: {str(e)}"
+                    break
 
-            # 捕获 LLM 的思考过程
-            thinking_content = self.llm.get_thinking_content(response)
-            reasoning_event_id: Optional[str] = None
-            if thinking_content:
-                reasoning_event_id = self._set_round_reasoning(
-                    thinking_content,
-                    turn_id=turn_id,
-                    round_number=iteration_count,
-                    mode="tool",
-                    stream=False,
-                )
-                if self.verbose_thinking:
-                    logger.info(f"💭 模型思考: {thinking_content}")
+                thinking_content = self.llm.get_thinking_content(response)
+                reasoning_event_id: Optional[str] = None
+                if thinking_content:
+                    reasoning_event_id = self._set_round_reasoning(
+                        thinking_content,
+                        turn_id=turn_id,
+                        round_number=iteration_count,
+                        mode="tool",
+                        stream=False,
+                    )
+                    if self.verbose_thinking:
+                        logger.info(f"💭 模型思考: {thinking_content}")
 
-            # 检查是否有工具调用
-            if self.llm.has_tool_calls(response):
-                formatted_response = self.llm.format_assistant_response(response)
-                tool_calls = self.llm.get_tool_calls(response)
-                if isinstance(formatted_response, list):
-                    messages.extend(formatted_response)
-                else:
-                    messages.append(formatted_response)
-                turn_history.extend(self._as_history_entries(formatted_response))
-                assistant_parent_id = reasoning_event_id or turn_root_event_id
-                assistant_event_id = self._record_assistant_trace(
-                    turn_id,
-                    self.llm.get_response_content(response),
-                    parent_id=assistant_parent_id,
-                    stage="pre_tool",
-                    round_number=iteration_count,
-                    mode="tool",
-                    stream=False,
-                )
-
-                async def _process_single_tool(tool_call) -> Message | dict:
-                    tool_name = "unknown_tool"
-                    tool_args: dict[str, Any] = {}
-                    tool_id = (
-                        getattr(tool_call, 'call_id', None)
-                        or getattr(tool_call, 'id', 'unknown')
+                if self.llm.has_tool_calls(response):
+                    formatted_response = self.llm.format_assistant_response(response)
+                    tool_calls = self.llm.get_tool_calls(response)
+                    if isinstance(formatted_response, list):
+                        messages.extend(formatted_response)
+                    else:
+                        messages.append(formatted_response)
+                    turn_history.extend(self._as_history_entries(formatted_response))
+                    assistant_parent_id = reasoning_event_id or turn_root_event_id
+                    assistant_event_id = self._record_assistant_trace(
+                        turn_id,
+                        self.llm.get_response_content(response),
+                        parent_id=assistant_parent_id,
+                        stage="pre_tool",
+                        round_number=iteration_count,
+                        mode="tool",
+                        stream=False,
                     )
 
-                    try:
-                        tool_name = self._safe_get_tool_name(tool_call)
-                    except Exception as e:
-                        logger.warning(f"获取工具名称失败: {e}，使用默认名称")
-                        if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
-                            tool_name = tool_call.function.name or "unknown_tool"
-                        elif hasattr(tool_call, 'name'):
-                            tool_name = tool_call.name or "unknown_tool"
-
-                    try:
-                        tool_args = self._safe_parse_tool_args(tool_call)
-                        logger.info(f"{self.name} 并发异步执行工具: {tool_name}，参数: {tool_args}")
-                        tool_call_event_id = self._record_tool_call(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
+                    async def _process_single_tool(tool_call) -> Message | dict:
+                        tool_name = "unknown_tool"
+                        tool_args: dict[str, Any] = {}
+                        tool_id = (
+                            getattr(tool_call, 'call_id', None)
+                            or getattr(tool_call, 'id', 'unknown')
                         )
-                        tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            tool_result,
-                            parent_id=tool_call_event_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=True,
-                        )
-                        return self.llm.format_tool_result(tool_result, tool_id, tool_name)
 
-                    except ToolExecutionError as e:
-                        logger.error(f"工具 '{tool_name}' 执行失败: {e}")
-                        error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            error_msg,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=False,
-                        )
-                        return self.llm.format_tool_result(error_msg, tool_id, tool_name)
-                    except Exception as e:
-                        logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
-                        error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
-                        self._record_tool_result(
-                            turn_id,
-                            tool_name,
-                            tool_args,
-                            tool_id,
-                            error_msg,
-                            parent_id=assistant_event_id or assistant_parent_id,
-                            round_number=iteration_count,
-                            mode="tool",
-                            stream=False,
-                            success=False,
-                        )
-                        return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                        try:
+                            tool_name = self._safe_get_tool_name(tool_call)
+                        except Exception as e:
+                            logger.warning(f"获取工具名称失败: {e}，使用默认名称")
+                            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
+                                tool_name = tool_call.function.name or "unknown_tool"
+                            elif hasattr(tool_call, 'name'):
+                                tool_name = tool_call.name or "unknown_tool"
 
-                # 并发执行所有工具调用
-                tasks = [
-                    _process_single_tool(tc) 
-                    for tc in tool_calls
-                ]
-                tool_msgs = await asyncio.gather(*tasks)
-                messages.extend(tool_msgs)
-                turn_history.extend(tool_msgs)
+                        try:
+                            tool_args = self._safe_parse_tool_args(tool_call)
+                            logger.info(f"{self.name} 并发异步执行工具: {tool_name}，参数: {tool_args}")
+                            tool_call_event_id = self._record_tool_call(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                            )
+                            tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                tool_result,
+                                parent_id=tool_call_event_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=True,
+                            )
+                            return self.llm.format_tool_result(tool_result, tool_id, tool_name)
 
-            else:
-                content = self.llm.get_response_content(response) or getattr(response, 'content', None)
-                if content is not None:
-                    final_response = content
+                        except ToolExecutionError as e:
+                            logger.error(f"工具 '{tool_name}' 执行失败: {e}")
+                            error_msg = f"工具 '{tool_name}' 执行失败: {str(e)}"
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                error_msg,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=False,
+                            )
+                            return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                        except Exception as e:
+                            logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
+                            error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
+                            self._record_tool_result(
+                                turn_id,
+                                tool_name,
+                                tool_args,
+                                tool_id,
+                                error_msg,
+                                parent_id=assistant_event_id or assistant_parent_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                                success=False,
+                            )
+                            return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+
+                    tasks = [
+                        _process_single_tool(tc)
+                        for tc in tool_calls
+                    ]
+                    tool_msgs = await asyncio.gather(*tasks)
+                    messages.extend(tool_msgs)
+                    turn_history.extend(tool_msgs)
+                    if any(self._safe_get_tool_name(tc) == "skill_tool" for tc in tool_calls):
+                        self._maybe_inject_runtime_skill_context(tool_name="skill_tool", messages=messages)
+
                 else:
-                    logger.warning("LLM 响应中没有内容")
-                    final_response = ""
-                break
+                    content = self.llm.get_response_content(response) or getattr(response, 'content', None)
+                    if content is not None:
+                        final_response = content
+                    else:
+                        logger.warning("LLM 响应中没有内容")
+                        final_response = ""
+                    break
+                
+                max_iter -= 1
             
-            max_iter -= 1
-        
-        if final_response is None:
-            logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
-            final_response = "超过最大迭代次数，智能体调用失败!"
-        
-        final_response = self.skill_manager.on_after_invoke(query, final_response)
-        turn_history.append(AssistantMessage(final_response))
-        self.add_messages(turn_history)
-        final_event_id = self._record_assistant_trace(
-            turn_id,
-            final_response,
-            parent_id=self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"}),
-            stage="final",
-            round_number=iteration_count or 1,
-            mode="tool",
-            stream=False,
-        )
-        self._record_turn_end(
-            turn_id,
-            final_event_id=final_event_id,
-            mode="tool",
-            stream=False,
-        )
-        return final_response
+            if final_response is None:
+                logger.warning(f"超过最大迭代次数 ({iteration_count})，智能体调用失败")
+                final_response = "超过最大迭代次数，智能体调用失败!"
+            
+            final_response = self.skill_manager.on_after_invoke(query, final_response)
+            turn_history.append(AssistantMessage(final_response))
+            self.add_messages(turn_history)
+            final_event_id = self._record_assistant_trace(
+                turn_id,
+                final_response,
+                parent_id=self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"}),
+                stage="final",
+                round_number=iteration_count or 1,
+                mode="tool",
+                stream=False,
+            )
+            self._record_turn_end(
+                turn_id,
+                final_event_id=final_event_id,
+                mode="tool",
+                stream=False,
+            )
+            return final_response
+        finally:
+            self._clear_ephemeral_skill_state()
 
     async def astream_invoke(self, query: str, temperature: float = 0.7, **kwargs) -> str:
         """
@@ -1321,15 +1345,19 @@ class BasicAgent(BaseAgent):
         """
         original_query = query
         self._current_query = query
+        self._clear_ephemeral_skill_state()
         if self.enable_tool:
             display_state = self._new_stream_display_state()
             final_result = ""
-            async for event in self.astream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
-                self._display_stream_event(display_state, event)
-                if event["type"] == "final":
-                    final_result = event["content"]
-                    self._print_stream_final(display_state, final_result)
-            return final_result
+            try:
+                async for event in self.astream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
+                    self._display_stream_event(display_state, event)
+                    if event["type"] == "final":
+                        final_result = event["content"]
+                        self._print_stream_final(display_state, final_result)
+                return final_result
+            finally:
+                self._clear_ephemeral_skill_state()
         
         self._validate_invoke_params(query, 1, temperature)
         original_query = query
@@ -1372,6 +1400,8 @@ class BasicAgent(BaseAgent):
         except Exception as e:
             self.callback_manager.on_agent_end(self.name, "", success=False, error=e)
             raise
+        finally:
+            self._clear_ephemeral_skill_state()
 
     async def astream_invoke_with_tool(
         self,
@@ -1387,6 +1417,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         raw_query = trace_query if trace_query is not None else query
         self._current_query = query
+        self._clear_ephemeral_skill_state()
         query = self.skill_manager.on_before_invoke(query)
         self.callback_manager.on_agent_start(self.name, query)
 
@@ -1565,6 +1596,7 @@ class BasicAgent(BaseAgent):
                                 tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                                 messages.append(tool_message)
                                 turn_history.append(tool_message)
+                                self._maybe_inject_runtime_skill_context(tool_name=tool_name, messages=messages)
 
                             max_iter -= 1
                             should_continue = True
@@ -1646,6 +1678,8 @@ class BasicAgent(BaseAgent):
                 "error": str(e),
             }
             raise
+        finally:
+            self._clear_ephemeral_skill_state()
 
  
     @override
@@ -1801,6 +1835,28 @@ class BasicAgent(BaseAgent):
             )
             order += 10
 
+        skill_policy_prompt = self.skill_manager.build_skill_policy_prompt()
+        if skill_policy_prompt:
+            blocks.append(
+                PromptBlock(
+                    name="skill_policy",
+                    content=skill_policy_prompt,
+                    order=order,
+                )
+            )
+            order += 10
+
+        skill_listing_prompt = self.skill_manager.build_skill_listing_prompt()
+        if skill_listing_prompt:
+            blocks.append(
+                PromptBlock(
+                    name="skill_listing",
+                    content=skill_listing_prompt,
+                    order=order,
+                )
+            )
+            order += 10
+
         memory_prompt = self._build_memory_prompt() if include_memory else ""
         if memory_prompt:
             blocks.append(
@@ -1828,6 +1884,38 @@ class BasicAgent(BaseAgent):
         blocks.extend(self._get_extension_prompt_blocks(start_order=order))
 
         return blocks
+
+    def _append_runtime_skill_context_message(self, messages: list[Any]) -> None:
+        """向当前推理链追加临时 Skill 正文上下文，但不写入长期 history。"""
+        runtime_prompt = self.skill_manager.build_runtime_skill_context_prompt()
+        if not runtime_prompt:
+            return
+        messages.append(
+            MetaUserMessage(
+                runtime_prompt,
+                metadata={
+                    "source": "skill_tool",
+                    "kind": "runtime_skill_context",
+                },
+            )
+        )
+
+    def _clear_ephemeral_skill_state(self) -> None:
+        """清理当前轮的临时 Skill 状态。"""
+        self.skill_manager.clear_ephemeral_state()
+
+    def _maybe_inject_runtime_skill_context(
+        self,
+        *,
+        tool_name: str,
+        messages: list[Any],
+    ) -> None:
+        """当 skill_tool 被调用后，将临时 Skill 正文上下文注入当前推理链。"""
+        if tool_name != "skill_tool":
+            return
+        if not self.skill_manager.has_runtime_skill_context():
+            return
+        self._append_runtime_skill_context_message(messages)
 
     def _get_extension_prompt_blocks(self, start_order: int) -> list[PromptBlock]:
         """

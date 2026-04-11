@@ -100,6 +100,17 @@ class DummySkill(BaseSkill):
         return response
 
 
+class OnDemandDummySkill(DummySkill):
+    """用于测试 on-demand Skill 不进入 resident system prompt。"""
+
+    def __init__(self, name: str = "on_demand_dummy", prompt: str = "## On Demand\nOnly inject on demand."):
+        super().__init__(name=name, prompt=prompt)
+        self.config.exposure_mode = "on_demand"
+        self.config.execution_mode = "inline"
+        self.config.listing_description = "按需调用的测试技能"
+        self.config.when_to_use = "当任务明确需要临时技能正文时"
+
+
 class QueryModifySkill(BaseSkill):
     """修改 query 的 Skill，用于测试拦截链"""
 
@@ -506,6 +517,10 @@ prompt: |
             assert skill.config.version == "1.0"
             assert "test" in skill.config.tags
             assert skill.config.priority == 7
+            assert skill.get_exposure_mode() == "on_demand"
+            assert skill.get_execution_mode() == "inline"
+            assert skill.config.source_type == "yaml"
+            assert skill.config.source_path == path
             assert "Test Skill" in skill.get_prompt()
         finally:
             os.unlink(path)
@@ -628,6 +643,10 @@ This is a markdown-based skill prompt.
             assert skill.config.description == "A markdown skill"
             assert skill.config.version == "2.0"
             assert skill.config.priority == 8
+            assert skill.get_exposure_mode() == "on_demand"
+            assert skill.get_execution_mode() == "inline"
+            assert skill.config.source_type == "markdown"
+            assert skill.config.source_path == path
             assert "Markdown Skill" in skill.get_prompt()
             assert "Feature 1" in skill.get_prompt()
         finally:
@@ -760,6 +779,28 @@ class TestSkillRegistry:
         names = [a["name"] for a in available]
         assert "dummy" in names
 
+    def test_manifest_is_available(self):
+        self.registry.register_class(DummySkill, "dummy")
+        manifest = self.registry.get_manifest("dummy")
+        assert manifest.name == "dummy"
+        assert manifest.source_type == "python"
+
+    def test_search_uses_manifest_fields(self):
+        skill = OnDemandDummySkill(name="runtime_helper")
+        self.registry.register_factory("runtime_helper", lambda: skill)
+        self.registry.update_metadata(
+            "runtime_helper",
+            description="临时技能辅助器",
+            tags=["runtime", "helper"],
+            listing_description="用于运行时注入临时技能说明",
+            when_to_use="当你需要临时技能上下文或 runtime skill context 时",
+            tool_names=skill.get_tool_names(),
+        )
+        results = self.registry.search(query="runtime skill context")
+        assert results
+        assert results[0]["name"] == "runtime_helper"
+        assert "用于运行时注入临时技能说明" in results[0]["listing_description"]
+
     def test_list_available_names(self):
         self.registry.register_class(DummySkill, "dummy")
         self.registry.register_factory("factory", lambda: DummySkill())
@@ -847,6 +888,38 @@ class TestSkillAgentIntegration:
 
         # prompt 应该为空
         assert manager.build_skills_prompt() == ""
+
+    def test_on_demand_skill_not_in_resident_prompt(self):
+        agent = _make_mock_agent()
+        manager = SkillManager()
+        manager.bind_agent(agent)
+
+        skill = OnDemandDummySkill()
+        manager.register(skill)
+
+        assert skill.is_active
+        assert agent.tool_registry.has_tool("on_demand_dummy_tool")
+        assert manager.build_skills_prompt() == ""
+        assert "on_demand_dummy" in manager.build_skill_listing_prompt()
+        assert "## Skill 使用规则" in manager.build_skill_policy_prompt()
+
+    def test_runtime_skill_context_prompt(self):
+        agent = _make_mock_agent()
+        manager = SkillManager()
+        manager.bind_agent(agent)
+
+        skill = OnDemandDummySkill()
+        manager.register(skill)
+        manager.set_runtime_skill_context(skill, "## On Demand\nTemporary instructions.")
+
+        prompt = manager.build_runtime_skill_context_prompt()
+        assert "## 当前 Runtime Skill Context" in prompt
+        assert "<runtime-skill-context>" in prompt
+        assert '<skill-runtime-entry name="on_demand_dummy"' in prompt
+        assert "<skill-body>" in prompt
+        assert "Temporary instructions." in prompt
+        manager.clear_runtime_skill_context()
+        assert manager.build_runtime_skill_context_prompt() == ""
 
     def test_multiple_skills(self):
         """多个 Skill 共存"""
@@ -1061,7 +1134,7 @@ class TestMetaTools:
 
         # 注册一些 Skill 到 Registry（还未加载到 Manager）
         def calc_factory(**kwargs):
-            return DummySkill(name="calculator")
+            return OnDemandDummySkill(name="calculator")
 
         self.registry.register_factory("calculator", calc_factory)
         self.registry.update_metadata(
@@ -1069,7 +1142,7 @@ class TestMetaTools:
         )
 
         def search_factory(**kwargs):
-            return DummySkill(name="web_search")
+            return OnDemandDummySkill(name="web_search")
 
         self.registry.register_factory("web_search", search_factory)
         self.registry.update_metadata(
@@ -1201,6 +1274,55 @@ class TestMetaTools:
         for tn in tool_names:
             assert not self.tool_registry.has_tool(tn)
 
+    def test_skill_tool_inline_injection(self):
+        from skill.meta_tools import SkillTool
+
+        tracker = set()
+        tool = SkillTool(self.registry, self.manager, tracker)
+        result = tool.run({"skill_name": "calculator"})
+
+        assert "已注入 Skill `calculator`" in result
+        assert "详细正文已注入当前 invoke 的后续推理链" in result
+        assert "<skill>" not in result
+        assert self.manager.has_skill("calculator")
+        assert self.manager.is_active("calculator")
+        assert self.manager.has_runtime_skill_context()
+        self.manager.clear_ephemeral_state()
+        assert not self.manager.has_skill("calculator")
+        assert not self.manager.has_runtime_skill_context()
+        assert "calculator" not in tracker
+
+    def test_skill_tool_restores_pre_registered_inactive_skill(self):
+        from skill.meta_tools import SkillTool
+
+        skill = OnDemandDummySkill(name="calculator")
+        skill.config.auto_activate = False
+        self.manager.register(skill)
+        assert self.manager.has_skill("calculator")
+        assert not self.manager.is_active("calculator")
+
+        tool = SkillTool(self.registry, self.manager, set())
+        result = tool.run({"skill_name": "calculator"})
+
+        assert "已注入 Skill `calculator`" in result
+        assert self.manager.is_active("calculator")
+
+        self.manager.clear_ephemeral_state()
+
+        assert self.manager.has_skill("calculator")
+        assert not self.manager.is_active("calculator")
+
+    def test_meta_tool_descriptions_reflect_new_priority(self):
+        from skill.meta_tools import SkillDiscoveryTool, SkillTool, LoadSkillTool
+
+        discovery = SkillDiscoveryTool(self.registry)
+        skill_tool = SkillTool(self.registry, self.manager, set())
+        loader = LoadSkillTool(self.registry, self.manager, set())
+
+        assert "优先使用 system prompt 中已有的 skill listing" in discovery.description
+        assert "优先根据 system prompt 里的 skill listing 直接调用此工具" in skill_tool.description
+        assert "兼容接口" in loader.description
+
     def test_meta_skill_loading(self):
         """测试 MetaSkill 管理"""
         from skill.meta_tools import MetaSkill
@@ -1211,9 +1333,11 @@ class TestMetaTools:
         assert self.manager.has_skill("meta_skill")
         # 验证工具注入到 ToolRegistry
         assert self.tool_registry.has_tool("skill_discovery_tool")
+        assert self.tool_registry.has_tool("skill_tool")
         assert self.tool_registry.has_tool("load_skill_tool")
         assert self.tool_registry.has_tool("unload_skill_tool")
         assert self.tool_registry.has_tool("skill_discovery_tool")
+        assert self.tool_registry.has_tool("skill_tool")
         assert self.tool_registry.has_tool("load_skill_tool")
         assert self.tool_registry.has_tool("unload_skill_tool")
 
@@ -1235,6 +1359,8 @@ class TestFolderSkillLoader:
             assert isinstance(skill, FolderSkill)
             assert skill.name == "my_folder_skill"
             assert skill.priority == 10
+            assert skill.get_exposure_mode() == "on_demand"
+            assert skill.get_execution_mode() == "inline"
             assert "Prompt Content" in skill.get_prompt()
             assert len(skill.get_tools()) == 0
 

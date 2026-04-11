@@ -59,6 +59,13 @@ class ExtraSkill(BaseSkill):
         return self._prompt
 
 
+class OnDemandSkill(ExtraSkill):
+    def __init__(self):
+        super().__init__(name="on_demand_skill", prompt="## On Demand Skill\nShould not stay in system prompt.")
+        self.config.exposure_mode = "on_demand"
+        self.config.execution_mode = "inline"
+
+
 class TestSystemPromptBlocks(unittest.TestCase):
     def test_system_prompt_template_keeps_block_order(self):
         blocks = [
@@ -152,6 +159,61 @@ class TestSystemPromptBlocks(unittest.TestCase):
         self.assertIn("### 6. 基于记忆回答前如何验证", prompt)
         self.assertIn("## 技能与扩展能力", prompt)
         self.assertIn("## Extra Skill", prompt)
+
+    def test_on_demand_skill_is_not_rendered_into_system_prompt(self):
+        llm = SpyEasyLLM()
+        agent = BasicAgent(name="assistant", llm=llm)
+        agent.with_skill(OnDemandSkill())
+
+        prompt = agent.get_enhanced_prompt()
+        block_names = [block.name for block in agent.get_system_prompt_blocks()]
+
+        self.assertIn("skill_policy", block_names)
+        self.assertIn("skill_listing", block_names)
+        self.assertNotIn("skills", block_names)
+        self.assertIn("## Skill 使用规则", prompt)
+        self.assertIn("直接调用 `skill_tool`", prompt)
+        self.assertIn("`load_skill_tool` / `unload_skill_tool` 是兼容接口", prompt)
+        self.assertIn("## 可用 Skills", prompt)
+        self.assertIn("`on_demand_skill`", prompt)
+        self.assertNotIn("## On Demand Skill", prompt)
+
+    def test_runtime_skill_context_is_not_part_of_system_prompt(self):
+        llm = SpyEasyLLM()
+        agent = BasicAgent(name="assistant", llm=llm)
+        skill = OnDemandSkill()
+        agent.with_skill(skill)
+        agent.skill_manager.set_runtime_skill_context(
+            skill,
+            body="## On Demand Skill\nShould be injected only for the current turn.",
+        )
+
+        prompt = agent.get_enhanced_prompt()
+        block_names = [block.name for block in agent.get_system_prompt_blocks()]
+
+        self.assertNotIn("runtime_skill_context", block_names)
+        self.assertNotIn("## 当前 Runtime Skill Context", prompt)
+
+    def test_runtime_skill_context_is_injected_as_meta_user_message(self):
+        llm = SpyEasyLLM()
+        agent = BasicAgent(name="assistant", llm=llm)
+        skill = OnDemandSkill()
+        agent.with_skill(skill)
+        agent.skill_manager.set_runtime_skill_context(
+            skill,
+            body="## On Demand Skill\nShould be injected only for the current turn.",
+        )
+
+        messages: list[Any] = []
+        agent._append_runtime_skill_context_message(messages)
+
+        self.assertEqual(len(messages), 1)
+        injected = messages[0]
+        self.assertEqual(getattr(injected, "role", None), "user")
+        self.assertEqual(injected.metadata.get("is_meta"), True)
+        self.assertEqual(injected.metadata.get("source"), "skill_tool")
+        self.assertIn("## 当前 Runtime Skill Context", injected.content)
+        self.assertIn('<skill-runtime-entry name="on_demand_skill"', injected.content)
 
     def test_react_agent_exposes_react_specific_blocks(self):
         llm = SpyEasyLLM()

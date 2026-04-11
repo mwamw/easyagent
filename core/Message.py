@@ -26,6 +26,16 @@ class UserMessage(Message):
         super().__init__(role="user", content=content, **kwargs)
 
 
+class MetaUserMessage(UserMessage):
+    """系统内部注入的 meta user message。"""
+
+    def __init__(self, content: str, **kwargs):
+        metadata = dict(kwargs.pop("metadata", {}) or {})
+        metadata["is_meta"] = True
+        kwargs["metadata"] = metadata
+        super().__init__(content=content, **kwargs)
+
+
 class AssistantMessage(Message):
     role: MessageRole = "assistant"
     

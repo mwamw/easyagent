@@ -1,6 +1,6 @@
 # EasyAgent Skill 技能系统使用指南
 
-> **版本**: 1.0.0 | **最后更新**: 2026-03-27
+> **版本**: 1.1.0 | **最后更新**: 2026-04-11
 
 ## 目录
 
@@ -29,9 +29,25 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 | **ContextSource** | 上下文来源（可选，注入到 ContextManager） |
 | **生命周期钩子** | activate / deactivate / before_invoke / after_invoke |
 
+### 当前 Skill 模型
+
+从 1.1 开始，Skill 被明确分成两类：
+
+| 类型 | 说明 |
+|------|------|
+| `resident` | Skill 正文进入 system prompt，适合 memory、全局规则和少量基础能力 |
+| `on_demand` | Skill 正文不常驻在 system prompt，只出现在 skill listing；当模型调用 `skill_tool` 时，正文会以 runtime skill context 形式注入当前推理链 |
+
+同时，Skill 的执行方式分为：
+
+| 模式 | 说明 |
+|------|------|
+| `mount` | 激活后长期挂载工具/上下文 |
+| `inline` | 以按需正文注入为主，并在需要时挂载工具 |
+
 ### 设计理念
 
-- **按需加载**：Agent 只挂载当前需要的 Skill，避免上下文窗口膨胀
+- **按需加载**：on-demand Skill 默认不常驻 system prompt，只在需要时注入
 - **运行时动态切换**：可以在运行期间随时激活/停用 Skill
 - **轻量定义与目录封装**：支持零代码的 YAML/Markdown 定义，也支持含 `tools.py` 的 Claude Code 风格文件夹
 - **依赖管理**：Skill 之间可以声明依赖关系，自动级联激活
@@ -71,8 +87,8 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 |------|------|
 | `BaseSkill` | Skill 抽象基类，定义标准接口 |
 | `SkillConfig` | Skill 配置数据类（Pydantic Model） |
-| `SkillManager` | 管理 Skill 生命周期，注入工具和 prompt |
-| `SkillRegistry` | 全局 Skill 类/工厂注册中心，支持自动发现 |
+| `SkillManager` | 管理 Skill 生命周期、resident prompt、skill listing 和 runtime skill context |
+| `SkillRegistry` | 全局 Skill 类/工厂注册中心，支持自动发现和 manifest 搜索 |
 | `YAMLSkillLoader` | 从 YAML 文件加载 Skill |
 | `MarkdownSkillLoader` | 从 Markdown 文件加载 Skill |
 | `FolderSkillLoader` | 从符合 Claude Code 风格的目录中加载 Skill 及 Python 工具 |
@@ -81,7 +97,7 @@ Skill（技能）系统是 EasyAgent 框架的**模块化能力注入架构**。
 
 ## 快速开始
 
-### 1. 使用内置 Skill
+### 1. 使用 resident Skill
 
 ```python
 from agent.BasicAgent import BasicAgent
@@ -127,6 +143,8 @@ class TranslateSkill(BaseSkill):
             version="1.0.0",
             tags=["translate", "language", "i18n"],
             priority=5,
+            exposure_mode="resident",
+            execution_mode="mount",
         )
         super().__init__(config)
 
@@ -144,16 +162,39 @@ class TranslateSkill(BaseSkill):
 agent.with_skill(TranslateSkill())
 ```
 
-### 3. 零代码 YAML Skill
+### 3. 使用 on-demand Skill
+
+```python
+from agent.BasicAgent import BasicAgent
+from core.llm import EasyLLM
+from skill.registry import SkillRegistry
+from skill.meta_tools import MetaSkill
+
+registry = SkillRegistry.instance()
+registry.discover_from_directory("./skills")
+
+agent = BasicAgent(name="assistant", llm=EasyLLM())
+agent.with_skill(MetaSkill(registry, agent.skill_manager))
+
+# 主 system prompt 会包含 skill policy + skill listing
+# 具体某个 skill 的正文不会常驻，模型会在需要时调用 skill_tool
+result = agent.invoke("请使用合适的技能帮我完成哈希计算")
+```
+
+### 4. 零代码 YAML Skill
 
 创建 `skills/my_skill.yaml`：
 
 ```yaml
 name: code_reviewer
 description: "代码审查技能"
+listing_description: "审查代码质量、发现潜在 bug"
+when_to_use: "当用户要求 review 代码、排查代码质量问题时"
 version: "1.0"
 tags: [code, review]
 priority: 5
+exposure_mode: on_demand
+execution_mode: inline
 tools:
   - builtin: calculator  # 引用内置工具
 prompt: |
@@ -170,7 +211,7 @@ prompt: |
 from skill.yaml_loader import YAMLSkillLoader
 
 skill = YAMLSkillLoader.load("skills/my_skill.yaml")
-agent.with_skill(skill)
+agent.with_skill(skill)  # 注册到当前 Agent；由于是 on_demand，不会常驻正文
 ```
 
 ---
@@ -192,6 +233,10 @@ config = SkillConfig(
     priority=5,                   # 优先级（数值越大，prompt 越靠前）
     auto_activate=True,           # 注册到 SkillManager 时是否自动激活
     dependencies=["other_skill"], # 依赖的其他 Skill 名称
+    listing_description="简短描述", # skill listing 用的描述
+    when_to_use="什么时候调用",    # 告诉模型何时该使用这个 Skill
+    exposure_mode="resident",     # resident / on_demand
+    execution_mode="mount",       # mount / inline
     extra={"key": "value"},       # 自定义扩展配置
 )
 ```
@@ -205,6 +250,12 @@ config = SkillConfig(
 | `priority` | `int` | `0` | 优先级，越大越靠前 |
 | `auto_activate` | `bool` | `True` | 注册时自动激活 |
 | `dependencies` | `List[str]` | `[]` | 依赖列表 |
+| `listing_description` | `str` | `""` | 用于 skill listing 的简短描述 |
+| `when_to_use` | `str` | `""` | 告诉模型何时应调用此 Skill |
+| `exposure_mode` | `str` | `"resident"` | `resident` 或 `on_demand` |
+| `execution_mode` | `str` | `"mount"` | `mount` 或 `inline` |
+| `source_type` | `str` | `"python"` | Skill 来源类型 |
+| `source_path` | `str` | `""` | Skill 定义路径 |
 | `extra` | `Dict` | `{}` | 自定义配置 |
 
 ### 核心抽象方法
@@ -218,7 +269,7 @@ class MySkill(BaseSkill):
         return [MyTool()]
 
     def get_prompt(self) -> str:
-        """返回注入到 system prompt 的指导文本"""
+        """返回 Skill 正文。resident 会常驻；on_demand 会按需注入"""
         return "## 使用指南\n..."
 ```
 
@@ -330,10 +381,16 @@ manager.active_skill_names      # 已激活 Skill 名称列表
 ### Prompt 聚合
 
 ```python
-prompt = manager.build_skills_prompt()
+prompt = manager.build_skills_prompt()           # 仅 resident skills
+listing = manager.build_skill_listing_prompt()   # on-demand skill listing
+policy = manager.build_skill_policy_prompt()     # skill 使用规则
 ```
 
-将所有激活 Skill 的 prompt 按 **priority 降序** 拼接为单个文本。`BasicAgent.get_enhanced_prompt()` 内部会自动调用此方法。
+从 1.1 开始：
+
+- `build_skills_prompt()` 只聚合 `resident` Skill 正文
+- `build_skill_listing_prompt()` 暴露 `on_demand` Skill 目录
+- `build_runtime_skill_context_prompt()` 返回本轮按需注入的 Skill 正文上下文
 
 ### 拦截链
 
@@ -737,13 +794,16 @@ agent.remove_skill("calculator")
 
 ### Prompt 自动注入
 
-在 `BasicAgent.get_enhanced_prompt()` 中，Skill 的 prompt 会自动拼接到系统提示词末尾：
+在 `BasicAgent.get_enhanced_prompt()` 中，Skill 相关内容会分层注入：
 
 ```python
 # BasicAgent.get_enhanced_prompt() 内部逻辑：
 enhanced_prompt = f"...基础 prompt..."
-enhanced_prompt += self._build_memory_prompt()   # 记忆系统 prompt
-enhanced_prompt += self._build_skills_prompt()   # 所有激活 Skill 的 prompt
+enhanced_prompt += self.skill_manager.build_skill_policy_prompt()          # on-demand skill 使用规则
+enhanced_prompt += self.skill_manager.build_skill_listing_prompt()         # on-demand skill 目录
+enhanced_prompt += self._build_memory_prompt()                            # 记忆系统 prompt
+enhanced_prompt += self.skill_manager.build_skills_prompt()               # resident skills
+enhanced_prompt += self.skill_manager.build_runtime_skill_context_prompt() # 本轮临时 skill 正文
 ```
 
 ### invoke 拦截链
@@ -869,7 +929,7 @@ class MySkill(BaseSkill):
 
 ### 7. 动态按需加载（模式 B）
 
-当 Agent 拥有大量 Skill（例如 100 个 Skill、300 个工具）时，全部预加载会导致 Token 爆炸和工具选择幻觉。**模式 B** 通过 3 个「元工具」让 LLM 在运行时**自主发现、加载、卸载** Skill。
+当 Agent 拥有大量 Skill（例如 100 个 Skill、300 个工具）时，全部预加载会导致 Token 爆炸和工具选择幻觉。**模式 B** 通过 `skill listing + skill_tool` 让 LLM 在运行时按需调用 Skill；`load/unload` 现在保留为兼容路径。
 
 #### 工作流程
 
@@ -880,19 +940,20 @@ LLM: 发现当前工具箱没有计算工具
   ↓
 LLM: 调用 skill_discovery_tool(query="math calculation")
   ↓  返回: [{"name": "calculator", "description": "数学计算工具", "tags": ["math"]}]
+LLM: 调用 skill_tool(skill_name="calculator")
+  ↓  返回: "已注入 Skill `calculator` ... <skill>...</skill>"
+LLM: 基于 runtime skill context 使用 calculator_tool 完成计算
+
+可选兼容路径：
 LLM: 调用 load_skill_tool(skill_name="calculator")
-  ↓  返回: "成功加载 Skill 'calculator'。新增工具: ['calculator_tool']"
-LLM: 使用 calculator_tool 完成计算
-  ↓
-LLM: 调用 unload_skill_tool(skill_name="calculator")
-  ↓  返回: "成功卸载 Skill 'calculator'。已移除工具: ['calculator_tool']"
+LLM: 任务结束后调用 unload_skill_tool(skill_name="calculator")
 ```
 
 #### 快速上手
 
 ```python
 from skill.registry import SkillRegistry
-from skill.meta_tools import register_meta_tools
+from skill.meta_tools import MetaSkill
 from skill.builtin.calculator_skill import CalculatorSkill
 
 # 1. 把所有 Skill 注册到全局 Registry（启动时一次性完成）
@@ -904,42 +965,50 @@ registry.update_metadata("calculator", description="数学计算工具", tags=["
 # 也可以从目录批量发现
 # registry.discover_from_directory("./skills/")
 
-# 2. 创建 Agent（不预加载任何 Skill）
+# 2. 创建 Agent（不预加载其他业务 Skill）
 agent = BasicAgent(name="assistant", llm=llm, enable_tool=True)
 
-# 3. 注册 3 个元工具到 Agent 的工具箱
-register_meta_tools(
-    registry=registry,
-    manager=agent.skill_manager,
-    tool_registry=agent.tool_registry,
-)
+# 3. 给 Agent 加载 MetaSkill
+agent.with_skill(MetaSkill(registry, agent.skill_manager))
 
-# 4. Agent 启动时只有 3 个元工具，LLM 根据需要自行加载其他 Skill
+# 4. Agent 启动时会看到 skill policy + skill listing，并通过 skill_tool 按需调用
 result = agent.invoke("帮我算一下 2^100 + 3^50")
 ```
 
-#### 三个元工具
+#### 当前元工具
 
 | 工具 | 名称 | 说明 |
 |------|------|------|
-| `SkillDiscoveryTool` | `skill_discovery_tool` | 按关键词/标签搜索 Registry 中可用的 Skill |
-| `LoadSkillTool` | `load_skill_tool` | 从 Registry 创建 Skill 实例并加载到当前 Agent |
-| `UnloadSkillTool` | `unload_skill_tool` | 卸载不再需要的 Skill，释放上下文空间 |
+| `SkillDiscoveryTool` | `skill_discovery_tool` | 按关键词搜索 Registry 中可用的 Skill manifest |
+| `SkillTool` | `skill_tool` | 按需注入 Skill 正文，并在需要时挂载工具/上下文 |
+| `LoadSkillTool` | `load_skill_tool` | 兼容路径：把 Skill 长期加载到当前 Agent |
+| `UnloadSkillTool` | `unload_skill_tool` | 兼容路径：卸载动态加载的 Skill |
 
 #### SkillDiscoveryTool 参数
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `query` | `str` | 搜索关键词（匹配 name / description / tags） |
-| `tags` | `List[str]` | 按标签过滤（可选） |
+| `query` | `str` | 搜索关键词（匹配 name / listing_description / when_to_use / tags / tool_names） |
 
-#### LoadSkillTool 参数
+#### SkillTool 参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `skill_name` | `str` | 要按需调用的 Skill 名称 |
+
+调用 `skill_tool` 后：
+
+- Skill 正文会进入本轮 `runtime skill context`
+- 如果 Skill 提供工具，会挂载到当前 Agent
+- 正文不会变成长期常驻 system prompt
+
+#### LoadSkillTool 参数（兼容模式）
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `skill_name` | `str` | Skill 注册名称 |
 
-**智能行为**：
+**兼容行为**：
 - 如果 Skill 已加载且激活 → 提示无需重复加载
 - 如果 Skill 已注册但停用 → 自动重新激活
 - 如果 Skill 不存在 → 返回可用列表
@@ -953,7 +1022,7 @@ result = agent.invoke("帮我算一下 2^100 + 3^50")
 #### SkillRegistry.search() — 搜索 API
 
 ```python
-# 按关键词搜索
+# 按关键词搜索（基于 manifest）
 results = registry.search("math calculation")
 
 # 按标签搜索
@@ -1042,7 +1111,10 @@ registry.update_metadata(
 | `has_skill(name) → bool` | 检查是否已注册 |
 | `is_active(name) → bool` | 检查是否已激活 |
 | `list_skills() → List[Dict]` | 所有 Skill 信息列表 |
-| `build_skills_prompt() → str` | 聚合 prompt |
+| `build_skills_prompt() → str` | 聚合 resident skills prompt |
+| `build_skill_policy_prompt() → str` | 生成 on-demand skill 使用规则 |
+| `build_skill_listing_prompt() → str` | 生成 on-demand skill listing |
+| `build_runtime_skill_context_prompt() → str` | 生成当前回合 runtime skill context |
 | `on_before_invoke(query) → str` | 代理前置拦截 |
 | `on_after_invoke(query, response) → str` | 代理后置拦截 |
 
@@ -1073,7 +1145,10 @@ registry.update_metadata(
 | `discover_from_directory(path) → List[str]` | 目录自动发现 |
 | `has(name) → bool` | 检查是否注册 |
 | `list_available_names() → List[str]` | 注册名称列表 |
-| `list_available() → List[Dict]` | 详细信息列表 |
+| `list_available() → List[Dict]` | manifest 列表 |
+| `list_manifests() → List[SkillManifest]` | manifest 列表 |
+| `get_manifest(name)` | 获取单个 manifest |
+| `load_body(name)` | 加载 Skill 正文 |
 
 ---
 
@@ -1118,7 +1193,7 @@ registry.update_metadata(
 
 ### Q: 如何保证 Prompt 的顺序？
 
-通过 `priority` 字段控制。`build_skills_prompt()` 按 priority **降序** 排列，数值越大的 Skill 的 prompt 越靠前。
+通过 `priority` 字段控制。`resident` Skill 的 `build_skills_prompt()` 和 `on-demand` 的 listing/runtime context 都按 priority 处理。
 
 ### Q: 可以在 YAML/Markdown Skill 中引用自定义工具吗？
 

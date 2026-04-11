@@ -89,6 +89,13 @@ class FolderSkillLoader:
             content = f.read()
 
         base_md_skill = MarkdownSkillLoader._parse_content(content, md_file)
+        if not base_md_skill.config.source_path:
+            base_md_skill.config.source_path = dir_path
+        base_md_skill.config.source_type = "folder"
+        if not base_md_skill.config.exposure_mode:
+            base_md_skill.config.exposure_mode = "on_demand"
+        if not base_md_skill.config.execution_mode:
+            base_md_skill.config.execution_mode = "inline"
         
         # 2. 检查是否有 tools.py, 如果有则尝试动态加载里面导出的工具
         dynamic_tools = []

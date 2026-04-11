@@ -1,21 +1,21 @@
 """
-Skill 元工具 — LLM 动态按需加载 Skill（模式 B）
+Skill 元工具 — LLM 动态发现与调用 Skill
 
-提供 3 个元工具，让 LLM 在运行时自主发现、加载、卸载 Skill：
+优先模式：
+1. SkillDiscoveryTool  — 查看可用 Skill listing
+2. SkillTool           — 按需注入 Skill 正文，并在必要时挂载工具/上下文
 
-1. SkillDiscoveryTool  — 按关键词搜索可用 Skill
-2. LoadSkillTool       — 动态加载 Skill 到当前 Agent
-3. UnloadSkillTool     — 卸载不需要的 Skill
+兼容模式：
+3. LoadSkillTool       — 动态加载 Skill 到当前 Agent（legacy mount）
+4. UnloadSkillTool     — 卸载不需要的 Skill
 
-典型调用流程::
+推荐调用流程::
 
     用户: "帮我算一下 2^100"
-    LLM:  调用 skill_discovery_tool(query="math calculation")
-    系统:  返回 [{"name": "calculator", ...}]
-    LLM:  调用 load_skill_tool(skill_name="calculator")
-    系统:  返回 "成功加载 Skill 'calculator'，新增工具: ['calculator_tool']"
+    LLM:  先查看 system prompt 中的 skill listing
+    LLM:  调用 skill_tool(skill_name="calculator")
+    系统:  返回 "已注入 Skill 'calculator' 的正文指导 ..."
     LLM:  使用 calculator_tool 完成计算
-    LLM:  调用 unload_skill_tool(skill_name="calculator")
 """
 from __future__ import annotations
 
@@ -35,13 +35,16 @@ logger = logging.getLogger(__name__)
 
 
 class SkillDiscoveryParams(BaseModel):
-    pass
+    query: str = Field(default="", description="按关键词筛选可用 Skill，可为空")
 
+
+class SkillRunParams(BaseModel):
+    skill_name: str = Field(description="要调用的 Skill 注册名称")
 
 
 class LoadSkillParams(BaseModel):
     skill_name: str = Field(
-        description="要加载的 Skill 注册名称（从 skill_discovery_tool 的返回结果中获取）",
+        description="要长期加载到当前 Agent 的 Skill 注册名称",
     )
 
 
@@ -70,31 +73,101 @@ class SkillDiscoveryTool(Tool):
         super().__init__(
             name="skill_discovery_tool",
             description=(
-                "获取所有可用的额外技能包(Skill)列表及描述。"
-                "当你发现当前工具箱中没有合适的工具时，调用此工具获取可加载的技能列表。"
+                "按关键词补充检索可用的额外技能包(Skill)列表。"
+                "优先使用 system prompt 中已有的 skill listing；只有当 listing 不足以判断、"
+                "需要按关键词筛选，或怀疑可用 Skill 集合发生变化时，再调用此工具。"
             ),
             parameters=SkillDiscoveryParams,
         )
         self._registry = registry
 
     def run(self, parameters: dict) -> str:
-        skills_desc = self._registry.get_skills_description()
-        if not skills_desc:
+        query = str(parameters.get("query", "")).strip()
+        skills = self._registry.search(query=query) if query else self._registry.list_available()
+        if not skills:
             return "当前没有可用的额外 Skill。"
+        return json.dumps(skills, ensure_ascii=False, indent=2)
 
-        lines = ["当前可用的额外技能如下："]
-        for name, desc in skills_desc.items():
-            lines.append(f"- 【{name}】: {desc}")
 
-        return "\n".join(lines)
+class SkillTool(Tool):
+    """
+    Skill 调用工具 — 按需注入 Skill 正文，并在必要时挂载能力。
+
+    该工具会：
+    1. 从 Registry 创建 Skill 实例
+    2. 将其工具/上下文挂载到当前 Agent（如需要）
+    3. 将 Skill 正文作为工具结果返回，供下一轮模型继续执行
+    """
+
+    def __init__(self, registry: "SkillRegistry", manager: "SkillManager", loaded_tracker: set):
+        super().__init__(
+            name="skill_tool",
+            description=(
+                "按需调用一个 Skill。优先根据 system prompt 里的 skill listing 直接调用此工具，"
+                "而不是先调用 skill_discovery_tool。调用后不会返回 Skill 的详细正文；"
+                "详细正文会以当前轮临时上下文的形式注入到后续推理链中；"
+                "如该 Skill 提供工具，也会仅为当前轮临时挂载，并在当前轮结束后自动完全卸载。"
+            ),
+            parameters=SkillRunParams,
+        )
+        self._registry = registry
+        self._manager = manager
+        self._loaded_tracker = loaded_tracker
+
+    def run(self, parameters: dict) -> str:
+        skill_name = parameters.get("skill_name", "")
+        if not skill_name:
+            return "错误：必须指定 skill_name"
+
+        if not self._registry.has(skill_name):
+            available = self._registry.list_available_names()
+            return (
+                f"错误：Skill '{skill_name}' 未在注册中心中找到。"
+                f"可用 Skill: {available}"
+            )
+
+        try:
+            existed_before = self._manager.has_skill(skill_name)
+            was_active_before = existed_before and self._manager.is_active(skill_name)
+            if self._manager.has_skill(skill_name):
+                skill = self._manager.get_skill(skill_name)
+                if not self._manager.is_active(skill_name):
+                    self._manager.activate(skill_name)
+            else:
+                skill = self._registry.create(skill_name)
+                self._manager.register(skill)
+                if not self._manager.is_active(skill_name):
+                    self._manager.activate(skill_name)
+
+            if skill.get_exposure_mode() == "on_demand":
+                self._manager.mark_temporary_skill_mount(
+                    skill_name,
+                    created=not existed_before,
+                    was_active=bool(was_active_before),
+                )
+            self._manager.record_invoked_skill(skill)
+
+            body = skill.get_body_prompt().strip()
+            if not body:
+                body = "（该 Skill 未提供额外正文指令）"
+            self._manager.set_runtime_skill_context(skill, body, source="skill_tool")
+
+            return (
+                f"已注入 Skill `{skill_name}`。\n"
+                "该 Skill 的详细正文已注入当前 invoke 的后续推理链，请直接基于当前新增上下文继续执行。\n"
+                "注意：该 Skill 的工具挂载和正文上下文都只对当前 invoke 有效；下一次新的 invoke 如需继续使用，必须重新调用 `skill_tool`。"
+            )
+        except Exception as e:
+            logger.error("调用 Skill '%s' 失败: %s", skill_name, e)
+            return f"调用 Skill '{skill_name}' 失败: {e}"
 
 
 class LoadSkillTool(Tool):
     """
-    Skill 加载工具 — 动态加载 Skill 到当前 Agent
+    Skill 加载工具 — 兼容路径：动态加载 Skill 到当前 Agent
 
-    LLM 从 skill_discovery_tool 的返回结果中选择一个 Skill，
-    调用此工具将其加载到当前 Agent 的工具箱中。
+    仅在明确需要将某个 Skill 长期挂载到当前 Agent 时使用。
+    对于大多数临时任务，优先使用 skill_tool。
     """
 
     def __init__(self, registry: "SkillRegistry", manager: "SkillManager", loaded_tracker: set):
@@ -107,9 +180,9 @@ class LoadSkillTool(Tool):
         super().__init__(
             name="load_skill_tool",
             description=(
-                "加载一个技能包(Skill)到当前工具箱。"
-                "请先通过 skill_discovery_tool 获取可用 Skill，"
-                "然后使用返回的 name 调用此工具加载。"
+                "兼容接口：将一个 Skill 长期加载到当前 Agent。"
+                "只有在你明确需要让某个 Skill 在后续多轮持续保持激活时才使用；"
+                "大多数场景优先使用 skill_tool。"
             ),
             parameters=LoadSkillParams,
         )
@@ -180,8 +253,9 @@ class UnloadSkillTool(Tool):
         super().__init__(
             name="unload_skill_tool",
             description=(
-                "卸载你动态加载的技能包(Skill)。"
-                "当不再需要某个技能时，调用此工具卸载。注意：你只能卸载自己加载过的技能。"
+                "兼容接口：卸载你长期动态加载的技能包(Skill)。"
+                "当不再需要某个通过 load_skill_tool 挂载的技能时，调用此工具卸载。"
+                "注意：你只能卸载自己加载过的技能。"
             ),
             parameters=UnloadSkillParams,
         )
@@ -230,7 +304,7 @@ from skill.base import BaseSkill, SkillConfig
 class MetaSkill(BaseSkill):
     """
     负责动态管理技能能力的超级技能
-    提供 skill_discovery_tool, load_skill_tool, unload_skill_tool
+    提供 skill_discovery_tool, skill_tool, load_skill_tool, unload_skill_tool
     """
 
     def __init__(self, registry: "SkillRegistry", manager: "SkillManager"):
@@ -238,15 +312,19 @@ class MetaSkill(BaseSkill):
             name="meta_skill",
             description="动态技能加载和管理",
             priority=100, # 高优先级
+            listing_description="查看可用 Skills，并按需调用/挂载它们",
+            when_to_use="当前能力不足，需要额外技能目录或按需 Skill 指令时",
         )
         super().__init__(config)
         self._registry = registry
         self._manager = manager
+        self._manager.bind_registry(registry)
         # 跟踪此 Agent 运行时动态加载的技能
         self._dynamically_loaded_skills = set()
         
         self._tools = [
             SkillDiscoveryTool(registry),
+            SkillTool(registry, manager, self._dynamically_loaded_skills),
             LoadSkillTool(registry, manager, self._dynamically_loaded_skills),
             UnloadSkillTool(manager, self._dynamically_loaded_skills),
         ]
@@ -256,10 +334,7 @@ class MetaSkill(BaseSkill):
 
     def get_prompt(self) -> str:
         return (
-            "## 动态技能组装能力\n"
-            "如果你发现完成当前任务需要某些你尚未拥有的额外技能或工具，请使用 `skill_discovery_tool` 查看系统中可用的额外技能包列表。\n"
-            "当你确定想使用某个技能时，通过 `load_skill_tool` 将其装载，装载后你将获得对应的新能力。\n"
-            "完成任务之后，为了释放上下文不再占据资源，请使用 `unload_skill_tool` 卸载你刚才加载过的技能。"
+            "## 动态技能管理工具\n"
+            "优先查看主系统提示词中的 skill listing，并直接使用 `skill_tool` 按需调用 Skill。"
+            "`skill_discovery_tool` 只用于补充检索；`load_skill_tool` / `unload_skill_tool` 仅用于长期挂载兼容场景。"
         )
-
-
