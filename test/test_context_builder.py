@@ -19,10 +19,12 @@ from context.source.history_source import HistoryContextSource
 from context.source.memory_source import MemoryContextSource
 from context.compressor.token_budget import TokenBudgetCompressor
 from context.compressor.sliding_window import SlidingWindowCompressor
+from context.compressor.history import RuleBasedHistoryCompactor, LLMHistoryCompactor
 from context.formatter.plain import PlainFormatter
 from context.formatter.xml import XMLFormatter
 from context.formatter.markdown import MarkdownFormatter
 from context.token.budget import TokenBudget
+from context.token.counter import TokenCounter
 from manual_test_runner import run_manual_tests, exit_with_status
 
 
@@ -72,6 +74,16 @@ class MockMemoryManage:
         self.memory_types = {
             "working": MockWorkingMemory(memories)
         }
+
+
+class MockHistoryLLM:
+    def __init__(self, response: str):
+        self.response = response
+        self.last_messages = None
+
+    def invoke(self, messages, **kwargs):
+        self.last_messages = messages
+        return self.response
 
 
 # ============================================================
@@ -266,6 +278,149 @@ class TestContextBuilder(unittest.TestCase):
         self.assertIsInstance(messages[1]["content"], list)
         self.assertEqual(messages[1]["content"][1]["type"], "tool_use")
 
+    def test_build_messages_compacts_history_into_summary_and_preserves_order(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=260),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        history = [
+            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
+            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
+            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
+            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
+            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
+            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
+            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
+            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
+            {"role": "user", "content": "u5"},
+            {"role": "assistant", "content": "a5"},
+        ]
+
+        messages = builder.build_messages(
+            query="q",
+            history=history,
+            system_prompt="sys",
+        )
+
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertTrue(any(message["content"].startswith("历史摘要：") for message in messages[1:-1]))
+        self.assertIn({"role": "user", "content": "u5"}, messages)
+        self.assertIn({"role": "assistant", "content": "a5"}, messages)
+        self.assertEqual(messages[-1]["content"], "q")
+
+    def test_build_messages_respects_final_budget(self):
+        #测试 最终的 token 预算
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=70),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        builder.add_source(MockSource("rag", [
+            {"content": "R" * 30, "token_count": 30, "priority": 0.9},
+        ]))
+        history = [
+            {"role": "user", "content": "U" * 20},
+            {"role": "assistant", "content": "A" * 20},
+            {"role": "user", "content": "B" * 20},
+            {"role": "assistant", "content": "C" * 20},
+        ]
+
+        messages = builder.build_messages(
+            query="Q" * 10,
+            history=history,
+            system_prompt="S" * 20,
+        )
+
+        self.assertLessEqual(builder.budget.max_tokens, 120)
+        self.assertLessEqual(builder._counter.count_messages(messages), 120)
+
+    def test_build_messages_exposes_last_compacted_history(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=260),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        history = [
+            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
+            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
+            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
+            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
+            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
+            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
+            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
+            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
+            {"role": "user", "content": "u5"},
+            {"role": "assistant", "content": "a5"},
+        ]
+
+        builder.build_messages(
+            query="q",
+            history=history,
+            system_prompt="sys",
+        )
+
+        self.assertTrue(builder._last_history_was_compacted)
+        self.assertTrue(builder._last_compacted_history)
+        self.assertTrue(builder._last_compacted_history[0]["content"].startswith("历史摘要："))
+
+    def test_compact_history_preserves_provider_specific_dicts(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=30),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        history = [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "先检查天气"}],
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "weather",
+                "arguments": "{\"city\":\"Shanghai\"}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "sunny",
+            },
+            {"role": "user", "content": "继续总结"},
+            {"role": "assistant", "content": "已完成"},
+        ]
+
+        compacted = builder.compact_history(history, max_tokens=30)
+
+        self.assertEqual(compacted[-2]["role"], "user")
+        self.assertEqual(compacted[-1]["role"], "assistant")
+        self.assertLessEqual(builder.counter.count_messages(compacted), 30)
+
+    def test_llm_history_compactor_returns_summary_messages(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=120),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        mock_llm = MockHistoryLLM('[{"role":"user","content":"用户要求翻译并计算。"},{"role":"assistant","content":"之前已确认翻译工具不正确，3^22=31381059609。"}]')
+        builder.set_history_compactor(
+            LLMHistoryCompactor(
+                llm=mock_llm,
+                token_counter=builder.counter,
+                max_summary_messages=2,
+            )
+        )
+        history = [
+            {"role": "user", "content": "使用工具翻译下面的文字到英语并判断这个工具正确吗"},
+            {"role": "assistant", "content": "我先调用翻译工具和计算工具。"},
+            {"role": "user", "content": "并帮我计算3^22"},
+            {"role": "assistant", "content": "翻译工具不正确，3^22=31381059609"},
+        ]
+
+        compacted = builder.compact_history(history, max_tokens=80)
+
+        self.assertEqual(len(compacted), 2)
+        self.assertEqual(compacted[0]["role"], "user")
+        self.assertIn("3^22", compacted[1]["content"])
+
     def test_budget_limits_window(self):
         """预算限制窗口大小"""
         budget = TokenBudget(max_tokens=50)
@@ -317,6 +472,31 @@ class TestContextManager(unittest.TestCase):
         text = manager.build_context("查询", history=[])
         # 空来源应返回空（或仅历史）
         self.assertIsInstance(text, str)
+
+    def test_manager_exposes_last_compacted_history(self):
+        manager = ContextManager(
+            max_tokens=260,
+            budget=TokenBudget(max_tokens=260),
+        )
+        manager.builder._counter = TokenCounter(chars_per_token=1.0)
+        manager.set_history_compactor(RuleBasedHistoryCompactor(token_counter=manager.builder.counter))
+        history = [
+            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
+            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
+            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
+            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
+            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
+            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
+            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
+            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
+            {"role": "user", "content": "u5"},
+            {"role": "assistant", "content": "a5"},
+        ]
+
+        manager.build_messages("q", system_prompt="sys", history=history)
+        self.assertTrue(manager.last_history_was_compacted)
+        self.assertTrue(manager.last_compacted_history)
+        self.assertTrue(manager.last_compacted_history[0]["content"].startswith("历史摘要："))
 
     def test_with_source(self):
         """添加来源"""

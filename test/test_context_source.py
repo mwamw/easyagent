@@ -34,8 +34,9 @@ class TestHistoryContextSource(unittest.TestCase):
         items = source.fetch("查询")
         print(items)
         self.assertEqual(len(items), 2)
-        self.assertIn("user", items[0].content)
-        self.assertIn("assistant", items[1].content)
+        self.assertEqual(items[0].metadata["role"], "user")
+        self.assertEqual(items[1].metadata["role"], "assistant")
+        self.assertEqual(items[0].content, "你好")
 
     def test_message_objects(self):
         """Message 对象"""

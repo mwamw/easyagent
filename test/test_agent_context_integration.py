@@ -21,6 +21,8 @@ from agent.ConversationalAgent import ConversationalAgent
 from core.Message import UserMessage, AssistantMessage
 from core.llm import EasyLLM
 from context.manager import ContextManager
+from context.token.budget import TokenBudget
+from context.token.counter import TokenCounter
 from Tool.ToolRegistry import ToolRegistry
 from manual_test_runner import run_manual_tests, exit_with_status
 from Tool.ToolRegistry import ToolRegistry
@@ -108,6 +110,33 @@ class TestAgentContextIntegration(unittest.TestCase):
         agent.invoke("q")
         # ContextManager 接管完整起始消息：system + history(2) + current user
         self.assertEqual(len(self.llm.last_messages), 4)
+
+    def test_context_history_mode_replaces_history_after_compaction(self):
+        manager = ContextManager(
+            max_tokens=120,
+            budget=TokenBudget(max_tokens=120),
+            auto_history=True,
+        )
+        manager.builder._counter = TokenCounter(chars_per_token=1.0)
+        agent = BasicAgent(
+            name="a",
+            llm=self.llm,
+            context_manager=manager,
+            history_via_context_manager=True,
+            system_prompt="sys",
+        )
+        agent.history = [
+            UserMessage("用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"),
+            AssistantMessage("助手确认了第一轮需求，并详细解释了计划和限制条件。"),
+            UserMessage("用户继续补充第二轮长约束，包括工具调用和恢复要求。"),
+            AssistantMessage("助手总结第二轮长约束，并给出后续实现顺序。"),
+            UserMessage("u5"),
+            AssistantMessage("a5"),
+        ]
+
+        agent._build_start_messages("q")
+
+        self.assertTrue(any(isinstance(item, dict) and str(item.get("content", "")).startswith("历史摘要：") for item in agent.history))
 
 
 class TestReactContextIntegration(unittest.TestCase):

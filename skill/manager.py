@@ -6,9 +6,10 @@ SkillManager — Skill 管理器
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from .base import BaseSkill
+from prompt import build_skills_prompt_section
 
 if TYPE_CHECKING:
     from core.agent import BaseAgent
@@ -274,7 +275,10 @@ class SkillManager:
 
     # ==================== Prompt 聚合 ====================
 
-    def build_skills_prompt(self) -> str:
+    def build_skills_prompt(
+        self,
+        exclude_names: Optional[Iterable[str]] = None,
+    ) -> str:
         """
         将所有激活 Skill 的 prompt 片段拼接为一个完整的技能提示。
 
@@ -283,12 +287,15 @@ class SkillManager:
         Returns:
             拼接后的 prompt 文本，无激活 Skill 时返回空字符串
         """
+        excluded = set(exclude_names or [])
         active_skills = self.get_active_skills()
         if not active_skills:
             return ""
 
         prompt_parts = []
         for skill in active_skills:
+            if skill.name in excluded:
+                continue
             try:
                 skill_prompt = skill.get_prompt()
                 if skill_prompt and skill_prompt.strip():
@@ -299,7 +306,7 @@ class SkillManager:
         if not prompt_parts:
             return ""
 
-        return "你拥有以下技能：\n<skills>\n\n" + "\n\n".join(prompt_parts)
+        return build_skills_prompt_section(prompt_parts)
 
     # ==================== 生命周期代理 ====================
 

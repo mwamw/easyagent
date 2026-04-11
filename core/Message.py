@@ -22,6 +22,7 @@ class UserMessage(Message):
     role: MessageRole = "user"  # 设置默认值
     
     def __init__(self, content: str, **kwargs):
+        kwargs.pop('role', None)
         super().__init__(role="user", content=content, **kwargs)
 
 
@@ -29,6 +30,7 @@ class AssistantMessage(Message):
     role: MessageRole = "assistant"
     
     def __init__(self, content: str, **kwargs):
+        kwargs.pop('role', None)
         super().__init__(role="assistant", content=content, **kwargs)
 
 
@@ -36,6 +38,7 @@ class SystemMessage(Message):
     role: MessageRole = "system"
     
     def __init__(self, content: str, **kwargs):
+        kwargs.pop('role', None)
         super().__init__(role="system", content=content, **kwargs)
 
 
@@ -46,6 +49,7 @@ class ToolMessage(Message):
     
     def __init__(self, content: str, tool_call_id: Optional[str] = None, name: Optional[str] = None, **kwargs):
         # 把所有字段传给Pydantic
+        kwargs.pop('role', None)
         kwargs['tool_call_id'] = tool_call_id
         kwargs['name'] = name
         super().__init__(role="tool", content=content, **kwargs)
@@ -64,6 +68,7 @@ class GoogleToolMessage(Message):
     
     def __init__(self, content: str, tool_call_id: Optional[str] = None, name: Optional[str] = None, **kwargs):
         # 把所有字段传给Pydantic
+        kwargs.pop('role', None)
         kwargs['tool_call_id'] = tool_call_id
         kwargs['name'] = name
         super().__init__(role="function", content=content, **kwargs)

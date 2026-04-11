@@ -17,6 +17,7 @@ from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
+from prompt import PromptBlock
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +197,7 @@ class ReactAgent(BasicAgent):
             
             # 调用 LLM
             try:
+                self._capture_context_usage(messages, label="react_invoke")
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs) # type: ignore
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
@@ -255,46 +257,54 @@ class ReactAgent(BasicAgent):
     
     def _build_react_prompt(self) -> str:
         """构建 ReAct 系统提示词"""
-        tools_desc = self._format_tools_for_prompt()
-        
-        prompt = f"""你是一个智能助手，使用 ReAct（Reasoning + Acting）方法解决问题。
+        return self.get_system_prompt_template().render()
 
-## 工作流程
-你需要按照以下格式进行思考和行动：
+    def get_system_prompt_blocks(self) -> list[PromptBlock]:
+        """返回 ReAct Agent 的系统提示词分块。"""
+        blocks = [
+            PromptBlock(
+                name="identity",
+                content="你是一个智能助手，使用 ReAct（Reasoning + Acting）方法解决问题。",
+                order=0,
+            ),
+            PromptBlock(
+                name="react_workflow",
+                content="""## ReAct 工作流
+你需要严格按照以下结构推进任务：
 
 Thought: 分析当前情况，思考下一步应该做什么
 Action: 要使用的工具名称
 Action Input: 工具的输入参数（JSON 格式）
-
-工具执行后，你会看到：
 Observation: 工具返回的结果
 
-然后继续思考...
-
-当你有足够信息回答问题时：
+当你拥有足够信息时：
 Thought: 我现在知道最终答案了
 Final Answer: 对用户问题的完整回答
 
-## 可用工具
-{tools_desc}
+## ReAct 规则
+1. 每次只调用一个工具。
+2. 工具名称必须完全匹配。
+3. Action Input 必须是有效的 JSON。
+4. 仔细分析 Observation，再决定下一步。
+5. 不需要工具时，直接给出 Final Answer。
+6. 最终回答不要包含多余的思维链，只保留 Final Answer。""",
+                order=10,
+            ),
+        ]
+        blocks.extend(self._build_core_prompt_blocks(start_order=20, include_tool_policy=True))
+        tool_block = self._build_tool_inventory_block(order=70)
+        if tool_block is not None:
+            blocks.append(tool_block)
+        blocks.extend(self._build_shared_prompt_blocks(start_order=100))
+        return blocks
 
-## 注意事项
-1. 每次只调用一个工具
-2. 工具名称必须完全匹配
-3. Action Input 必须是有效的 JSON
-4. 仔细分析 Observation 再决定下一步
-5. 如果不需要工具，直接给出 Final Answer
+    def _should_include_tool_inventory_block(self) -> bool:
+        """ReAct 需要知道可用工具名称，因此注入简表。"""
+        return True
 
-{self.system_prompt or ''}
-"""
-
-        # 与 BasicAgent 对齐：注入记忆提示
-        prompt += self._build_memory_prompt()
-
-        # 注入所有激活 Skill 的 prompt
-        prompt += self._build_skills_prompt()
-
-        return prompt
+    def _tool_inventory_mode(self) -> str:
+        """ReAct 默认只需要工具名和简短描述。"""
+        return "compact"
     
     def _format_tools_for_prompt(self) -> str:
         """格式化工具描述"""
@@ -424,6 +434,7 @@ Final Answer: 对用户问题的完整回答
         messages = self._build_start_messages(query)
         
         try:
+            self._capture_context_usage(messages, label="react_direct_answer")
             response = self.llm.invoke(messages, temperature=temperature, **kwargs)
             self.add_message(UserMessage(query))
             self.add_message(AssistantMessage(response))

@@ -12,6 +12,18 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 from core.Exception import *
+from prompt import (
+    PromptBlock,
+    SystemPromptTemplate,
+    build_output_efficiency_section,
+    build_safety_section,
+    build_task_execution_section,
+    build_tone_style_section,
+    build_tool_policy_section,
+    build_visibility_section,
+    format_tool_catalog,
+    format_tool_inventory,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -89,11 +101,13 @@ class BasicAgent(BaseAgent):
         self._trace_turn_counter = 0
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
+        self._extension_prompt_blocks: list[PromptBlock] = []
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
     def _get_serializable_state(self) -> dict[str, Any]:
-        return {
+        state = super()._get_serializable_state()
+        state.update({
             "verbose_thinking": self.verbose_thinking,
             "history_via_context_manager": self.history_via_context_manager,
             "trace_history": self.get_trace_history(),
@@ -101,9 +115,11 @@ class BasicAgent(BaseAgent):
             "trace_event_counter": self._trace_event_counter,
             "trace_seq": self._trace_seq,
             "trace_turn_counter": self._trace_turn_counter,
-        }
+        })
+        return state
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
+        super()._restore_serializable_state(state)
         state = state or {}
         self.verbose_thinking = state.get("verbose_thinking", False)
         self.history_via_context_manager = state.get("history_via_context_manager", False)
@@ -642,6 +658,7 @@ class BasicAgent(BaseAgent):
                 messages = self._build_start_messages(query)
                 turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
                 
+                self._capture_context_usage(messages, label="invoke_plain")
                 self.callback_manager.on_llm_start(messages)
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs)
                 self.callback_manager.on_llm_end(response or "")
@@ -707,6 +724,7 @@ class BasicAgent(BaseAgent):
             display_state = self._new_stream_display_state()
             try:
                 turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
+                self._capture_context_usage(messages, label="stream_invoke_plain")
                 self.callback_manager.on_llm_start(messages)
                 for chunk in self.llm.stream(messages, temperature=temperature, **kwargs):
                     self._append_stream_text(display_state, "content", "content_text", chunk)
@@ -821,6 +839,7 @@ class BasicAgent(BaseAgent):
             logger.debug(f"工具调用迭代 {iteration_count}")
             
             try:
+                self._capture_context_usage(messages, label="invoke_tool")
                 self.callback_manager.on_llm_start(messages)
                 response = self.llm.invoke_with_tools(
                     messages,
@@ -1040,6 +1059,7 @@ class BasicAgent(BaseAgent):
                 messages = self._build_start_messages(query)
                 turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
                 
+                self._capture_context_usage(messages, label="ainvoke_plain")
                 self.callback_manager.on_llm_start(messages)
                 response = await self.llm.ainvoke(messages, temperature=temperature, **kwargs)
                 self.callback_manager.on_llm_end(response or "")
@@ -1112,6 +1132,7 @@ class BasicAgent(BaseAgent):
             logger.debug(f"异步工具调用迭代 {iteration_count}")
             
             try:
+                self._capture_context_usage(messages, label="ainvoke_tool")
                 self.callback_manager.on_llm_start(messages)
                 response = await self.llm.ainvoke_with_tools(
                     messages,
@@ -1319,6 +1340,7 @@ class BasicAgent(BaseAgent):
         display_state = self._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
+            self._capture_context_usage(messages, label="astream_invoke_plain")
             self.callback_manager.on_llm_start(messages)
             async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
                 self._append_stream_text(display_state, "content", "content_text", chunk)
@@ -1383,6 +1405,7 @@ class BasicAgent(BaseAgent):
             while max_iter > 0:
                 round_index += 1
 
+                self._capture_context_usage(messages, label="astream_invoke_tool")
                 self.callback_manager.on_llm_start(messages)
                 llm_stream = self.llm.astream_with_tools(
                     messages,
@@ -1627,55 +1650,214 @@ class BasicAgent(BaseAgent):
  
     @override
     def get_enhanced_prompt(self) -> str:
-
         """
-        获取增强后的系统提示词
+        获取增强后的系统提示词。
         
         Returns:
             增强后的系统提示词
         """
-        thinking_prompt="""在申请工具调用或者回复的同时，需要给出思考过程,但输出最终结果时不要含有思考内容"""
+        return self.get_system_prompt_template().render()
+
+    def get_system_prompt_template(self) -> SystemPromptTemplate:
+        """返回当前 Agent 的系统提示词模板。"""
+        return SystemPromptTemplate(self.get_system_prompt_blocks())
+
+    def get_system_prompt_blocks(self) -> list[PromptBlock]:
+        """返回当前 Agent 的系统提示词分块。"""
         if not self.enable_tool or not self.tool_registry:
-            return self.system_prompt or "你是一个有用的AI助手，帮助用户回答问题，完成任务。"
-        
+            blocks = [
+                PromptBlock(
+                    name="identity",
+                    content=self.system_prompt or "你是一个有用的 AI 助手，帮助用户回答问题并完成任务。",
+                    order=0,
+                )
+            ]
+            blocks.extend(self._build_core_prompt_blocks(start_order=10, include_tool_policy=False))
+            blocks.extend(self._build_shared_prompt_blocks(start_order=100, include_custom_prompt=False))
+            return blocks
+
+        blocks = [
+            PromptBlock(
+                name="identity",
+                content="你是一个智能助手，具备使用工具解决问题的能力。",
+                order=0,
+            ),
+        ]
+        blocks.extend(self._build_core_prompt_blocks(start_order=10, include_tool_policy=True))
+        tool_block = self._build_tool_inventory_block(order=60)
+        if tool_block is not None:
+            blocks.append(tool_block)
+        blocks.extend(self._build_shared_prompt_blocks(start_order=100))
+        return blocks
+
+    def _build_core_prompt_blocks(
+        self,
+        *,
+        start_order: int,
+        include_tool_policy: bool,
+    ) -> list[PromptBlock]:
+        """构建接近 Claude Code 风格的核心系统分块。"""
+        blocks = [
+            PromptBlock(name="visibility", content=build_visibility_section(), order=start_order),
+            PromptBlock(name="task_execution", content=build_task_execution_section(), order=start_order + 10),
+            PromptBlock(name="safety", content=build_safety_section(), order=start_order + 20),
+        ]
+        if include_tool_policy:
+            blocks.append(
+                PromptBlock(
+                    name="tool_policy",
+                    content=build_tool_policy_section(),
+                    order=start_order + 30,
+                )
+            )
+            style_order = start_order + 40
+        else:
+            style_order = start_order + 30
+
+        blocks.extend(
+            [
+                PromptBlock(name="tone_style", content=build_tone_style_section(), order=style_order),
+                PromptBlock(
+                    name="output_efficiency",
+                    content=build_output_efficiency_section(),
+                    order=style_order + 10,
+                ),
+            ]
+        )
+        return blocks
+
+    def _get_tool_catalog_prompt(self) -> str:
+        """获取格式化后的工具清单。"""
+        if not self.tool_registry:
+            return ""
         try:
             tool_descriptions = self.tool_registry.get_tools_description()
         except Exception as e:
             logger.error(f"获取工具描述失败: {e}")
-            tool_descriptions = "（工具描述获取失败）"
-        
-        enhanced_prompt = f"""你是一个智能助手，具备使用工具解决问题的能力。
+            return "（工具描述获取失败）"
+        return format_tool_catalog(tool_descriptions)
 
-            ## 核心原则
-            1. **先思考，再行动**：在调用工具前，先分析用户需求，确定是否需要使用工具
-            2. **选择合适的工具**：根据任务需求选择最适合的工具
-            3. **正确传递参数**：确保传递给工具的参数格式正确、内容准确
-            4. **处理工具结果**：根据工具返回的结果并分析，继续推理或给出最终答案
-            5. {thinking_prompt}
-            ## 工具使用指南
-            - 当用户问题可以直接回答时，不必使用工具
-            - 当需要获取实时信息、执行计算或操作外部系统时，使用工具
-            - 可以连续同时调用多个工具来完成复杂任务
-            - 如果工具调用失败，分析原因并尝试其他方案
-            - 当收集到足够的信息后回答用户问题
+    def _get_tool_inventory_prompt(self, *, include_parameters: bool = False) -> str:
+        """获取工具简表或详细清单。"""
+        if not self.tool_registry:
+            return ""
+        try:
+            tool_descriptions = self.tool_registry.get_tools_description()
+        except Exception as e:
+            logger.error(f"获取工具描述失败: {e}")
+            return "（工具描述获取失败）"
+        return format_tool_inventory(tool_descriptions, include_parameters=include_parameters)
 
-            ## 可用工具
-            {tool_descriptions}
+    def _should_include_tool_inventory_block(self) -> bool:
+        """普通 Function Calling Agent 默认不在 system prompt 注入工具清单。"""
+        return False
 
-            ## 响应格式
-            - 如果不需要工具，直接回答用户问题
-            - 工具返回结果后，基于结果给出清晰的回答
+    def _tool_inventory_mode(self) -> str:
+        """控制工具清单模式。支持 none/compact/full。"""
+        return "none"
 
-            {self.system_prompt or ''}\n
-            """
-            
-        # 注入记忆系统提示和 Working Memory 便签本
-        # enhanced_prompt += self._build_memory_prompt()
-        
-        # 注入所有激活 Skill 的 prompt
-        enhanced_prompt += self._build_skills_prompt()
+    def _build_tool_inventory_block(self, order: int) -> PromptBlock | None:
+        """根据配置构建可选工具清单块。"""
+        if not self._should_include_tool_inventory_block():
+            return None
 
-        return enhanced_prompt
+        mode = self._tool_inventory_mode()
+        if mode == "none":
+            return None
+
+        content = self._get_tool_inventory_prompt(include_parameters=(mode == "full"))
+        if not content:
+            return None
+
+        title = "## 可用工具"
+        if mode == "compact":
+            title = "## 可用工具概览"
+
+        return PromptBlock(
+            name="tool_inventory",
+            content=f"{title}\n{content}",
+            order=order,
+        )
+
+    def _build_shared_prompt_blocks(
+        self,
+        *,
+        start_order: int,
+        include_custom_prompt: bool = True,
+        include_memory: bool = True,
+        include_skills: bool = True,
+    ) -> list[PromptBlock]:
+        """构建跨 Agent 共用的系统提示词分块。"""
+        blocks: list[PromptBlock] = []
+        order = start_order
+
+        if include_custom_prompt and self.system_prompt and self.system_prompt.strip():
+            blocks.append(
+                PromptBlock(
+                    name="custom_instructions",
+                    content=f"## 额外指令\n{self.system_prompt.strip()}",
+                    order=order,
+                )
+            )
+            order += 10
+
+        memory_prompt = self._build_memory_prompt() if include_memory else ""
+        if memory_prompt:
+            blocks.append(
+                PromptBlock(
+                    name="memory",
+                    content=memory_prompt,
+                    order=order,
+                )
+            )
+            order += 10
+
+        exclude_names = {"memory"} if memory_prompt else None
+        if include_skills:
+            skills_prompt = self._build_skills_prompt(exclude_names=exclude_names)
+            if skills_prompt:
+                blocks.append(
+                    PromptBlock(
+                        name="skills",
+                        content=skills_prompt,
+                        order=order,
+                    )
+                )
+                order += 10
+
+        blocks.extend(self._get_extension_prompt_blocks(start_order=order))
+
+        return blocks
+
+    def _get_extension_prompt_blocks(self, start_order: int) -> list[PromptBlock]:
+        """
+        预留给 Claude Code 专属 section 或 provider-specific section 的扩展接口。
+
+        默认不启用任何额外块，后续可以由子类覆写，或外部通过组合方式注入。
+        """
+        blocks = list(self._extension_prompt_blocks)
+        normalized: list[PromptBlock] = []
+        for index, block in enumerate(blocks):
+            normalized.append(
+                PromptBlock(
+                    name=block.name,
+                    content=block.content,
+                    order=start_order + index * 10 if block.order == 0 else block.order,
+                    enabled=block.enabled,
+                    metadata=dict(block.metadata),
+                )
+            )
+        return normalized
+
+    def with_prompt_block(self, block: PromptBlock) -> "BasicAgent":
+        """注册一个额外的系统提示词分块。"""
+        self._extension_prompt_blocks.append(block)
+        return self
+
+    def with_prompt_blocks(self, blocks: list[PromptBlock]) -> "BasicAgent":
+        """批量注册额外的系统提示词分块。"""
+        self._extension_prompt_blocks.extend(blocks)
+        return self
 
     def _use_context_history(self) -> bool:
         """是否由 ContextManager 管理 history 注入"""
@@ -1703,13 +1885,16 @@ class BasicAgent(BaseAgent):
 
         if self.context_manager is not None:
             try:
-                return self.context_manager.build_messages(
+                messages = self.context_manager.build_messages(
                     query=query,
                     history=self.history,
                     system_prompt=system_prompt,
                     include_history=True,
                     include_query=True,
                 )
+                if self.context_manager.last_history_was_compacted:
+                    self.history = list(self.context_manager.last_compacted_history)
+                return messages
             except Exception as e:
                 logger.warning(f"ContextManager 构建 messages 失败，回退默认拼接: {e}")
 

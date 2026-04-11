@@ -9,11 +9,13 @@ from context.window import ContextItem, ContextWindow
 from context.source.base import BaseContextSource
 from context.compressor.base import BaseCompressor
 from context.compressor.token_budget import TokenBudgetCompressor
+from context.compressor.history import BaseHistoryCompactor, RuleBasedHistoryCompactor
 from context.formatter.base import BaseFormatter
 from context.formatter.plain import PlainFormatter
 from context.token.counter import TokenCounter
 from context.token.budget import TokenBudget
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,9 @@ class ContextBuilder:
         self._formatter: BaseFormatter = PlainFormatter()
         self._budget = budget or TokenBudget()
         self._counter = counter or TokenCounter()
+        self._history_compactor: BaseHistoryCompactor = RuleBasedHistoryCompactor(token_counter=self._counter)
+        self._last_compacted_history: List[Dict[str, Any]] = []
+        self._last_history_was_compacted: bool = False
 
     # ---- 配置 API ----
 
@@ -81,28 +86,30 @@ class ContextBuilder:
         self._budget = budget
         return self
 
+    def set_history_compactor(self, compactor: BaseHistoryCompactor) -> "ContextBuilder":
+        """设置 history 专用压缩器。"""
+        compactor.set_token_counter(self._counter)
+        self._history_compactor = compactor
+        return self
+
     # ---- 构建 ----
 
-    def build(self, query: str, **kwargs) -> ContextWindow:
-        """核心构建方法：获取 → 压缩 → 组装
+    def _collect_source_items(
+        self,
+        query: str,
+        budget: TokenBudget,
+        exclude_sources: Optional[set[str]] = None,
+        **kwargs,
+    ) -> List[ContextItem]:
+        exclude_sources = exclude_sources or set()
+        collected: List[Tuple[str, List[ContextItem]]] = []
+        used: Dict[str, int] = {}
 
-        Args:
-            query: 当前查询
-
-        Returns:
-            填充好的 ContextWindow
-        """
-        window = ContextWindow(
-            max_tokens=self._budget.max_tokens,
-            token_counter=self._counter,
-        )
-
-        all_items: List[ContextItem] = []
-
-        # 1. 从各来源收集
         for source, weight in self._sources:
             source_name = source.source_name
-            source_budget = self._budget.get_budget(source_name)
+            if source_name in exclude_sources:
+                continue
+            source_budget = budget.get_budget(source_name)
 
             try:
                 items = source.fetch(query, max_tokens=source_budget, **kwargs)
@@ -110,31 +117,69 @@ class ContextBuilder:
                 logger.warning("来源 %s 获取失败: %s", source_name, e)
                 continue
 
-            # 计算精确 token 数 & 应用权重
             for item in items:
                 if item.token_count == 0:
                     item.token_count = self._counter.count(item.content)
                 item.priority = min(item.priority * weight, 1.0)
 
-            # 2. 来源级压缩
+            collected.append((source_name, items))
+            used[source_name] = sum(item.token_count for item in items)
+
+        adjusted_budgets = budget.redistribute(used)
+        all_items: List[ContextItem] = []
+        for source_name, items in collected:
             src_compressor = self._compressors.get(source_name)
+            source_budget = adjusted_budgets.get(source_name, budget.get_budget(source_name))
             if src_compressor:
                 items = src_compressor.compress(items, max_tokens=source_budget)
-
             all_items.extend(items)
 
-        # 3. 全局压缩
-        if self._global_compressor:
-            all_items = self._global_compressor.compress(all_items)
+        return all_items
 
-        # 4. 装入 window
-        # 按优先级降序排列，优先添加高优先级项
-        all_items.sort(key=lambda it: it.priority, reverse=True)
-        for item in all_items:
+    def _build_window_from_items(
+        self,
+        items: List[ContextItem],
+        max_tokens: int,
+    ) -> ContextWindow:
+        window = ContextWindow(
+            max_tokens=max_tokens,
+            token_counter=self._counter,
+        )
+        if self._global_compressor:
+            compressor_budget = max_tokens
+            configured_budget = getattr(self._global_compressor, "max_tokens", 0) or 0
+            if configured_budget > 0:
+                compressor_budget = min(max_tokens, configured_budget)
+            items = self._global_compressor.compress(items, max_tokens=compressor_budget)
+
+        items.sort(key=lambda it: it.priority, reverse=True)
+        for item in items:
             if not window.add(item):
-                continue  # 预算用完
+                continue
 
         return window
+
+    def build(
+        self,
+        query: str,
+        reserved_tokens: int = 0,
+        exclude_sources: Optional[set[str]] = None,
+        **kwargs,
+    ) -> ContextWindow:
+        """核心构建方法：获取 → 压缩 → 组装"""
+        effective_max_tokens = max(0, self._budget.max_tokens - max(0, reserved_tokens))
+        effective_budget = TokenBudget(
+            max_tokens=effective_max_tokens,
+            default_allocation=self._budget.default_allocation,
+            allocations=dict(self._budget.allocations),
+        )
+        all_items = self._collect_source_items(
+            query,
+            effective_budget,
+            exclude_sources=exclude_sources,
+            **kwargs,
+        )
+        return self._build_window_from_items(all_items, effective_max_tokens)
 
     def build_text(self, query: str, **kwargs) -> str:
         """构建并格式化为文本字符串
@@ -171,65 +216,145 @@ class ContextBuilder:
         2. 除 history 外的其他来源合并为一条 system 消息。
         3. 当前 query 作为最后一条 user 消息。
         """
-        window = self.build(query, **kwargs)
-        history_items: List[Any] = []
-        # 非 history 来源统一拼成 system 上下文
+        normalized_history = self._copy_history_entries(
+            history,
+            max_turns=max_turns,
+            newest_first=False,
+        ) if include_history and history is not None else []
+
+        base_reserved = self._counter.count(system_prompt or "")
+        if include_query and query:
+            base_reserved += self._counter.count(query)
+        base_reserved += 8
+
+        available_after_base = max(0, self._budget.max_tokens - base_reserved)
+        history_reserve = 0
+        if include_history:
+            history_reserve = int(
+                available_after_base * self._budget.allocations.get("history", self._budget.default_allocation)
+            )
+
+        non_history_window = self.build(
+            query,
+            reserved_tokens=base_reserved + history_reserve,
+            exclude_sources={"history"},
+            **kwargs,
+        )
         non_history_groups: Dict[str, List[ContextItem]] = {}
-        for item in window.items:
-            if item.source == "history":
-                temp = item.metadata.get("raw_message") or {
-                    "role": item.metadata.get('role', 'user'),
-                    "content": item.content,
-                }
-                history_items.append(temp)
-                continue
+        for item in non_history_window.items:
             non_history_groups.setdefault(item.source, []).append(item)
-
         context_text = self._formatter.format_all(non_history_groups)
-        system_parts: List[str] = []
-        if system_prompt:
-            system_parts.append(system_prompt)
-        if context_text:
-            system_parts.append(context_text)
 
-        messages: List[Dict[str, str]] = []
+        base_messages: List[Dict[str, Any]] = []
+        base_system_parts = [part for part in [system_prompt, context_text] if part]
+        if base_system_parts:
+            base_messages.append({
+                "role": "system",
+                "content": "\n\n".join(base_system_parts),
+            })
+        if include_query and query:
+            base_messages.append({"role": "user", "content": query})
 
+        history_budget = max(0, self._budget.max_tokens - self._counter.count_messages(base_messages))
+        compacted_history = normalized_history
+        history_was_compacted = False
+
+        if include_history and normalized_history:
+            compacted_history = self._history_compactor.compact(
+                normalized_history,
+                max_tokens=history_budget,
+            )
+            history_was_compacted = compacted_history != normalized_history
+
+        messages = self._assemble_messages(
+            system_prompt=system_prompt,
+            context_text=context_text,
+            history_messages=compacted_history if include_history else [],
+            query=query if include_query else "",
+        )
+
+        total_tokens = self._counter.count_messages(messages)
+        if total_tokens > self._budget.max_tokens and include_history and normalized_history:
+            overflow = total_tokens - self._budget.max_tokens
+            compacted_history = self._history_compactor.compact(
+                normalized_history,
+                max_tokens=max(0, history_budget - overflow),
+            )
+            history_was_compacted = compacted_history != normalized_history
+            messages = self._assemble_messages(
+                system_prompt=system_prompt,
+                context_text=context_text,
+                history_messages=compacted_history,
+                query=query if include_query else "",
+            )
+            total_tokens = self._counter.count_messages(messages)
+
+        if total_tokens > self._budget.max_tokens and non_history_window.items:
+            overflow = total_tokens - self._budget.max_tokens
+            reduced_items = TokenBudgetCompressor(
+                max_tokens=max(0, non_history_window.total_tokens - overflow)
+            ).compress(
+                non_history_window.items,
+                max_tokens=max(0, non_history_window.total_tokens - overflow),
+            )
+            reduced_groups: Dict[str, List[ContextItem]] = {}
+            for item in reduced_items:
+                reduced_groups.setdefault(item.source, []).append(item)
+            context_text = self._formatter.format_all(reduced_groups)
+            messages = self._assemble_messages(
+                system_prompt=system_prompt,
+                context_text=context_text,
+                history_messages=compacted_history if include_history else [],
+                query=query if include_query else "",
+            )
+
+        self._last_compacted_history = self._copy_history_entries(compacted_history, newest_first=False)
+        self._last_history_was_compacted = history_was_compacted
+        return messages
+
+    def compact_history(
+        self,
+        history: Optional[List[Any]],
+        max_tokens: int,
+        max_turns: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        copied_history = self._copy_history_entries(
+            history,
+            max_turns=max_turns,
+            newest_first=False,
+        )
+        compacted_history = self._history_compactor.compact(copied_history, max_tokens=max_tokens)
+        self._last_compacted_history = self._copy_history_entries(compacted_history, newest_first=False)
+        self._last_history_was_compacted = compacted_history != copied_history
+        return compacted_history
+
+    def _assemble_messages(
+        self,
+        *,
+        system_prompt: Optional[str],
+        context_text: str,
+        history_messages: List[Dict[str, Any]],
+        query: str,
+    ) -> List[Dict[str, Any]]:
+        messages: List[Dict[str, Any]] = []
+        system_parts = [part for part in [system_prompt, context_text] if part]
         if system_parts:
             messages.append({
                 "role": "system",
                 "content": "\n\n".join(system_parts),
             })
-
-        if include_history:
-            if history is not None:
-                messages.extend(
-                    self._normalize_history_messages(
-                        history,
-                        max_turns=max_turns,
-                        newest_first=False,
-                    )
-                )
-            else:
-                messages.extend(
-                    self._normalize_history_messages(
-                        history_items,
-                        max_turns=max_turns,
-                        newest_first=True,
-                    )
-                )
-
-        if include_query and query:
+        messages.extend(history_messages)
+        if query:
             messages.append({"role": "user", "content": query})
-
         return messages
 
-    def _normalize_history_messages(
+    def _copy_history_entries(
         self,
         history: Optional[List[Any]],
         max_turns: Optional[int] = None,
         newest_first: bool = True,
     ) -> List[Dict[str, Any]]:
-        """将输入历史标准化为消息字典列表。"""
+        """复制 history 条目，保留 provider-specific 结构。"""
         if not history:
             return []
 
@@ -242,19 +367,23 @@ class ContextBuilder:
             if hasattr(msg, "to_dict"):
                 normalized.append(msg.to_dict())
                 continue
-            elif isinstance(msg, dict):
-                normalized.append(dict(msg))
+            if isinstance(msg, dict):
+                normalized.append(self._make_json_copy(msg))
                 continue
-            elif hasattr(msg, "role") and hasattr(msg, "content"):
+            if hasattr(msg, "role") and hasattr(msg, "content"):
                 role = getattr(msg, "role", "user")
                 content = getattr(msg, "content", "")
             else:
                 role = "user"
                 content = str(msg)
 
-            normalized.append({"role": str(role), "content": str(content)})
+            normalized.append({"role": str(role), "content": content})
 
         return normalized
+
+    @staticmethod
+    def _make_json_copy(value: Any) -> Any:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
     
     @property
     def formatter(self) -> BaseFormatter:
@@ -263,6 +392,10 @@ class ContextBuilder:
     @property
     def budget(self) -> TokenBudget:
         return self._budget
+
+    @property
+    def counter(self) -> TokenCounter:
+        return self._counter
 
     @property
     def source_names(self) -> List[str]:

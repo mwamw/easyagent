@@ -15,6 +15,7 @@ from Tool.ToolRegistry import ToolRegistry
 from output.base import BaseOutputParser, OutputParseError
 from output.pydantic_parser import PydanticOutputParser
 from pydantic import BaseModel
+from prompt import PromptBlock
 
 logger = logging.getLogger(__name__)
 
@@ -226,22 +227,31 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
     
     def _build_system_prompt(self) -> str:
         """构建系统提示词"""
-        base_prompt = self.system_prompt or "你是一个精确的信息提取助手。"
-        
-        prompt = f"""{base_prompt}
+        return self.get_system_prompt_template().render()
 
+    def get_system_prompt_blocks(self) -> list[PromptBlock]:
+        """返回结构化输出 Agent 的系统提示词分块。"""
+        blocks = [
+            PromptBlock(
+                name="identity",
+                content=self.system_prompt or "你是一个精确的信息提取助手。",
+                order=0,
+            ),
+            PromptBlock(
+                name="structured_output_rules",
+                content="""## 结构化输出要求
 你的任务是从用户输入中提取结构化信息，并以 JSON 格式输出。
 
 重要规则：
-1. 只输出 JSON，不要有任何其他文字说明
-2. 确保 JSON 格式正确，可以被解析
-3. 所有必填字段都必须提供
-4. 如果某个信息无法从输入中提取，使用合理的默认值或 null"""
-        
-        # 注入所有激活 Skill 的 prompt
-        prompt += self._build_skills_prompt()
-        
-        return prompt
+1. 只输出 JSON，不要附带解释、注释或额外文本。
+2. 确保 JSON 格式正确，能够被稳定解析。
+3. 所有必填字段都必须提供。
+4. 如果某个信息无法从输入中提取，使用合理的默认值或 null。""",
+                order=10,
+            ),
+        ]
+        blocks.extend(self._build_shared_prompt_blocks(start_order=100, include_custom_prompt=False))
+        return blocks
     
     def get_schema(self) -> dict:
         """获取输出模型的 JSON Schema"""

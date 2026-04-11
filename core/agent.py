@@ -11,8 +11,10 @@ from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
 from context.manager import ContextManager
 from context.source.base import BaseContextSource
+from context.token.counter import TokenCounter
 from .callbacks import CallbackManager
 from skill.manager import SkillManager
+from prompt import build_memory_prompt_section
 import json
 import asyncio
 import threading
@@ -97,6 +99,8 @@ class BaseAgent(ABC):
         
         # 上下文工程管理器（可选）
         self.context_manager = context_manager
+        self._last_context_usage: dict[str, Any] = {}
+        self._context_usage_counter = TokenCounter()
         
         # Skill 管理器
         self.skill_manager = skill_manager or SkillManager()
@@ -202,9 +206,19 @@ class BaseAgent(ABC):
         """停用指定 Skill"""
         self.skill_manager.deactivate(name)
 
-    def _build_skills_prompt(self) -> str:
+    def _build_skills_prompt(self, exclude_names: Optional[set[str]] = None) -> str:
         """构建所有激活 Skill 的 prompt"""
-        return self.skill_manager.build_skills_prompt()
+        return self.skill_manager.build_skills_prompt(exclude_names=exclude_names)
+
+    def _get_active_memory_skill(self) -> Any | None:
+        """获取激活中的 MemorySkill（如果存在）。"""
+        try:
+            for skill in self.skill_manager.get_active_skills():
+                if skill.name == "memory":
+                    return skill
+        except Exception:
+            return None
+        return None
     
     @abstractmethod
     def invoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
@@ -253,7 +267,7 @@ class BaseAgent(ABC):
             return
             
         # 设定阈值：例如每新增 5 条消息触发一次提炼
-        trigger_threshold = 10
+        trigger_threshold = self.config.trigger_threshold
         self._unextracted_msg_count += 1
 
         if self._unextracted_msg_count >= trigger_threshold:
@@ -321,19 +335,14 @@ class BaseAgent(ABC):
         Returns:
             记忆相关的 prompt 文本，无记忆系统时返回空字符串
         """
-        if not getattr(self, "memory_manage", None):
+        memory_manage = getattr(self, "memory_manage", None)
+        memory_skill = self._get_active_memory_skill()
+        if memory_manage is None and memory_skill is not None:
+            memory_manage = getattr(memory_skill, "memory_manage", None)
+
+        if not memory_manage:
             return ""
-        
-        prompt = """
-## 你的记忆系统 (The Memory System)
-你拥有一个高级记忆管理系统，能够跨越长期和短期存储知识。
-- **必要性原则**：仅当当前对话上下文（History）不足以回答问题时，才考虑使用搜索工具。禁止对不需要记忆系统，显而易见或刚讨论过的信息进行重复搜索。
-- **工作记忆 (Working Memory)**：遇到关键的约束、当前任务大纲或中间状态，请主动调用工具写入。这是你的“即时贴”，用于存放当前任务最核心的信息。
-- **长期记忆搜索 (Search)**：遇到不知道的事实或历史脉络，请使用 search_memory_tool 到 semantic (语义) 或 episodic (情景) 记忆中检索。
-- **记忆持久化**：只有你主动存入，未来的你才能回想起现在的经历和设定。
-- **按需使用**：其他记忆工具（如删除、更新）仅在信息过时或用户要求时使用。
-"""
-        
+
         # 若 context_manager 已挂载 memory source，避免重复注入 Working Memory 全量文本
         context_has_memory_source = False
         if getattr(self, "context_manager", None) is not None:
@@ -343,27 +352,33 @@ class BaseAgent(ABC):
             except Exception:
                 context_has_memory_source = False
 
-        # 注入 Working Memory 便签本
-        if "working" in self.memory_manage.memory_types: #type: ignore
-            if context_has_memory_source:
-                prompt += (
-                    "\n\n【当前工作便签本（Working Memory）】见【记忆上下文】，已由上下文管理器注入】"
-                    
-                    "\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)"
-                    "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
-                )
-            else:
-                working_memories = self.memory_manage.memory_types["working"].get_all_memories() #type: ignore
-                if working_memories:
-                    wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
-                    wm_str = "\n".join(wm_texts)
-                    prompt += f"\n\n【当前工作便签本（Working Memory）】:\n{wm_str}"
-                else:
-                    prompt += f"\n\n【当前工作便签本（Working Memory）】:\n(空)"
-                prompt += "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
-                prompt += "\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)\n"
-        
-        return prompt
+        supported_memory_types: list[str] | None = None
+        try:
+            supported_memory_types = list(getattr(memory_manage, "memory_types", {}).keys())
+        except Exception:
+            supported_memory_types = None
+
+        working_memory_entries: list[str] = []
+        has_working_memory = False
+        try:
+            if "working" in memory_manage.memory_types: #type: ignore[attr-defined]
+                has_working_memory = True
+                if not context_has_memory_source:
+                    working_memories = memory_manage.memory_types["working"].get_all_memories() #type: ignore[index]
+                    working_memory_entries = [
+                        f"- id:{memory.id}: {memory.content}"
+                        for memory in working_memories
+                    ]
+        except Exception:
+            working_memory_entries = ["(读取失败)"]
+            has_working_memory = True
+
+        return build_memory_prompt_section(
+            supported_memory_types=supported_memory_types,
+            working_memory_entries=working_memory_entries,
+            working_memory_managed_by_context=context_has_memory_source,
+            include_working_memory=has_working_memory,
+        )
     
     def add_user_message(self, content: str) -> None:
         """添加用户消息"""
@@ -389,10 +404,14 @@ class BaseAgent(ABC):
 
     def _get_serializable_state(self) -> dict[str, Any]:
         """返回子类需要补充持久化的状态。"""
-        return {}
+        return {
+            "last_context_usage": self.get_context_usage(),
+        }
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         """恢复子类持久化状态。"""
+        state = state or {}
+        self._set_last_context_usage(state.get("last_context_usage") or {})
         return None
 
     @classmethod
@@ -667,6 +686,10 @@ class BaseAgent(ABC):
         """获取对话历史"""
         return self.history
 
+    def get_context_usage(self) -> dict[str, Any]:
+        """获取最近一次 invoke 构造出的可见上下文 token 使用快照。"""
+        return self._make_json_safe(self._last_context_usage)
+
     def get_history_length(self) -> int:
         """
         获取对话历史长度
@@ -675,6 +698,70 @@ class BaseAgent(ABC):
             对话历史条数
         """
         return len(self.history)
+
+    def _capture_context_usage(
+        self,
+        messages: list[Any],
+        *,
+        label: str = "visible_messages",
+    ) -> dict[str, Any]:
+        """记录最近一次发送给 LLM 的可见上下文使用情况。"""
+        if self.context_manager is not None:
+            usage = self.context_manager.update_last_usage(messages, label=label)
+            self._set_last_context_usage(usage)
+            return usage
+
+        normalized = self._normalize_context_messages(messages)
+        max_tokens = self._resolve_context_budget_max_tokens()
+        used_tokens = self._context_usage_counter.count_messages(normalized)
+        remaining_tokens = max(0, max_tokens - used_tokens) if max_tokens is not None else None
+        usage = {
+            "label": label,
+            "message_count": len(normalized),
+            "used_tokens": used_tokens,
+            "remaining_tokens": remaining_tokens,
+            "max_tokens": max_tokens,
+            "history_compacted": False,
+            "tracked_at": datetime.now().isoformat(),
+        }
+        self._set_last_context_usage(usage)
+        return usage
+
+    def _set_last_context_usage(self, usage: Optional[dict[str, Any]]) -> None:
+        normalized = self._make_json_safe(usage or {})
+        self._last_context_usage = normalized
+        if self.context_manager is not None:
+            try:
+                self.context_manager.set_last_usage(normalized)
+            except Exception:
+                logger.debug("同步 context usage 到 ContextManager 失败", exc_info=True)
+
+    def _resolve_context_budget_max_tokens(self) -> Optional[int]:
+        if self.context_manager is not None:
+            return self.context_manager.budget.max_tokens
+        if self.config.max_tokens is not None:
+            return self.config.max_tokens
+        return getattr(self.llm, "max_tokens", None)
+
+    def _normalize_context_messages(self, messages: Optional[list[Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for message in messages or []:
+            if hasattr(message, "to_dict"):
+                payload = message.to_dict()
+            elif isinstance(message, dict):
+                payload = self._make_json_safe(message)
+            elif hasattr(message, "role") and hasattr(message, "content"):
+                payload = {
+                    "role": str(getattr(message, "role", "user")),
+                    "content": getattr(message, "content", ""),
+                }
+            else:
+                payload = {"role": "user", "content": str(message)}
+
+            if not isinstance(payload, dict):
+                payload = {"role": "user", "content": str(payload)}
+            normalized.append(payload)
+        return normalized
 
     def __str__(self) -> str:
         return f"Agent(name={self.name}, description={self.description})"

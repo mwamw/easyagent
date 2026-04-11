@@ -12,17 +12,17 @@ class TokenBudget:
     """Token 预算分配器"""
 
     max_tokens: int = 8000
+    default_allocation: float = 0.10
     allocations: Dict[str, float] = field(default_factory=lambda: {
-        "system": 0.10,
-        "history": 0.30,
-        "rag": 0.35,
-        "memory": 0.15,
-        "tool": 0.10,
+        "system": 0.15,
+        "history": 0.70,
+        "rag": 0.1,
+        "memory": 0.05,
     })
 
     def get_budget(self, source: str) -> int:
         """获取指定来源的 token 预算"""
-        ratio = self.allocations.get(source, 0.0)
+        ratio = self.allocations.get(source, self.default_allocation)
         return int(self.max_tokens * ratio)
 
     def set_allocation(self, source: str, ratio: float) -> None:

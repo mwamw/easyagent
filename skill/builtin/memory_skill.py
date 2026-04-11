@@ -13,6 +13,7 @@ import logging
 from datetime import datetime
 from typing import Any, List, Optional, TYPE_CHECKING
 
+from prompt import build_memory_prompt_section
 from skill.base import BaseSkill, SkillConfig
 
 if TYPE_CHECKING:
@@ -91,33 +92,27 @@ class MemorySkill(BaseSkill):
 
     def get_prompt(self) -> str:
         """返回记忆系统使用指南 prompt + Working Memory 便签本"""
-        supported = self.memory_manage.get_supported_type()
-        prompt = f"""## 你的记忆系统 (The Memory System)
-你拥有一个高级记忆管理系统（当前支持: {supported}），能够跨越长期和短期存储知识。
-- **必要性原则**：仅当当前对话上下文（History）不足以回答问题时，才考虑使用搜索工具。禁止对显而易见或刚讨论过的信息进行重复搜索。
-- **工作记忆 (Working Memory)**：遇到关键的约束、当前任务大纲或中间状态，请主动调用工具写入。这是你的"即时贴"，用于存放当前任务最核心的信息。
-- **长期记忆搜索 (Search)**：遇到不知道的事实或历史脉络，请使用 search_memory_tool 到 semantic（语义）或 episodic（情景）记忆中检索。
-- **记忆持久化**：只有你主动存入，未来的你才能回想起现在的经历和设定。
-- **按需使用**：其他记忆工具（如删除、更新）仅在信息过时或用户要求时使用。
-"""
-        # 注入 Working Memory 便签本
+        supported = list(self.memory_manage.memory_types.keys())
+        working_memory_entries: list[str] = []
+        include_working_memory = "working" in self.memory_manage.memory_types
+
         if "working" in self.memory_manage.memory_types:
             try:
                 working_memories = self.memory_manage.memory_types["working"].get_all_memories()
                 if working_memories:
-                    wm_texts = [f"- id:{m.id}: {m.content}" for m in working_memories]
-                    wm_str = "\n".join(wm_texts)
-                    prompt += f"\n\n【当前工作便签本（Working Memory）】:\n{wm_str}"
-                else:
-                    prompt += "\n\n【当前工作便签本（Working Memory）】:\n(空)"
+                    working_memory_entries = [
+                        f"- id:{memory.id}: {memory.content}"
+                        for memory in working_memories
+                    ]
             except Exception as e:
                 logger.warning("读取 Working Memory 失败: %s", e)
-                prompt += "\n\n【当前工作便签本（Working Memory）】:\n(读取失败)"
+                working_memory_entries = ["(读取失败)"]
 
-            prompt += "\n(注: 遇到复杂任务时，请主动调用 add_memory_tool 记录约束条件和中间结论)"
-            prompt += "\n(注: 当任务结束或话题转变时，务必主动调用 memory_maintenance_tool 清理无用便签或用 remove_memory_tool 删除指定id内容)\n"
-
-        return prompt
+        return build_memory_prompt_section(
+            supported_memory_types=supported,
+            working_memory_entries=working_memory_entries,
+            include_working_memory=include_working_memory,
+        )
 
     def get_context_sources(self) -> List["BaseContextSource"]:
         """返回 MemoryContextSource（如果启用）"""

@@ -15,6 +15,7 @@ from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
 from output.json_parser import JsonOutputParser
+from prompt import PromptBlock, build_system_prompt
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -197,7 +198,9 @@ class PlanningAgent(BasicAgent):
         """生成执行计划"""
         tools_desc = ""
         if self.enable_tool and self.tool_registry:
-            tools_desc = f"\n可用工具：\n{self.tool_registry.get_tools_description()}"
+            tools_desc = self._get_tool_inventory_prompt(include_parameters=False)
+            if tools_desc:
+                tools_desc = f"\n可用工具概览：\n{tools_desc}"
     
         plan_prompt = f"""请分析以下任务，并将其分解为具体的执行步骤。
 
@@ -209,9 +212,9 @@ class PlanningAgent(BasicAgent):
 
 只返回 JSON 数组，不要其他内容。"""
         
-        # 注入 Skill prompt 到 planning 系统提示
-        planning_system = "你是一个任务规划专家，善于将复杂任务分解为可执行的步骤。"
-        planning_system += self._build_skills_prompt()
+        planning_system = self._render_planning_prompt(
+            role_prompt="你是一个任务规划专家，善于将复杂任务分解为可执行的步骤。",
+        )
         
         messages = [
             SystemMessage(planning_system),
@@ -219,6 +222,7 @@ class PlanningAgent(BasicAgent):
         ]
         
         try:
+            self._capture_context_usage(messages, label="planning_generate_plan")
             response = self.llm.invoke(messages, temperature=temperature)
             # print(response)
             # 解析 JSON
@@ -242,6 +246,7 @@ class PlanningAgent(BasicAgent):
                 SystemMessage(self.get_enhanced_prompt()),
                 UserMessage(step)
             ]
+            self._capture_context_usage(messages, label="planning_execute_step")
             return self.llm.invoke(messages, temperature=temperature)
     
     def _should_replan(self, result: str) -> bool:
@@ -270,11 +275,16 @@ class PlanningAgent(BasicAgent):
 以 JSON 数组格式返回新的步骤列表。"""
         
         messages = [
-            SystemMessage("你是一个任务规划专家，需要根据执行情况调整计划。"),
+            SystemMessage(
+                self._render_planning_prompt(
+                    role_prompt="你是一个任务规划专家，需要根据执行情况调整计划。",
+                )
+            ),
             UserMessage(replan_prompt)
         ]
         
         try:
+            self._capture_context_usage(messages, label="planning_replan")
             response = self.llm.invoke(messages, temperature=temperature)
             new_plan = self.json_parser.parse(response) # type: ignore
             if isinstance(new_plan, list):
@@ -298,15 +308,16 @@ class PlanningAgent(BasicAgent):
 
 请根据以上执行记录，给出最终的完整回答。"""
         
-        # 注入 Skill prompt 到 summary 系统提示
-        summary_system = "你是一个助手，需要根据任务执行记录给出最终回答。"
-        summary_system += self._build_skills_prompt()
+        summary_system = self._render_planning_prompt(
+            role_prompt="你是一个助手，需要根据任务执行记录给出最终回答。",
+        )
         
         messages = [
             SystemMessage(summary_system),
             UserMessage(summary_prompt)
         ]
         
+        self._capture_context_usage(messages, label="planning_summarize")
         return self.llm.invoke(messages, temperature=temperature)
     
     def get_execution_log(self) -> List[Dict[str, Any]]:
@@ -317,3 +328,9 @@ class PlanningAgent(BasicAgent):
         """清空执行日志"""
         self.execution_log.clear()
         self.current_plan.clear()
+
+    def _render_planning_prompt(self, role_prompt: str) -> str:
+        """渲染 planning/replan/summary 共用的系统提示词。"""
+        blocks = [PromptBlock(name="identity", content=role_prompt, order=0)]
+        blocks.extend(self._build_shared_prompt_blocks(start_order=100))
+        return build_system_prompt(blocks)

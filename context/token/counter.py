@@ -3,7 +3,8 @@ Token 计数器
 
 优先使用 tiktoken（精确），fallback 到字符数估算。
 """
-from typing import Optional, List
+from typing import Optional, List, Any
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,12 @@ class TokenCounter:
         except Exception:
             logger.debug("tiktoken 不可用，回退到字符估算 (%.1f chars/token)", chars_per_token)
 
-    def count(self, text: str) -> int:
+    def count(self, text: Any) -> int:
         """计算文本的 token 数"""
         if not text:
             return 0
+        if not isinstance(text, str):
+            text = json.dumps(text, ensure_ascii=False, default=str)
         if self._use_tiktoken:
             return len(self._encoder.encode(text))
         return max(1, int(len(text) / self.chars_per_token))

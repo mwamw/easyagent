@@ -40,6 +40,7 @@ from .compressor.sliding_window import SlidingWindowCompressor
 from .compressor.token_budget import TokenBudgetCompressor
 from .compressor.selective import SelectiveCompressor
 from .compressor.summarization import SummarizationCompressor
+from .compressor.history import BaseHistoryCompactor, RuleBasedHistoryCompactor, LLMHistoryCompactor, HistoryCompactor
 
 # 格式化器
 from .formatter.base import BaseFormatter
@@ -67,6 +68,10 @@ __all__ = [
     "TokenBudgetCompressor",
     "SelectiveCompressor",
     "SummarizationCompressor",
+    "BaseHistoryCompactor",
+    "RuleBasedHistoryCompactor",
+    "LLMHistoryCompactor",
+    "HistoryCompactor",
     # 格式化器
     "BaseFormatter",
     "PlainFormatter",

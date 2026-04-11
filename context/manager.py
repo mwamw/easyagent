@@ -5,11 +5,14 @@
 封装 ContextBuilder，提供简化的 API。
 """
 from typing import List, Optional, Any, Dict
+from datetime import datetime
+import json
 from context.window import ContextItem, ContextWindow
 from context.builder import ContextBuilder
 from context.source.base import BaseContextSource
 from context.source.history_source import HistoryContextSource
 from context.compressor.base import BaseCompressor
+from context.compressor.history import BaseHistoryCompactor
 from context.formatter.base import BaseFormatter
 from context.formatter.plain import PlainFormatter
 from context.token.budget import TokenBudget
@@ -68,6 +71,7 @@ class ContextManager:
         self._auto_history = auto_history
         self._history_source = HistoryContextSource(max_turns=history_max_turns)
         self._history_added = False
+        self._last_usage: Dict[str, Any] = {}
 
     # ---- 配置 API（代理到 builder） ----
 
@@ -89,6 +93,11 @@ class ContextManager:
     def set_formatter(self, formatter: BaseFormatter) -> "ContextManager":
         """设置格式化器"""
         self._builder.set_formatter(formatter)
+        return self
+
+    def set_history_compactor(self, compactor: BaseHistoryCompactor) -> "ContextManager":
+        """设置 history 专用压缩器。"""
+        self._builder.set_history_compactor(compactor)
         return self
 
     # ---- 核心 API ----
@@ -159,9 +168,8 @@ class ContextManager:
         # 兼容历史拼写参数 include_qeury
         if include_qeury is not None:
             include_query = include_qeury
-        self._inject_history(history, include_history=include_history)
         use_history = self._auto_history if include_history is None else include_history
-        effective_max_turns = max_turns if max_turns is not None else self._history_source.max_turns
+        effective_max_turns = max_turns
 
         return self._builder.build_messages(
             query=query,
@@ -172,6 +180,63 @@ class ContextManager:
             max_turns=effective_max_turns,
             **kwargs,
         )
+
+    def compact_history(
+        self,
+        history: Optional[List[Any]],
+        max_tokens: Optional[int] = None,
+        max_turns: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """显式压缩 history，返回压缩后的 history 消息列表。"""
+        effective_max_turns = max_turns if max_turns is not None else self._history_source.max_turns
+        target_budget = max_tokens if max_tokens is not None else self.budget.max_tokens
+        return self._builder.compact_history(
+            history=history,
+            max_tokens=target_budget,
+            max_turns=effective_max_turns,
+        )
+
+    def analyze_messages_usage(
+        self,
+        messages: Optional[List[Any]],
+        *,
+        max_tokens: Optional[int] = None,
+        label: str = "visible_messages",
+    ) -> Dict[str, Any]:
+        """分析一组消息的 token 使用情况。"""
+        normalized = self._normalize_messages(messages)
+        budget_max_tokens = max_tokens if max_tokens is not None else self.budget.max_tokens
+        used_tokens = self._builder.counter.count_messages(normalized)
+        remaining_tokens = max(0, budget_max_tokens - used_tokens)
+
+        return {
+            "label": label,
+            "message_count": len(normalized),
+            "used_tokens": used_tokens,
+            "remaining_tokens": remaining_tokens,
+            "max_tokens": budget_max_tokens,
+            "history_compacted": self.last_history_was_compacted,
+            "tracked_at": datetime.now().isoformat(),
+        }
+
+    def update_last_usage(
+        self,
+        messages: Optional[List[Any]],
+        *,
+        max_tokens: Optional[int] = None,
+        label: str = "visible_messages",
+    ) -> Dict[str, Any]:
+        """刷新并保存最近一次消息构造的 token 使用快照。"""
+        self._last_usage = self.analyze_messages_usage(
+            messages,
+            max_tokens=max_tokens,
+            label=label,
+        )
+        return dict(self._last_usage)
+
+    def set_last_usage(self, usage: Optional[Dict[str, Any]]) -> None:
+        """显式恢复最近一次上下文使用快照。"""
+        self._last_usage = dict(usage or {})
 
     # ---- 内部 ----
 
@@ -210,3 +275,40 @@ class ContextManager:
     @property
     def budget(self) -> TokenBudget:
         return self._builder.budget
+
+    @property
+    def counter(self) -> TokenCounter:
+        return self._builder.counter
+
+    @property
+    def last_compacted_history(self) -> List[Dict[str, Any]]:
+        return list(getattr(self._builder, "_last_compacted_history", []) or [])
+
+    @property
+    def last_history_was_compacted(self) -> bool:
+        return bool(getattr(self._builder, "_last_history_was_compacted", False))
+
+    @property
+    def last_usage(self) -> Dict[str, Any]:
+        return dict(self._last_usage)
+
+    @staticmethod
+    def _normalize_messages(messages: Optional[List[Any]]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for message in messages or []:
+            if hasattr(message, "to_dict"):
+                payload = message.to_dict()
+            elif isinstance(message, dict):
+                payload = json.loads(json.dumps(message, ensure_ascii=False, default=str))
+            elif hasattr(message, "role") and hasattr(message, "content"):
+                payload = {
+                    "role": str(getattr(message, "role", "user")),
+                    "content": getattr(message, "content", ""),
+                }
+            else:
+                payload = {"role": "user", "content": str(message)}
+
+            if not isinstance(payload, dict):
+                payload = {"role": "user", "content": str(payload)}
+            normalized.append(payload)
+        return normalized

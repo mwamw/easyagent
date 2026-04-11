@@ -16,6 +16,7 @@ from agent import BasicAgent, ConversationalAgent, PlanningAgent, ReactAgent
 from core.Config import Config
 from core.Message import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from core.llm import EasyLLM
+from context.manager import ContextManager
 from db import ConversationStore, SessionStore
 from Tool.ToolRegistry import ToolRegistry
 
@@ -26,6 +27,12 @@ class DummyLLM(EasyLLM):
         self.model = "mock-model"
         self.base_url = "http://mock.local/v1"
         self.api_key = "mock-key"
+        self.max_tokens = 256
+        self.last_messages = []
+
+    def invoke(self, messages, temperature=None, **kwargs):
+        self.last_messages = list(messages)
+        return "mock-response"
 
 
 class EchoParams(BaseModel):
@@ -178,7 +185,6 @@ class SessionPersistenceTestCase(unittest.TestCase):
                 "metadata": {},
             },
         ]
-
         agent.save_session("basic-1", store=self.session_store, metadata={"suite": "unit"})
 
         restored = BasicAgent.load_session(
@@ -227,6 +233,39 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         self.assertFalse(restored.enable_tool)
         self.assertIsNone(restored.tool_registry)
+
+    def test_basic_agent_context_usage_persists_across_session(self):
+        manager = ContextManager(max_tokens=80, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            system_prompt="test prompt",
+            context_manager=manager,
+            history_via_context_manager=True,
+        )
+        agent.add_message(UserMessage("hello"))
+        agent.add_message(AssistantMessage("world"))
+
+        agent.invoke("continue")
+        usage = agent.get_context_usage()
+
+        self.assertEqual(usage["max_tokens"], 80)
+        self.assertGreater(usage["used_tokens"], 0)
+        self.assertGreaterEqual(usage["remaining_tokens"], 0)
+        self.assertEqual(manager.last_usage, usage)
+
+        agent.save_session("basic-context-usage", store=self.session_store)
+
+        restored_manager = ContextManager(max_tokens=80, auto_history=True)
+        restored = BasicAgent.load_session(
+            "basic-context-usage",
+            llm=self.llm,
+            store=self.session_store,
+            context_manager=restored_manager,
+        )
+
+        self.assertEqual(restored.get_context_usage(), usage)
+        self.assertEqual(restored_manager.last_usage, usage)
 
     def test_conversational_agent_restore_keeps_auto_save_flag(self):
         memory_manage = FakeMemoryManage()
