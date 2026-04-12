@@ -19,7 +19,7 @@ import json
 import asyncio
 import threading
 import concurrent.futures
-from Tool.BaseTool import Tool
+from Tool.BaseTool import Tool, ToolResult
 from .Exception import *
 import logging
 
@@ -868,16 +868,16 @@ class BaseAgent(ABC):
         except Exception as e:
             raise ToolExecutionError(f"解析工具参数时发生错误: {e}") from e
 
-    def _safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
+    def _safe_execute_tool_result(self, tool_name: str, tool_args: dict) -> ToolResult:
         """
-        安全执行工具
+        安全执行工具并返回结构化结果。
         
         Args:
             tool_name: 工具名称
             tool_args: 工具参数
             
         Returns:
-            工具执行结果
+            工具执行结果协议对象
             
         Raises:
             ToolExecutionError: 工具执行失败
@@ -888,25 +888,27 @@ class BaseAgent(ABC):
         self.callback_manager.on_tool_start(tool_name, tool_args)
         
         try:
-            result = self.tool_registry.execute_tool(tool_name, tool_args)
-            
-            # 确保返回字符串
-            if result is None:
-                result = "工具执行完成，无返回结果"
-            
-            if not isinstance(result, str):
-                result = str(result)
-            
-            self.callback_manager.on_tool_end(tool_name, result, success=True)
+            result = self.tool_registry.execute_tool_result(tool_name, tool_args)
+            display_result = result.to_display_string()
+            success = result.status == "success"
+            self.callback_manager.on_tool_end(
+                tool_name,
+                display_result,
+                success=success,
+            )
             return result
             
         except Exception as e:
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
 
-    async def _async_safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
+    def _safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        result = self._safe_execute_tool_result(tool_name, tool_args)
+        return result.to_display_string()
+
+    async def _async_safe_execute_tool_result(self, tool_name: str, tool_args: dict) -> ToolResult:
         """
-        异步安全执行工具
+        异步安全执行工具并返回结构化结果。
         
         工具本身是同步的 tool.run()，通过独立线程池执行以避免阻塞事件循环。
         这里避免使用默认线程池，实测在严格 asyncio 测试环境下可能导致关闭阶段挂起。
@@ -921,22 +923,26 @@ class BaseAgent(ABC):
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 result = await loop.run_in_executor(
                     executor,
-                    self.tool_registry.execute_tool,
+                    self.tool_registry.execute_tool_result,
                     tool_name,
                     tool_args,
                 )
-            
-            if result is None:
-                result = "工具执行完成，无返回结果"
-            if not isinstance(result, str):
-                result = str(result)
-            
-            self.callback_manager.on_tool_end(tool_name, result, success=True)
+            display_result = result.to_display_string()
+            success = result.status == "success"
+            self.callback_manager.on_tool_end(
+                tool_name,
+                display_result,
+                success=success,
+            )
             return result
             
         except Exception as e:
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
+
+    async def _async_safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
+        result = await self._async_safe_execute_tool_result(tool_name, tool_args)
+        return result.to_display_string()
 
     def execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """
@@ -963,6 +969,21 @@ class BaseAgent(ABC):
             raise ParameterValidationError(f"工具参数必须是字典类型，收到: {type(tool_args).__name__}")
         
         return self._safe_execute_tool(tool_name, tool_args)
+
+    def execute_tool_result(self, tool_name: str, tool_args: dict) -> ToolResult:
+        """
+        执行工具并返回结构化 ToolResult。
+        """
+        if self.tool_registry is None:
+            raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
+
+        if not tool_name or not isinstance(tool_name, str):
+            raise ParameterValidationError("工具名称必须是非空字符串!")
+
+        if not isinstance(tool_args, dict):
+            raise ParameterValidationError(f"工具参数必须是字典类型，收到: {type(tool_args).__name__}")
+
+        return self._safe_execute_tool_result(tool_name, tool_args)
 
     def add_tool(self, tool) -> None:
         """

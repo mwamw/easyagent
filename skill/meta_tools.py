@@ -19,13 +19,12 @@ Skill 元工具 — LLM 动态发现与调用 Skill
 """
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, List, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from Tool.BaseTool import Tool
+from Tool.BaseTool import Tool, ToolResult
 
 if TYPE_CHECKING:
     from skill.registry import SkillRegistry
@@ -81,12 +80,15 @@ class SkillDiscoveryTool(Tool):
         )
         self._registry = registry
 
-    def run(self, parameters: dict) -> str:
+    def run(self, parameters: dict) -> ToolResult:
         query = str(parameters.get("query", "")).strip()
         skills = self._registry.search(query=query) if query else self._registry.list_available()
         if not skills:
-            return "当前没有可用的额外 Skill。"
-        return json.dumps(skills, ensure_ascii=False, indent=2)
+            return ToolResult.success("当前没有可用的额外 Skill。")
+        return ToolResult.success(
+            structured_data=skills,
+            metadata={"query": query},
+        )
 
 
 class SkillTool(Tool):
@@ -114,16 +116,17 @@ class SkillTool(Tool):
         self._manager = manager
         self._loaded_tracker = loaded_tracker
 
-    def run(self, parameters: dict) -> str:
+    def run(self, parameters: dict) -> ToolResult:
         skill_name = parameters.get("skill_name", "")
         if not skill_name:
-            return "错误：必须指定 skill_name"
+            return ToolResult.error("错误：必须指定 skill_name", error_type="invalid_parameters")
 
         if not self._registry.has(skill_name):
             available = self._registry.list_available_names()
-            return (
+            return ToolResult.error(
                 f"错误：Skill '{skill_name}' 未在注册中心中找到。"
-                f"可用 Skill: {available}"
+                f"可用 Skill: {available}",
+                error_type="not_found",
             )
 
         try:
@@ -132,12 +135,12 @@ class SkillTool(Tool):
             if self._manager.has_skill(skill_name):
                 skill = self._manager.get_skill(skill_name)
                 if not self._manager.is_active(skill_name):
-                    self._manager.activate(skill_name)
+                    self._manager.activate(skill_name, tool_visibility="runtime")
             else:
                 skill = self._registry.create(skill_name)
-                self._manager.register(skill)
+                self._manager.register(skill, auto_activate=False)
                 if not self._manager.is_active(skill_name):
-                    self._manager.activate(skill_name)
+                    self._manager.activate(skill_name, tool_visibility="runtime")
 
             if skill.get_exposure_mode() == "on_demand":
                 self._manager.mark_temporary_skill_mount(
@@ -152,14 +155,22 @@ class SkillTool(Tool):
                 body = "（该 Skill 未提供额外正文指令）"
             self._manager.set_runtime_skill_context(skill, body, source="skill_tool")
 
-            return (
+            return ToolResult.success(
                 f"已注入 Skill `{skill_name}`。\n"
                 "该 Skill 的详细正文已注入当前 invoke 的后续推理链，请直接基于当前新增上下文继续执行。\n"
-                "注意：该 Skill 的工具挂载和正文上下文都只对当前 invoke 有效；下一次新的 invoke 如需继续使用，必须重新调用 `skill_tool`。"
+                metadata={
+                    "skill_name": skill_name,
+                    "exposure_mode": skill.get_exposure_mode(),
+                    "execution_mode": skill.get_execution_mode(),
+                },
             )
         except Exception as e:
             logger.error("调用 Skill '%s' 失败: %s", skill_name, e)
-            return f"调用 Skill '{skill_name}' 失败: {e}"
+            return ToolResult.error(
+                f"调用 Skill '{skill_name}' 失败: {e}",
+                error_type="skill_invoke_failed",
+                metadata={"skill_name": skill_name},
+            )
 
 
 class LoadSkillTool(Tool):
@@ -190,50 +201,61 @@ class LoadSkillTool(Tool):
         self._manager = manager
         self._loaded_tracker = loaded_tracker
 
-    def run(self, parameters: dict) -> str:
+    def run(self, parameters: dict) -> ToolResult:
         skill_name = parameters.get("skill_name", "")
 
         if not skill_name:
-            return "错误：必须指定 skill_name"
+            return ToolResult.error("错误：必须指定 skill_name", error_type="invalid_parameters")
 
         # 检查是否已加载
         if self._manager.has_skill(skill_name):
             if self._manager.is_active(skill_name):
-                return f"Skill '{skill_name}' 已经加载且处于激活状态，无需重复加载。"
+                return ToolResult.success(f"Skill '{skill_name}' 已经加载且处于激活状态，无需重复加载。")
             else:
                 try:
                     self._manager.activate(skill_name)
                     self._loaded_tracker.add(skill_name)
                     skill = self._manager.get_skill(skill_name)
                     tool_names = skill.get_tool_names()
-                    return (
+                    return ToolResult.success(
                         f"Skill '{skill_name}' 已重新激活。"
-                        f"可用工具: {tool_names}"
+                        f"可用工具: {tool_names}",
+                        metadata={"skill_name": skill_name, "tool_names": tool_names},
                     )
                 except Exception as e:
-                    return f"激活 Skill '{skill_name}' 失败: {e}"
+                    return ToolResult.error(
+                        f"激活 Skill '{skill_name}' 失败: {e}",
+                        error_type="skill_activate_failed",
+                        metadata={"skill_name": skill_name},
+                    )
 
         # 从 Registry 创建实例
         if not self._registry.has(skill_name):
             available = self._registry.list_available_names()
-            return (
+            return ToolResult.error(
                 f"错误：Skill '{skill_name}' 未在注册中心中找到。"
-                f"可用 Skill: {available}"
+                f"可用 Skill: {available}",
+                error_type="not_found",
             )
 
         try:
             skill = self._registry.create(skill_name)
-            self._manager.register(skill)  # auto_activate 默认为 True
+            self._manager.register(skill, auto_activate=True, tool_visibility="resident")
             self._loaded_tracker.add(skill_name)
 
             tool_names = skill.get_tool_names()
-            return (
+            return ToolResult.success(
                 f"成功加载 Skill '{skill_name}'。"
-                f"新增工具: {tool_names}"
+                f"新增工具: {tool_names}",
+                metadata={"skill_name": skill_name, "tool_names": tool_names},
             )
         except Exception as e:
             logger.error("加载 Skill '%s' 失败: %s", skill_name, e)
-            return f"加载 Skill '{skill_name}' 失败: {e}"
+            return ToolResult.error(
+                f"加载 Skill '{skill_name}' 失败: {e}",
+                error_type="skill_load_failed",
+                metadata={"skill_name": skill_name},
+            )
 
 
 class UnloadSkillTool(Tool):
@@ -262,23 +284,25 @@ class UnloadSkillTool(Tool):
         self._manager = manager
         self._loaded_tracker = loaded_tracker
 
-    def run(self, parameters: dict) -> str:
+    def run(self, parameters: dict) -> ToolResult:
         skill_name = parameters.get("skill_name", "")
 
         if not skill_name:
-            return "错误：必须指定 skill_name"
+            return ToolResult.error("错误：必须指定 skill_name", error_type="invalid_parameters")
 
         if skill_name not in self._loaded_tracker:
-            return (
+            return ToolResult.error(
                 f"错误：你只能卸载自己加载过的技能！"
-                f"你目前动态加载过的技能有: {list(self._loaded_tracker) if self._loaded_tracker else '无'}"
+                f"你目前动态加载过的技能有: {list(self._loaded_tracker) if self._loaded_tracker else '无'}",
+                error_type="not_allowed",
             )
 
         if not self._manager.has_skill(skill_name):
             active = self._manager.active_skill_names
-            return (
+            return ToolResult.error(
                 f"错误：Skill '{skill_name}' 未加载。"
-                f"当前活跃 Skill: {active}"
+                f"当前活跃 Skill: {active}",
+                error_type="not_found",
             )
 
         try:
@@ -289,13 +313,18 @@ class UnloadSkillTool(Tool):
             self._manager.unregister(skill_name)
             self._loaded_tracker.remove(skill_name)
 
-            return (
+            return ToolResult.success(
                 f"成功卸载 Skill '{skill_name}'。"
-                f"已移除工具: {tool_names}"
+                f"已移除工具: {tool_names}",
+                metadata={"skill_name": skill_name, "tool_names": tool_names},
             )
         except Exception as e:
             logger.error("卸载 Skill '%s' 失败: %s", skill_name, e)
-            return f"卸载 Skill '{skill_name}' 失败: {e}"
+            return ToolResult.error(
+                f"卸载 Skill '{skill_name}' 失败: {e}",
+                error_type="skill_unload_failed",
+                metadata={"skill_name": skill_name},
+            )
 
 # ==================== MetaSkill 封装 ====================
 

@@ -1160,9 +1160,11 @@ class TestMetaTools:
 
         tool = SkillDiscoveryTool(self.registry)
         result = tool.run({})
+        text = result.to_display_string()
         # The new string will contain calculator and web_search descriptions
-        assert "calculator" in result
-        assert "web_search" in result
+        assert result.status == "success"
+        assert "calculator" in text
+        assert "web_search" in text
     # ---------- LoadSkillTool ----------
 
     def test_load_success(self):
@@ -1170,9 +1172,10 @@ class TestMetaTools:
 
         tool = LoadSkillTool(self.registry, self.manager, set())
         result = tool.run({"skill_name": "calculator"})
-        assert "成功加载" in result
+        assert "成功加载" in result.to_display_string()
         assert self.manager.has_skill("calculator")
         assert self.manager.is_active("calculator")
+        assert self.tool_registry.get_tool_visibility("calculator_tool") == "resident"
 
     def test_load_duplicate(self):
         from skill.meta_tools import LoadSkillTool
@@ -1180,7 +1183,7 @@ class TestMetaTools:
         tool = LoadSkillTool(self.registry, self.manager, set())
         tool.run({"skill_name": "calculator"})
         result = tool.run({"skill_name": "calculator"})
-        assert "已经加载" in result
+        assert "已经加载" in result.to_display_string()
 
     def test_load_reactivate_inactive(self):
         from skill.meta_tools import LoadSkillTool
@@ -1191,7 +1194,7 @@ class TestMetaTools:
         assert not self.manager.is_active("calculator")
 
         result = tool.run({"skill_name": "calculator"})
-        assert "重新激活" in result
+        assert "重新激活" in result.to_display_string()
         assert self.manager.is_active("calculator")
 
     def test_load_not_found(self):
@@ -1199,14 +1202,16 @@ class TestMetaTools:
 
         tool = LoadSkillTool(self.registry, self.manager, set())
         result = tool.run({"skill_name": "nonexistent"})
-        assert "未在注册中心中找到" in result
+        assert result.status == "error"
+        assert "未在注册中心中找到" in result.to_display_string()
 
     def test_load_empty_name(self):
         from skill.meta_tools import LoadSkillTool
 
         tool = LoadSkillTool(self.registry, self.manager, set())
         result = tool.run({"skill_name": ""})
-        assert "必须指定" in result
+        assert result.status == "error"
+        assert "必须指定" in result.to_display_string()
 
     # ---------- UnloadSkillTool ----------
 
@@ -1220,7 +1225,7 @@ class TestMetaTools:
 
         unload_tool = UnloadSkillTool(self.manager, tracker)
         result = unload_tool.run({"skill_name": "calculator"})
-        assert "成功卸载" in result
+        assert "成功卸载" in result.to_display_string()
         assert not self.manager.has_skill("calculator")
 
     def test_unload_not_loaded(self):
@@ -1228,14 +1233,16 @@ class TestMetaTools:
 
         tool = UnloadSkillTool(self.manager, set())
         result = tool.run({"skill_name": "nonexistent"})
-        assert "只能卸载自己加载过" in result
+        assert result.status == "error"
+        assert "只能卸载自己加载过" in result.to_display_string()
 
     def test_unload_empty_name(self):
         from skill.meta_tools import UnloadSkillTool
 
         tool = UnloadSkillTool(self.manager, set())
         result = tool.run({"skill_name": ""})
-        assert "必须指定" in result
+        assert result.status == "error"
+        assert "必须指定" in result.to_display_string()
 
     # ---------- 完整流程测试 ----------
 
@@ -1251,12 +1258,12 @@ class TestMetaTools:
 
         # 1. 发现
         result = discovery.run({})
-        assert "calculator" in result
+        assert "calculator" in result.to_display_string()
         skill_name = "calculator"
 
         # 2. 加载
         result = loader.run({"skill_name": skill_name})
-        assert "成功加载" in result
+        assert "成功加载" in result.to_display_string()
         assert self.manager.is_active(skill_name)
 
         # 3. 验证工具注入到 ToolRegistry
@@ -1267,7 +1274,7 @@ class TestMetaTools:
 
         # 4. 卸载
         result = unloader.run({"skill_name": skill_name})
-        assert "成功卸载" in result
+        assert "成功卸载" in result.to_display_string()
         assert not self.manager.has_skill(skill_name)
 
         # 5. 验证工具已从 ToolRegistry 移除
@@ -1281,12 +1288,15 @@ class TestMetaTools:
         tool = SkillTool(self.registry, self.manager, tracker)
         result = tool.run({"skill_name": "calculator"})
 
-        assert "已注入 Skill `calculator`" in result
-        assert "详细正文已注入当前 invoke 的后续推理链" in result
-        assert "<skill>" not in result
+        text = result.to_display_string()
+        assert result.status == "success"
+        assert "已注入 Skill `calculator`" in text
+        assert "详细正文已注入当前 invoke 的后续推理链" in text
+        assert "<skill>" not in text
         assert self.manager.has_skill("calculator")
         assert self.manager.is_active("calculator")
         assert self.manager.has_runtime_skill_context()
+        assert self.tool_registry.get_tool_visibility("calculator_tool") == "runtime"
         self.manager.clear_ephemeral_state()
         assert not self.manager.has_skill("calculator")
         assert not self.manager.has_runtime_skill_context()
@@ -1304,8 +1314,9 @@ class TestMetaTools:
         tool = SkillTool(self.registry, self.manager, set())
         result = tool.run({"skill_name": "calculator"})
 
-        assert "已注入 Skill `calculator`" in result
+        assert "已注入 Skill `calculator`" in result.to_display_string()
         assert self.manager.is_active("calculator")
+        assert self.tool_registry.get_tool_visibility("calculator_tool") == "runtime"
 
         self.manager.clear_ephemeral_state()
 

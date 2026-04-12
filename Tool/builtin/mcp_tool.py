@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Protocol, Type
 
 from pydantic import BaseModel, Field, create_model
 
-from ..BaseTool import Tool
+from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from  mcp import MCPClient
 
@@ -209,8 +209,22 @@ class MCPWrappedTool(Tool):
         # 从schema构建参数模型
         parameters = _build_pydantic_model_from_schema(self.mcp_tool_name, input_schema)
 
+        prompt = (
+            f"这是一个远程 MCP 工具 `{tool_name}`。\n"
+            "严格按照参数 schema 提供输入，不要臆造额外字段。\n"
+            "结果来自外部服务或远程进程；若结果与本地上下文冲突，以最新返回结果为准。\n"
+            f"远程工具说明: {description}"
+        )
+
         # 调用父类初始化
-        super().__init__(name=tool_name, description=description, parameters=parameters)
+        super().__init__(
+            name=tool_name,
+            description=description,
+            parameters=parameters,
+            prompt=prompt,
+            source="mcp",
+            tags=["mcp", "remote"],
+        )
 
     def run(self, parameters: dict):
         """
@@ -223,12 +237,19 @@ class MCPWrappedTool(Tool):
             工具执行结果，转换为字符串
         """
         result = self.manager.execute_tool(self.mcp_tool_name, parameters)
-        # 统一转换为字符串格式返回
+        if isinstance(result, ToolResult):
+            return result
         if isinstance(result, (dict, list)):
-            return str(result)
+            return ToolResult.success(
+                structured_data=result,
+                metadata={"mcp_tool_name": self.mcp_tool_name},
+            )
         if result is None:
-            return ""
-        return str(result)
+            return ToolResult.success("", metadata={"mcp_tool_name": self.mcp_tool_name})
+        return ToolResult.success(
+            str(result),
+            metadata={"mcp_tool_name": self.mcp_tool_name},
+        )
 
 class MCPToolManager:
     """

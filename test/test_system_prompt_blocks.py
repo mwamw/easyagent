@@ -39,8 +39,20 @@ class DummyParams(BaseModel):
 
 
 class DummyTool(Tool):
-    def __init__(self, name: str = "dummy_tool"):
-        super().__init__(name, "dummy tool", DummyParams)
+    def __init__(
+        self,
+        name: str = "dummy_tool",
+        *,
+        guidance: str = "",
+        prompt: str = "",
+    ):
+        super().__init__(
+            name,
+            "dummy tool",
+            DummyParams,
+            guidance=guidance,
+            prompt=prompt,
+        )
 
     def run(self, parameters: dict):
         return parameters.get("text", "")
@@ -214,6 +226,31 @@ class TestSystemPromptBlocks(unittest.TestCase):
         self.assertEqual(injected.metadata.get("source"), "skill_tool")
         self.assertIn("## 当前 Runtime Skill Context", injected.content)
         self.assertIn('<skill-runtime-entry name="on_demand_skill"', injected.content)
+
+    def test_tool_policy_warns_about_current_tools_set(self):
+        llm = SpyEasyLLM()
+        registry = ToolRegistry()
+        registry.register_tool(
+            DummyTool(
+                "guided_lookup",
+                guidance="仅在需要查外部索引时使用。",
+                prompt="调用前先确认关键词是否足够具体。",
+            )
+        )
+
+        agent = BasicAgent(
+            name="assistant",
+            llm=llm,
+            tool_registry=registry,
+            enable_tool=True,
+        )
+
+        prompt = agent.get_enhanced_prompt()
+        block_names = [block.name for block in agent.get_system_prompt_blocks()]
+
+        self.assertNotIn("tool_guidance", block_names)
+        self.assertIn("工具可用性始终以当前请求实际提供的 tools 集合为准", prompt)
+        self.assertNotIn("## 工具专属提示", prompt)
 
     def test_react_agent_exposes_react_specific_blocks(self):
         llm = SpyEasyLLM()

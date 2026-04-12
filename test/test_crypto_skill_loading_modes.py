@@ -85,9 +85,11 @@ def test_crypto_skill_enters_runtime_context_after_skill_tool(registry):
     tool = SkillTool(registry, agent.skill_manager, set())
 
     result = tool.run({"skill_name": "crypto_skill"})
-    assert "已注入 Skill `crypto_skill`" in result
-    assert "详细正文已注入当前 invoke 的后续推理链" in result
-    assert "<skill>" not in result
+    text = result.to_display_string()
+    assert result.status == "success"
+    assert "已注入 Skill `crypto_skill`" in text
+    assert "详细正文已注入当前 invoke 的后续推理链" in text
+    assert "<skill>" not in text
 
     injected_messages = []
     agent._append_runtime_skill_context_message(injected_messages)
@@ -112,7 +114,7 @@ def test_crypto_skill_is_fully_unloaded_after_ephemeral_cleanup(registry):
     tool = SkillTool(registry, agent.skill_manager, set())
 
     result = tool.run({"skill_name": "crypto_skill"})
-    assert "已注入 Skill `crypto_skill`" in result
+    assert "已注入 Skill `crypto_skill`" in result.to_display_string()
     assert agent.skill_manager.has_skill("crypto_skill")
     assert agent.skill_manager.is_active("crypto_skill")
     assert agent.skill_manager.has_runtime_skill_context()

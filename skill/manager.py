@@ -78,7 +78,13 @@ class SkillManager:
 
     # ==================== Skill 注册 / 注销 ====================
 
-    def register(self, skill: BaseSkill) -> "SkillManager":
+    def register(
+        self,
+        skill: BaseSkill,
+        *,
+        auto_activate: Optional[bool] = None,
+        tool_visibility: str = "resident",
+    ) -> "SkillManager":
         """
         注册一个 Skill
 
@@ -107,8 +113,9 @@ class SkillManager:
         logger.info("📦 注册 Skill '%s' (v%s)", skill.name, skill.config.version)
 
         # 自动激活
-        if skill.config.auto_activate:
-            self.activate(skill.name)
+        should_auto_activate = skill.config.auto_activate if auto_activate is None else auto_activate
+        if should_auto_activate:
+            self.activate(skill.name, tool_visibility=tool_visibility)
 
         return self
 
@@ -135,7 +142,7 @@ class SkillManager:
 
     # ==================== 激活 / 停用 ====================
 
-    def activate(self, name: str) -> None:
+    def activate(self, name: str, *, tool_visibility: str = "resident") -> None:
         """
         激活指定 Skill
 
@@ -176,7 +183,7 @@ class SkillManager:
                     )
 
         # 1. 注册 Tools
-        tool_names = self._inject_tools(skill)
+        tool_names = self._inject_tools(skill, tool_visibility=tool_visibility)
         self._skill_tool_names[name] = tool_names
 
         # 2. 注册 ContextSources
@@ -550,7 +557,7 @@ class SkillManager:
                     skill.name, dep, dep,
                 )
 
-    def _inject_tools(self, skill: BaseSkill) -> List[str]:
+    def _inject_tools(self, skill: BaseSkill, *, tool_visibility: str = "resident") -> List[str]:
         """将 Skill 的 Tools 注册到 Agent 的 ToolRegistry"""
         if self._agent is None:
             return []
@@ -567,8 +574,17 @@ class SkillManager:
         try:
             tools = skill.get_tools()
             for tool in tools:
+                if skill.get_exposure_mode() == "on_demand" and tool_visibility in {"runtime", "turn"}:
+                    tool.mark_as_demand_skill_tool(skill.name)
+                else:
+                    tool.clear_demand_skill_tool()
                 if not registry.has_tool(tool.name):
-                    registry.register_tool(tool)
+                    if tool_visibility == "runtime":
+                        registry.mount_runtime_tool(tool)
+                    elif tool_visibility == "turn":
+                        registry.mount_turn_tool(tool)
+                    else:
+                        registry.register_tool(tool)
                     tool_names.append(tool.name)
                 else:
                     logger.warning(

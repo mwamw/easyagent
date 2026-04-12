@@ -4,12 +4,11 @@
 支持 SerpAPI 和简单的 DuckDuckGo 搜索。
 """
 import os
-import json
 import logging
 from typing import Optional
 from pydantic import BaseModel, Field
 
-from ..BaseTool import Tool
+from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -19,6 +18,26 @@ class SearchParams(BaseModel):
     """搜索参数"""
     query: str = Field(description="搜索关键词")
     num_results: int = Field(default=5, description="返回结果数量，默认5条")
+
+
+SEARCH_TOOL_PROMPT = """仅在你需要最新外部信息、公开网页资料或当前上下文无法回答的问题时使用此工具。
+- 搜索结果是候选线索，不是自动可信的最终事实；回答前应基于标题、链接和摘要交叉判断。
+- 若首轮结果不够好，应改写查询词后再次搜索，而不是勉强从弱结果中下结论。
+- 涉及时间敏感信息时，优先选择结果中更具体、更新、更接近原始来源的页面。
+- 在最终答复中引用搜索信息时，优先保留来源线索，如站点名或链接。"""
+
+
+def _format_search_output(query: str, results: list[dict[str, str]]) -> str:
+    if not results:
+        return "未找到相关结果"
+
+    output_lines = [f"搜索「{query}」的结果：\n"]
+    for i, r in enumerate(results, 1):
+        output_lines.append(f"{i}. {r.get('title', '')}")
+        if r.get("link"):
+            output_lines.append(f"   链接: {r['link']}")
+        output_lines.append(f"   摘要: {r.get('snippet', '')}\n")
+    return "\n".join(output_lines)
 
 
 class WebSearchTool(Tool):
@@ -50,7 +69,12 @@ class WebSearchTool(Tool):
         super().__init__(
             name="web_search",
             description="在互联网上搜索信息。输入搜索关键词，返回相关网页摘要。",
-            parameters=SearchParams
+            parameters=SearchParams,
+            guidance="仅在需要最新外部资料、公开网页信息或时间敏感事实时使用；搜索结果应作为线索再判断，不要机械照抄。",
+            prompt=SEARCH_TOOL_PROMPT,
+            read_only=True,
+            source="builtin",
+            tags=["search", "web"],
         )
         
         self.api_key = api_key or os.getenv("SERPAPI_API_KEY")
@@ -65,13 +89,13 @@ class WebSearchTool(Tool):
         
         logger.info(f"WebSearchTool 初始化完成，后端: {self.backend}")
     
-    def run(self, parameters: dict) -> str:
+    def run(self, parameters: dict) -> ToolResult:
         """执行搜索"""
         query = parameters.get("query", "")
         num_results = parameters.get("num_results", 5)
         
         if not query:
-            return "错误：搜索关键词不能为空"
+            return ToolResult.error("错误：搜索关键词不能为空", error_type="invalid_parameters")
         
         try:
             if self.backend == "serpapi":
@@ -80,17 +104,24 @@ class WebSearchTool(Tool):
                 return self._search_duckduckgo(query, num_results)
         except Exception as e:
             logger.error(f"搜索失败: {e}")
-            return f"搜索失败: {str(e)}"
+            return ToolResult.error(
+                f"搜索失败: {str(e)}",
+                error_type="search_failed",
+                metadata={"backend": self.backend, "query": query},
+            )
     
-    def _search_serpapi(self, query: str, num_results: int) -> str:
+    def _search_serpapi(self, query: str, num_results: int) -> ToolResult:
         """使用 SerpAPI 搜索"""
         try:
             import requests
         except ImportError:
-            return "错误：需要安装 requests 库"
+            return ToolResult.error("错误：需要安装 requests 库", error_type="missing_dependency")
         
         if not self.api_key:
-            return "错误：SerpAPI 需要 API Key，请设置 SERPAPI_API_KEY 环境变量"
+            return ToolResult.error(
+                "错误：SerpAPI 需要 API Key，请设置 SERPAPI_API_KEY 环境变量",
+                error_type="missing_api_key",
+            )
         
         url = "https://serpapi.com/search"
         params = {
@@ -113,19 +144,13 @@ class WebSearchTool(Tool):
                 "snippet": item.get("snippet", "")
             })
         
-        if not results:
-            return "未找到相关结果"
-        
-        # 格式化输出
-        output_lines = [f"搜索「{query}」的结果：\n"]
-        for i, r in enumerate(results, 1):
-            output_lines.append(f"{i}. {r['title']}")
-            output_lines.append(f"   链接: {r['link']}")
-            output_lines.append(f"   摘要: {r['snippet']}\n")
-        
-        return "\n".join(output_lines)
+        return ToolResult.success(
+            _format_search_output(query, results),
+            structured_data=results,
+            metadata={"backend": "serpapi", "query": query},
+        )
     
-    def _search_duckduckgo(self, query: str, num_results: int) -> str:
+    def _search_duckduckgo(self, query: str, num_results: int) -> ToolResult:
         """使用 DuckDuckGo 搜索（无需 API Key）"""
         try:
             from duckduckgo_search import DDGS
@@ -142,23 +167,18 @@ class WebSearchTool(Tool):
                     "snippet": r.get("body", "")
                 })
         
-        if not results:
-            return "未找到相关结果"
-        
-        output_lines = [f"搜索「{query}」的结果：\n"]
-        for i, r in enumerate(results, 1):
-            output_lines.append(f"{i}. {r['title']}")
-            output_lines.append(f"   链接: {r['link']}")
-            output_lines.append(f"   摘要: {r['snippet']}\n")
-        
-        return "\n".join(output_lines)
+        return ToolResult.success(
+            _format_search_output(query, results),
+            structured_data=results,
+            metadata={"backend": "duckduckgo", "query": query},
+        )
     
-    def _search_duckduckgo_lite(self, query: str, num_results: int) -> str:
+    def _search_duckduckgo_lite(self, query: str, num_results: int) -> ToolResult:
         """备用的简单 DuckDuckGo 搜索"""
         try:
             import requests
         except ImportError:
-            return "错误：需要安装 requests 库"
+            return ToolResult.error("错误：需要安装 requests 库", error_type="missing_dependency")
         
         url = "https://api.duckduckgo.com/"
         params = {
@@ -191,16 +211,17 @@ class WebSearchTool(Tool):
                 })
         
         if not results:
-            return f"DuckDuckGo 未找到「{query}」的相关结果。建议安装 duckduckgo-search 获取更好的搜索结果。"
-        
-        output_lines = [f"搜索「{query}」的结果：\n"]
-        for i, r in enumerate(results, 1):
-            output_lines.append(f"{i}. {r['title']}")
-            if r['link']:
-                output_lines.append(f"   链接: {r['link']}")
-            output_lines.append(f"   摘要: {r['snippet']}\n")
-        
-        return "\n".join(output_lines)
+            return ToolResult.success(
+                f"DuckDuckGo 未找到「{query}」的相关结果。建议安装 duckduckgo-search 获取更好的搜索结果。",
+                structured_data=[],
+                metadata={"backend": "duckduckgo_lite", "query": query},
+            )
+
+        return ToolResult.success(
+            _format_search_output(query, results),
+            structured_data=results,
+            metadata={"backend": "duckduckgo_lite", "query": query},
+        )
 
 
 def register_search_tool(

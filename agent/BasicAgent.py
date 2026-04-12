@@ -4,7 +4,7 @@ from core.llm import EasyLLM
 from core.Message import Message, UserMessage, SystemMessage, AssistantMessage, MetaUserMessage
 from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
-from Tool.BaseTool import Tool
+from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
 import asyncio
 import json
@@ -938,7 +938,8 @@ class BasicAgent(BaseAgent):
                                 mode="tool",
                                 stream=False,
                             )
-                            tool_result = self._safe_execute_tool(tool_name, tool_args)
+                            tool_result_obj = self._safe_execute_tool_result(tool_name, tool_args)
+                            tool_result = tool_result_obj.to_display_string()
                             self._record_tool_result(
                                 turn_id,
                                 tool_name,
@@ -949,11 +950,16 @@ class BasicAgent(BaseAgent):
                                 round_number=iteration_count,
                                 mode="tool",
                                 stream=False,
-                                success=True,
+                                success=tool_result_obj.status == "success",
                             )
                             tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                             messages.append(tool_msg)
                             turn_history.append(tool_msg)
+                            self._maybe_inject_tool_ephemeral_context(
+                                tool_name=tool_name,
+                                tool_result=tool_result_obj,
+                                messages=messages,
+                            )
                             self._maybe_inject_runtime_skill_context(tool_name=tool_name, messages=messages)
 
                         except ToolExecutionError as e:
@@ -1237,7 +1243,8 @@ class BasicAgent(BaseAgent):
                                 mode="tool",
                                 stream=False,
                             )
-                            tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
+                            tool_result_obj = await self._async_safe_execute_tool_result(tool_name, tool_args)
+                            tool_result = tool_result_obj.to_display_string()
                             self._record_tool_result(
                                 turn_id,
                                 tool_name,
@@ -1248,9 +1255,13 @@ class BasicAgent(BaseAgent):
                                 round_number=iteration_count,
                                 mode="tool",
                                 stream=False,
-                                success=True,
+                                success=tool_result_obj.status == "success",
                             )
-                            return self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                            return {
+                                "tool_name": tool_name,
+                                "tool_result": tool_result_obj,
+                                "tool_message": self.llm.format_tool_result(tool_result, tool_id, tool_name),
+                            }
 
                         except ToolExecutionError as e:
                             logger.error(f"工具 '{tool_name}' 执行失败: {e}")
@@ -1267,7 +1278,11 @@ class BasicAgent(BaseAgent):
                                 stream=False,
                                 success=False,
                             )
-                            return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                            return {
+                                "tool_name": tool_name,
+                                "tool_result": None,
+                                "tool_message": self.llm.format_tool_result(error_msg, tool_id, tool_name),
+                            }
                         except Exception as e:
                             logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                             error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
@@ -1283,15 +1298,28 @@ class BasicAgent(BaseAgent):
                                 stream=False,
                                 success=False,
                             )
-                            return self.llm.format_tool_result(error_msg, tool_id, tool_name)
+                            return {
+                                "tool_name": tool_name,
+                                "tool_result": None,
+                                "tool_message": self.llm.format_tool_result(error_msg, tool_id, tool_name),
+                            }
 
                     tasks = [
                         _process_single_tool(tc)
                         for tc in tool_calls
                     ]
-                    tool_msgs = await asyncio.gather(*tasks)
+                    tool_payloads = await asyncio.gather(*tasks)
+                    tool_msgs = [payload["tool_message"] for payload in tool_payloads]
                     messages.extend(tool_msgs)
                     turn_history.extend(tool_msgs)
+                    for payload in tool_payloads:
+                        result_obj = payload.get("tool_result")
+                        if result_obj is not None:
+                            self._maybe_inject_tool_ephemeral_context(
+                                tool_name=payload["tool_name"],
+                                tool_result=result_obj,
+                                messages=messages,
+                            )
                     if any(self._safe_get_tool_name(tc) == "skill_tool" for tc in tool_calls):
                         self._maybe_inject_runtime_skill_context(tool_name="skill_tool", messages=messages)
 
@@ -1568,11 +1596,13 @@ class BasicAgent(BaseAgent):
                                     stream=True,
                                 )
                                 try:
-                                    tool_result = await self._async_safe_execute_tool(tool_name, tool_args)
-                                    tool_success = True
+                                    tool_result_obj = await self._async_safe_execute_tool_result(tool_name, tool_args)
+                                    tool_result = tool_result_obj.to_display_string()
+                                    tool_success = tool_result_obj.status == "success"
                                 except Exception as e:
                                     logger.error(f"流式工具 '{tool_name}' 执行失败: {e}")
                                     tool_result = f"工具 '{tool_name}' 执行失败: {e}"
+                                    tool_result_obj = None
                                     tool_success = False
                                 yield {
                                     "type": "tool_result",
@@ -1596,6 +1626,12 @@ class BasicAgent(BaseAgent):
                                 tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                                 messages.append(tool_message)
                                 turn_history.append(tool_message)
+                                if tool_result_obj is not None:
+                                    self._maybe_inject_tool_ephemeral_context(
+                                        tool_name=tool_name,
+                                        tool_result=tool_result_obj,
+                                        messages=messages,
+                                    )
                                 self._maybe_inject_runtime_skill_context(tool_name=tool_name, messages=messages)
 
                             max_iter -= 1
@@ -1900,8 +1936,36 @@ class BasicAgent(BaseAgent):
             )
         )
 
+    def _append_tool_ephemeral_context_message(
+        self,
+        *,
+        tool_name: str,
+        context: Any,
+        messages: list[Any],
+    ) -> None:
+        """向当前推理链追加工具返回的临时上下文。"""
+        if context is None:
+            return
+        if isinstance(context, str):
+            context_text = context.strip()
+        elif isinstance(context, (dict, list)):
+            context_text = json.dumps(context, ensure_ascii=False, indent=2)
+        else:
+            context_text = str(context).strip()
+        if not context_text:
+            return
+        messages.append(
+            MetaUserMessage(
+                f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>",
+                metadata={
+                    "source": tool_name,
+                    "kind": "runtime_tool_context",
+                },
+            )
+        )
+
     def _clear_ephemeral_skill_state(self) -> None:
-        """清理当前轮的临时 Skill 状态。"""
+        """清理当前轮的临时 Skill/Tool 状态。"""
         self.skill_manager.clear_ephemeral_state()
 
     def _maybe_inject_runtime_skill_context(
@@ -1916,6 +1980,20 @@ class BasicAgent(BaseAgent):
         if not self.skill_manager.has_runtime_skill_context():
             return
         self._append_runtime_skill_context_message(messages)
+
+    def _maybe_inject_tool_ephemeral_context(
+        self,
+        *,
+        tool_name: str,
+        tool_result: ToolResult,
+        messages: list[Any],
+    ) -> None:
+        """当工具返回临时上下文时，将其注入当前推理链。"""
+        self._append_tool_ephemeral_context_message(
+            tool_name=tool_name,
+            context=tool_result.ephemeral_context,
+            messages=messages,
+        )
 
     def _get_extension_prompt_blocks(self, start_order: int) -> list[PromptBlock]:
         """

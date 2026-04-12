@@ -1,7 +1,7 @@
 # EasyAgent 待实现功能 (Roadmap)
 
 本文档记录 EasyAgent 框架后续计划实现的功能。
-> 最后更新：2026-04-08
+> 最后更新：2026-04-12
 
 ---
 
@@ -90,6 +90,56 @@ agent = BasicAgent.load_session("session_001")
 **涉及文件:**
 - `core/guardrails.py` - 安全检查框架
 - `core/token_budget.py` - Token 预算管理
+
+---
+
+### Tool 模块后续完善
+当前 `Tool` 模块已经完成 `ToolSpec + ToolResult + ToolRegistry` 的主干重构，并与 `Skill` 的 on-demand 临时工具挂载打通；后续重点是把协议层进一步工程化。
+
+- 更完整的工具权限/风险语义：
+  - 除 `requires_confirmation` 之外，增加更细粒度的 destructive / network / filesystem / side-effect 分级
+  - 为高风险工具建立统一确认与拒绝反馈路径
+- 更完整的 provider-neutral schema 适配：
+  - 不再只以 OpenAI 风格 function schema 为事实标准
+  - 为 Anthropic / Google / Responses API 统一输出适配层
+- 更严格的工具可见性与冲突管理：
+  - 对同名工具覆盖策略做显式约束
+  - 强化 resident / runtime / turn 工具的生命周期管理
+  - 避免临时工具与常驻工具发生静默冲突
+- 更体系化的 runtime context：
+  - 继续保留 `ToolResult.ephemeral_context`
+  - 让工具临时上下文在 compaction / session rebuild / trace 中也有稳定协议
+
+**涉及文件:**
+- `Tool/BaseTool.py`
+- `Tool/ToolRegistry.py`
+- `core/agent.py`
+- `agent/BasicAgent.py`
+
+---
+
+### MCP 模块增强
+当前 EasyAgent 的 MCP 集成已经能把远程 MCP tools 包装成 EasyAgent Tool，但相对 Claude Code 仍然偏轻，后续需要补全 MCP 生态层能力。
+
+- MCP resources 支持：
+  - 增加资源列举与读取能力，对齐 `ListMcpResources` / `ReadMcpResource`
+  - 区分“远程 tools”和“远程 resources”两类能力
+- MCP prompts / commands 支持：
+  - 支持从 MCP server 拉取 prompt/command，并映射到 EasyAgent 的 Skill / Command / Prompt 体系
+  - 避免 MCP 只剩“远程工具桥接”这一条窄路径
+- MCP 权限与连接管理增强：
+  - 更细粒度的 server/tool 级权限控制
+  - 自动重连、错误分类、结果缓存与失效策略
+  - 与 ToolResult / ToolSpec 的风险语义打通
+- MCP 能力发现与展示优化：
+  - 区分本地 builtin tool、Skill 临时 tool、MCP remote tool
+  - 给模型提供更稳定的远程能力边界说明
+
+**涉及文件:**
+- `Tool/builtin/mcp_tool.py`
+- `mcp/`
+- `skill/meta_tools.py`
+- `prompt/system_prompt.py`
 
 ---
 

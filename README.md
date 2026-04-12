@@ -14,6 +14,11 @@
 - **多模型支持**：OpenAI、Google Gemini、Anthropic Claude、DeepSeek、通义千问等 (Provider 适配器模式)
 - **异步支持**：批量添加记忆与异步搜索
 
+## 📚 文档
+
+- [Skill 使用指南](./skill/skill_guide.md)
+- [Tool 使用指南](./Tool/tool_guide.md)
+
 ## 🚀 快速开始
 
 ### 安装

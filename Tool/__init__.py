@@ -1,5 +1,5 @@
 # Tool module for EasyAgent
-from .BaseTool import Tool
+from .BaseTool import Tool, ToolResult, ToolSpec
 from .ToolRegistry import ToolRegistry
 from mcp import MCPClient
 from .builtin import (
@@ -15,6 +15,8 @@ from .builtin import (
 
 __all__ = [
     "Tool",
+    "ToolSpec",
+    "ToolResult",
     "ToolRegistry",
     # Builtin tools
     "WebSearchTool",

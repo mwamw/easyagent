@@ -69,7 +69,7 @@ def main() -> None:
     after_skill_messages = list(start_messages)
     after_skill_messages.append(
         ToolMessage(
-            content=tool_result,
+            content=tool_result.to_display_string(),
             tool_call_id="call_demo_skill_tool",
             name="skill_tool",
         )
