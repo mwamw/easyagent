@@ -17,6 +17,7 @@ import sys
 from typing import Any
 
 from .mcp_client import MCPClient
+from .runtime import MCPRuntimeManager
 
 # Lazy-exported symbol placeholder for static analyzers.
 MCPServer: Any
@@ -82,4 +83,4 @@ def __getattr__(name: str) -> Any:
 	raise AttributeError(f"module 'mcp' has no attribute {name!r}")
 
 
-__all__ = ["MCPClient", "MCPServer"]
+__all__ = ["MCPClient", "MCPRuntimeManager", "MCPServer"]

@@ -184,6 +184,21 @@ class SkillRegistry:
         available = self.list_available_names()
         raise KeyError(f"Skill '{skill_name}' 未注册。可用: {available}")
 
+    def unregister(self, skill_name: str) -> None:
+        """注销指定 Skill 的注册记录。"""
+        existed = False
+        if skill_name in self._skill_classes:
+            del self._skill_classes[skill_name]
+            existed = True
+        if skill_name in self._skill_factories:
+            del self._skill_factories[skill_name]
+            existed = True
+        self._metadata.pop(skill_name, None)
+        self._skill_descriptions.pop(skill_name, None)
+        self._manifests.pop(skill_name, None)
+        if not existed:
+            raise KeyError(f"Skill '{skill_name}' 未注册")
+
     # ==================== 发现 ====================
 
     def discover_from_directory(self, path: str) -> List[str]:

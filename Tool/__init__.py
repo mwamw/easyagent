@@ -9,6 +9,8 @@ from .builtin import (
     register_calculator_tool,
     MCPToolManager,
     MCPWrappedTool,
+    MCPListResourcesTool,
+    MCPReadResourceTool,
     register_mcp_tools,
     mcptool,
 )
@@ -26,6 +28,8 @@ __all__ = [
     "MCPClient",
     "MCPToolManager",
     "MCPWrappedTool",
+    "MCPListResourcesTool",
+    "MCPReadResourceTool",
     "register_mcp_tools",
     "mcptool",
 ]

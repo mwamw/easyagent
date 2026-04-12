@@ -24,8 +24,12 @@ def main() -> None:
     tool = mcptool(
         server_source=["npx", "-y", "@modelcontextprotocol/server-filesystem", workspace],
         tool_prefix="py_",
+        # auto_connect=False,
+        include_resources=True,
+        resource_tool_prefix="py_",
     )
-
+    # tool.connect()
+    # print(tool.snapshot().tools)
     agent = BasicAgent(
         name="mcp-agent",
         llm=llm,
@@ -33,7 +37,6 @@ def main() -> None:
         tool_registry=registry,
     )
     agent.add_tool(tool)
-    print(registry.list_tool_specs())
     try:
         agent.stream_invoke("列出当前文件夹下的文件")
     finally:

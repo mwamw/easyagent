@@ -479,6 +479,8 @@ Skill 激活时，`SkillManager` 会根据模式把工具注入 `ToolRegistry`�
 | `CalculatorTool` | 数学计算 |
 | `WebSearchTool` | 网络搜索 |
 | `MCPWrappedTool` | 远程 MCP 工具包装 |
+| `MCPListResourcesTool` | 列出 MCP 资源 |
+| `MCPReadResourceTool` | 读取 MCP 资源 |
 | Memory tools | `add_memory_tool`、`search_memory_tool`、`update_memory_tool` 等 |
 | Skill meta tools | `skill_tool`、`skill_discovery_tool`、`load_skill_tool`、`unload_skill_tool` |
 
@@ -493,8 +495,23 @@ Memory tools 已原生返回 `ToolResult`，并带有 memory-specific guidance/p
 
 ### MCP Tool 特点
 
-MCP 工具会把远程工具说明也折叠进 schema description。  
-模型看到的是“当前真的暴露出来的远程工具”，而不是额外的 system prompt 附录。
+MCP 集成现在分成三层：
+
+- 远程 MCP tools：包装成 `MCPWrappedTool`
+- MCP resources：通过 `MCPListResourcesTool` / `MCPReadResourceTool` 暴露
+- MCP prompts：不进 ToolRegistry，而是映射成 `on_demand skills`
+
+其中 Tool 层遵循以下规则：
+
+- MCP 工具会把远程说明也折叠进 schema description
+- MCP annotations 会进一步映射到 `ToolSpec`：
+  - `readOnlyHint` -> `read_only`
+  - `destructiveHint` -> `destructive`
+  - `openWorldHint` -> `requires_confirmation` / metadata
+  - `idempotentHint` -> `supports_parallel`
+- 模型看到的是“当前真的暴露出来的远程工具/资源工具”
+- 不会额外把 MCP tool prompt 再拼进 system prompt
+- MCP prompt 则复用现有 `SkillRegistry + skill_tool` 路径
 
 ---
 

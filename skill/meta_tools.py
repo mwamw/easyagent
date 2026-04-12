@@ -20,7 +20,7 @@ Skill 元工具 — LLM 动态发现与调用 Skill
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +39,13 @@ class SkillDiscoveryParams(BaseModel):
 
 class SkillRunParams(BaseModel):
     skill_name: str = Field(description="要调用的 Skill 注册名称")
+    skill_arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "传给 Skill 的额外参数。当前主要用于 MCPPromptSkill 的 prompt 参数；"
+            "例如 {\"language\": \"中文\"}。"
+        ),
+    )
 
 
 class LoadSkillParams(BaseModel):
@@ -118,8 +125,14 @@ class SkillTool(Tool):
 
     def run(self, parameters: dict) -> ToolResult:
         skill_name = parameters.get("skill_name", "")
+        skill_arguments = parameters.get("skill_arguments", {}) or {}
         if not skill_name:
             return ToolResult.error("错误：必须指定 skill_name", error_type="invalid_parameters")
+        if not isinstance(skill_arguments, dict):
+            return ToolResult.error(
+                "错误：skill_arguments 必须是对象/字典。",
+                error_type="invalid_parameters",
+            )
 
         if not self._registry.has(skill_name):
             available = self._registry.list_available_names()
@@ -130,14 +143,23 @@ class SkillTool(Tool):
             )
 
         try:
+            manifest = self._registry.get_manifest(skill_name)
             existed_before = self._manager.has_skill(skill_name)
             was_active_before = existed_before and self._manager.is_active(skill_name)
+            create_kwargs: dict[str, Any] = {}
+            if skill_arguments and manifest.source_type == "mcp_prompt":
+                create_kwargs["prompt_arguments"] = {
+                    str(key): str(value) for key, value in skill_arguments.items()
+                }
+
             if self._manager.has_skill(skill_name):
                 skill = self._manager.get_skill(skill_name)
+                if skill_arguments and hasattr(skill, "set_prompt_arguments"):
+                    skill.set_prompt_arguments(skill_arguments)  # type: ignore[attr-defined]
                 if not self._manager.is_active(skill_name):
                     self._manager.activate(skill_name, tool_visibility="runtime")
             else:
-                skill = self._registry.create(skill_name)
+                skill = self._registry.create(skill_name, **create_kwargs)
                 self._manager.register(skill, auto_activate=False)
                 if not self._manager.is_active(skill_name):
                     self._manager.activate(skill_name, tool_visibility="runtime")
@@ -157,9 +179,10 @@ class SkillTool(Tool):
 
             return ToolResult.success(
                 f"已注入 Skill `{skill_name}`。\n"
-                "该 Skill 的详细正文已注入当前 invoke 的后续推理链，请直接基于当前新增上下文继续执行。\n"
+                "该 Skill 的详细正文已注入当前 invoke 的后续推理链，请直接基于当前新增上下文继续执行。\n",
                 metadata={
                     "skill_name": skill_name,
+                    "skill_arguments": dict(skill_arguments),
                     "exposure_mode": skill.get_exposure_mode(),
                     "execution_mode": skill.get_execution_mode(),
                 },

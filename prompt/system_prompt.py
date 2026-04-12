@@ -279,6 +279,7 @@ def build_skill_policy_section() -> str:
     return """## Skill 使用规则
 - 系统中的部分能力以 Skill 的形式提供；这类能力可能不会常驻在 system prompt 中。
 - 优先阅读当前 system prompt 中的 `## 可用 Skills` 列表；如果列表里已经有合适的 Skill，直接调用 `skill_tool`，不要先调用 `skill_discovery_tool`。
+- 如果某个 Skill 在 listing 中标出了参数要求，调用 `skill_tool` 时应通过 `skill_arguments` 传入对应参数，而不是忽略这些参数直接调用。
 - `skill_discovery_tool` 只用于补充检索：例如当前 listing 不足以判断、你需要按关键词筛选，或你怀疑可用 Skill 集合发生了变化。
 - `skill_tool` 用于当前轮的临时 Skill 调用：它返回的正文和新增工具只对当前后续推理链有效，当前轮结束后会自动完全卸载。
 - 下一次新的 `invoke` 不会继承上一轮通过 `skill_tool` 临时挂载出来的工具；如果还需要，必须重新调用 `skill_tool`。
@@ -288,6 +289,36 @@ def build_skill_policy_section() -> str:
 - 调用 Skill 后，返回内容会给出该 Skill 的正文指令；应基于这份正文继续执行，而不是凭印象猜测 Skill 行为。
 - 如果某个 Skill 需要额外挂载工具或上下文，应先调用 Skill，再使用新增能力完成任务。
 - 只有少量全局基础能力会以 resident 方式常驻，其余 Skill 默认按需加载。"""
+
+
+def _format_skill_argument_signature(item: Mapping[str, Any]) -> str:
+    metadata = item.get("metadata") or {}
+    if not isinstance(metadata, Mapping):
+        return ""
+
+    raw_arguments = metadata.get("mcp_prompt_arguments")
+    if not isinstance(raw_arguments, Sequence) or isinstance(raw_arguments, (str, bytes)):
+        return ""
+
+    required: list[str] = []
+    optional: list[str] = []
+    for raw in raw_arguments:
+        if not isinstance(raw, Mapping):
+            continue
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            continue
+        if bool(raw.get("required", False)):
+            required.append(name)
+        else:
+            optional.append(name)
+
+    parts: list[str] = []
+    if required:
+        parts.append(f"必填参数: {', '.join(required)}")
+    if optional:
+        parts.append(f"可选参数: {', '.join(optional)}")
+    return "；".join(parts)
 
 
 def build_skill_listing_section(skill_listings: Sequence[Mapping[str, Any]]) -> str:
@@ -313,6 +344,9 @@ def build_skill_listing_section(skill_listings: Sequence[Mapping[str, Any]]) -> 
         line = f"- `{name}`: {description} [暴露={exposure_mode}, 执行={execution_mode}]"
         if when_to_use:
             line += f"；适用场景：{when_to_use}"
+        argument_signature = _format_skill_argument_signature(item)
+        if argument_signature:
+            line += f"；{argument_signature}"
         lines.append(line)
     return "\n".join(lines)
 

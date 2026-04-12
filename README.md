@@ -99,6 +99,7 @@ mcp_manager = register_mcp_tools(
     registry=registry,
     server_source=["python", "./examples/mcp_server.py"],
     tool_prefix="mcp_",
+    include_resources=True,
 )
 
 agent = BasicAgent(
@@ -117,8 +118,39 @@ mcp_manager.close()
 说明：
 
 - `register_mcp_tools(...)` 会自动从 MCP Server 拉取 `list_tools`，并注册到 `ToolRegistry`
+- 设置 `include_resources=True` 后，还会额外注册资源浏览/读取工具
 - 支持 `stdio/http/sse/FastMCP(memory)` 传输
 - 需要安装可选依赖：`pip install fastmcp>=2.0.0`
+
+如果你希望把 MCP prompts 也接入当前系统，推荐走 Skill 系统：
+
+```python
+from skill.builtin import MCPSkill
+from skill.meta_tools import MetaSkill
+from skill.registry import SkillRegistry
+
+skill_registry = SkillRegistry()
+agent.with_skill(MetaSkill(skill_registry, agent.skill_manager))
+agent.with_skill(
+    MCPSkill(
+        server_source=["python", "./examples/mcp_server.py"],
+        prompt_registry=skill_registry,
+        register_prompt_skills=True,
+    )
+)
+```
+
+这样 MCP prompts 会被注册成 `on_demand skills`，出现在主 prompt 的 skill listing 中，并通过 `skill_tool` 按需调用。
+
+如果某个 MCP prompt 需要参数，可以直接把参数传给 `skill_tool`：
+
+```python
+# 逻辑上等价于：
+skill_tool(
+    skill_name="mcp_demo_review_notes",
+    skill_arguments={"language": "中文"},
+)
+```
 
 你也可以使用更简洁的语法糖写法：
 

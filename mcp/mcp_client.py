@@ -15,6 +15,44 @@ FASTMCP_AVAILABLE = importlib.util.find_spec("fastmcp") is not None
 
 from logging import getLogger
 logger = getLogger(__name__)
+
+
+def _normalize_model_like(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, float, bool, list, dict)):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if hasattr(value, "__dict__"):
+        return {
+            key: _normalize_model_like(item)
+            for key, item in vars(value).items()
+            if not key.startswith("_")
+        }
+    return value
+
+
+def _normalize_prompt_arguments(arguments: Any) -> List[Dict[str, Any]]:
+    if not isinstance(arguments, list):
+        return []
+
+    normalized: List[Dict[str, Any]] = []
+    for item in arguments:
+        normalized.append(
+            {
+                "name": str(getattr(item, "name", getattr(item, "get", lambda *_: "")("name"))),
+                "description": str(
+                    getattr(item, "description", getattr(item, "get", lambda *_: "")("description"))
+                ),
+                "required": bool(
+                    getattr(item, "required", getattr(item, "get", lambda *_: False)("required"))
+                ),
+            }
+        )
+    return normalized
+
+
 def _load_fastmcp_classes() -> Tuple[type, type, type, type, type]:
     from fastmcp import Client, FastMCP  # type: ignore[import-not-found]
     from fastmcp.client.transports import (  # type: ignore[import-not-found]
@@ -220,6 +258,7 @@ class MCPClient:
                 "name": tool.name,
                 "description": getattr(tool, "description", "") or "",
                 "input_schema": getattr(tool, "inputSchema", {}) or {},
+                "annotations": _normalize_model_like(getattr(tool, "annotations", None)) or {},
             }
             for tool in tools
         ]
@@ -267,7 +306,8 @@ class MCPClient:
                 "uri": resource.uri,
                 "name": resource.name or "",
                 "description": resource.description or "",
-                "mime_type": getattr(resource, 'mimeType', None)
+                "mime_type": getattr(resource, 'mimeType', None),
+                "annotations": _normalize_model_like(getattr(resource, "annotations", None)) or {},
             }
             for resource in result.resources
         ]
@@ -303,7 +343,7 @@ class MCPClient:
             {
                 "name": prompt.name,
                 "description": prompt.description or "",
-                "arguments": getattr(prompt, 'arguments', [])
+                "arguments": _normalize_prompt_arguments(getattr(prompt, 'arguments', [])),
             }
             for prompt in result.prompts
         ]

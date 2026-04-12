@@ -185,10 +185,35 @@ class TestSystemPromptBlocks(unittest.TestCase):
         self.assertNotIn("skills", block_names)
         self.assertIn("## Skill 使用规则", prompt)
         self.assertIn("直接调用 `skill_tool`", prompt)
+        self.assertIn("通过 `skill_arguments` 传入对应参数", prompt)
         self.assertIn("`load_skill_tool` / `unload_skill_tool` 是兼容接口", prompt)
         self.assertIn("## 可用 Skills", prompt)
         self.assertIn("`on_demand_skill`", prompt)
         self.assertNotIn("## On Demand Skill", prompt)
+
+    def test_skill_listing_surfaces_mcp_prompt_arguments(self):
+        from prompt.system_prompt import build_skill_listing_section
+
+        prompt = build_skill_listing_section(
+            [
+                {
+                    "name": "mcp_demo_review_notes",
+                    "listing_description": "生成评审备注",
+                    "when_to_use": "需要调用远程评审 prompt 时",
+                    "exposure_mode": "on_demand",
+                    "execution_mode": "inline",
+                    "metadata": {
+                        "mcp_prompt_arguments": [
+                            {"name": "language", "required": True},
+                            {"name": "target_file", "required": False},
+                        ]
+                    },
+                }
+            ]
+        )
+
+        self.assertIn("必填参数: language", prompt)
+        self.assertIn("可选参数: target_file", prompt)
 
     def test_runtime_skill_context_is_not_part_of_system_prompt(self):
         llm = SpyEasyLLM()

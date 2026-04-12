@@ -96,6 +96,7 @@ manager = register_mcp_tools(
         registry=registry,
         server_source=["python", "mcp/examples/real_python_mcp_server.py"],
         tool_prefix="py_",
+        include_resources=True,
 )
 
 agent = BasicAgent(
@@ -112,7 +113,46 @@ manager.close()
 说明：
 
 - 上面是 Agent 场景（工具注册到 `ToolRegistry`）
+- `include_resources=True` 时，还会额外注册 `list_mcp_resources` / `read_mcp_resource`
 - 目录里的 `mcp/examples/*.py` 是最直接的真实连接示例（更适合理解 MCP 协议交互）
+
+## 5.1 把 MCP prompts 接到 Skill 系统
+
+```python
+from agent.BasicAgent import BasicAgent
+from core.llm import EasyLLM
+from skill.builtin import MCPSkill
+from skill.meta_tools import MetaSkill
+from skill.registry import SkillRegistry
+
+llm = EasyLLM()
+registry = SkillRegistry()
+agent = BasicAgent(name="mcp-skill-agent", llm=llm, enable_tool=True)
+
+agent.with_skill(MetaSkill(registry, agent.skill_manager))
+agent.with_skill(
+    MCPSkill(
+        server_source=["python", "mcp/examples/real_python_mcp_server.py"],
+        prompt_registry=registry,
+        register_prompt_skills=True,
+    )
+)
+```
+
+这样 MCP server 暴露的 prompts 会被注册成 `on_demand skills`：
+
+- 它们会出现在主 prompt 的 skill listing 中
+- 模型通过 `skill_tool` 按需调用
+- skill 停用时，对应的 MCP prompt skills 也会一并注销
+
+如果某个 MCP prompt 需要参数，可以在调用 `skill_tool` 时一并传入：
+
+```python
+skill_tool(
+    skill_name="mcp_real_python_mcp_server_review_notes",
+    skill_arguments={"language": "中文"},
+)
+```
 
 ## 6. 关键参数说明
 
