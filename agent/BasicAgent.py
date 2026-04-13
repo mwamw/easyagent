@@ -102,6 +102,7 @@ class BasicAgent(BaseAgent):
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
         self._extension_prompt_blocks: list[PromptBlock] = []
+        self._last_tool_interrupt: Optional[dict[str, Any]] = None
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
@@ -115,6 +116,7 @@ class BasicAgent(BaseAgent):
             "trace_event_counter": self._trace_event_counter,
             "trace_seq": self._trace_seq,
             "trace_turn_counter": self._trace_turn_counter,
+            "last_tool_interrupt": self.get_last_tool_interrupt(),
         })
         return state
 
@@ -128,6 +130,7 @@ class BasicAgent(BaseAgent):
         self._trace_event_counter = int(state.get("trace_event_counter") or 0)
         self._trace_seq = int(state.get("trace_seq") or 0)
         self._trace_turn_counter = int(state.get("trace_turn_counter") or 0)
+        self._last_tool_interrupt = state.get("last_tool_interrupt")
 
         legacy_thinking = [str(item) for item in state.get("thinking_history", []) if item is not None]
         if not self.trace_history and legacy_thinking:
@@ -458,6 +461,7 @@ class BasicAgent(BaseAgent):
             "current_section": None,
             "thinking_text": "",
             "content_text": "",
+            "tool_calls": "",
         }
 
     @staticmethod
@@ -565,6 +569,94 @@ class BasicAgent(BaseAgent):
                 "tool_calls",
                 f"{event.get('tool_name','')} : {event.get('tool_args','')}\n"
             )
+            return
+        if event_type == "interruption":
+            cls._append_stream_text(
+                state,
+                "interrupt",
+                "content_text",
+                f"{event.get('content', '')}\n",
+            )
+
+    def get_last_tool_interrupt(self) -> Optional[dict[str, Any]]:
+        if self._last_tool_interrupt is None:
+            return None
+        return dict(self._last_tool_interrupt)
+
+    def _clear_last_tool_interrupt(self) -> None:
+        self._last_tool_interrupt = None
+
+    def _build_tool_interrupt_payload(
+        self,
+        *,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        tool_id: str,
+        round_number: int,
+        tool_result: ToolResult,
+    ) -> dict[str, Any]:
+        return {
+            "message": tool_result.to_display_string(),
+            "tool_name": tool_name,
+            "tool_args": dict(tool_args),
+            "tool_id": tool_id,
+            "round_number": round_number,
+            "status": tool_result.status,
+            "metadata": dict(tool_result.metadata),
+            "error_type": tool_result.error_type,
+        }
+
+    def _finalize_tool_interrupt(
+        self,
+        *,
+        turn_id: Optional[str],
+        tool_name: str,
+        tool_args: dict[str, Any],
+        tool_id: str,
+        round_number: int,
+        tool_result: ToolResult,
+        parent_id: Optional[str],
+        mode: str,
+        stream: bool,
+        turn_history: Optional[list[Any]] = None,
+        tool_message: Optional[Any] = None,
+    ) -> ToolInterruption:
+        result_text = tool_result.to_display_string()
+        result_event_id = self._record_tool_result(
+            turn_id,
+            tool_name,
+            tool_args,
+            tool_id,
+            result_text,
+            parent_id=parent_id,
+            round_number=round_number,
+            mode=mode,
+            stream=stream,
+            success=False,
+        )
+        if turn_history is not None:
+            if tool_message is not None:
+                turn_history.append(tool_message)
+            self.add_messages(turn_history)
+        self._record_turn_end(
+            turn_id,
+            final_event_id=result_event_id,
+            mode=mode,
+            stream=stream,
+            status=tool_result.status,
+        )
+        payload = self._build_tool_interrupt_payload(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            tool_id=tool_id,
+            round_number=round_number,
+            tool_result=tool_result,
+        )
+        self._last_tool_interrupt = payload
+        if tool_result.status == "needs_confirmation":
+            return ToolConfirmationRequired.from_payload(payload)
+        return ToolInterruption.from_payload(payload)
+
     @staticmethod
     def _print_stream_final(state: dict[str, Any], final_text: str) -> None:
         if state["current_section"] is None:
@@ -628,6 +720,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
         self._current_query = query  # 供 get_enhanced_prompt 使用
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         
         # Skill 前置拦截
@@ -709,6 +802,7 @@ class BasicAgent(BaseAgent):
     def stream_invoke(self,query: str,temperature: float = 0.7, **kwargs):
         original_query = query
         self._current_query = query
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         if self.enable_tool:
             logger.info("使用工具模式流式调用智能体")
@@ -717,6 +811,8 @@ class BasicAgent(BaseAgent):
             try:
                 for event in self.stream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
                     self._display_stream_event(display_state, event)
+                    if event["type"] == "interruption":
+                        raise ToolConfirmationRequired.from_payload(event["payload"])
                     if event["type"] == "final":
                         final_result = event["content"]
                         self._print_stream_final(display_state, final_result)
@@ -833,6 +929,7 @@ class BasicAgent(BaseAgent):
             智能体返回结果
         """
         self.enable_tool = True
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         
         if self.tool_registry is None:
@@ -940,6 +1037,22 @@ class BasicAgent(BaseAgent):
                             )
                             tool_result_obj = self._safe_execute_tool_result(tool_name, tool_args)
                             tool_result = tool_result_obj.to_display_string()
+                            tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                            if tool_result_obj.status == "needs_confirmation" and self.config.interrupt_on_confirmation:
+                                interrupt_error = self._finalize_tool_interrupt(
+                                    turn_id=turn_id,
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    tool_id=tool_id,
+                                    round_number=iteration_count,
+                                    tool_result=tool_result_obj,
+                                    parent_id=tool_call_event_id,
+                                    mode="tool",
+                                    stream=False,
+                                    turn_history=turn_history,
+                                    tool_message=tool_msg,
+                                )
+                                raise interrupt_error
                             self._record_tool_result(
                                 turn_id,
                                 tool_name,
@@ -952,7 +1065,6 @@ class BasicAgent(BaseAgent):
                                 stream=False,
                                 success=tool_result_obj.status == "success",
                             )
-                            tool_msg = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                             messages.append(tool_msg)
                             turn_history.append(tool_msg)
                             self._maybe_inject_tool_ephemeral_context(
@@ -980,6 +1092,8 @@ class BasicAgent(BaseAgent):
                             tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                             messages.append(tool_msg)
                             turn_history.append(tool_msg)
+                        except ToolInterruption:
+                            raise
                         except Exception as e:
                             logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                             error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
@@ -1053,6 +1167,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
         self._current_query = query
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         
         # Skill 前置拦截
@@ -1142,6 +1257,7 @@ class BasicAgent(BaseAgent):
         与 invoke_with_tool 对称，但 LLM 调用和工具执行均为异步。
         """
         self.enable_tool = True
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         
         if self.tool_registry is None:
@@ -1245,6 +1361,22 @@ class BasicAgent(BaseAgent):
                             )
                             tool_result_obj = await self._async_safe_execute_tool_result(tool_name, tool_args)
                             tool_result = tool_result_obj.to_display_string()
+                            tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                            if tool_result_obj.status == "needs_confirmation" and self.config.interrupt_on_confirmation:
+                                interrupt_error = self._finalize_tool_interrupt(
+                                    turn_id=turn_id,
+                                    tool_name=tool_name,
+                                    tool_args=tool_args,
+                                    tool_id=tool_id,
+                                    round_number=iteration_count,
+                                    tool_result=tool_result_obj,
+                                    parent_id=tool_call_event_id,
+                                    mode="tool",
+                                    stream=False,
+                                    turn_history=turn_history,
+                                    tool_message=tool_message,
+                                )
+                                raise interrupt_error
                             self._record_tool_result(
                                 turn_id,
                                 tool_name,
@@ -1260,7 +1392,7 @@ class BasicAgent(BaseAgent):
                             return {
                                 "tool_name": tool_name,
                                 "tool_result": tool_result_obj,
-                                "tool_message": self.llm.format_tool_result(tool_result, tool_id, tool_name),
+                                "tool_message": tool_message,
                             }
 
                         except ToolExecutionError as e:
@@ -1283,6 +1415,8 @@ class BasicAgent(BaseAgent):
                                 "tool_result": None,
                                 "tool_message": self.llm.format_tool_result(error_msg, tool_id, tool_name),
                             }
+                        except ToolInterruption:
+                            raise
                         except Exception as e:
                             logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                             error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
@@ -1445,6 +1579,7 @@ class BasicAgent(BaseAgent):
         self._validate_invoke_params(query, max_iter, temperature)
         raw_query = trace_query if trace_query is not None else query
         self._current_query = query
+        self._clear_last_tool_interrupt()
         self._clear_ephemeral_skill_state()
         query = self.skill_manager.on_before_invoke(query)
         self.callback_manager.on_agent_start(self.name, query)
@@ -1611,6 +1746,37 @@ class BasicAgent(BaseAgent):
                                     "tool_args": tool_args,
                                     "content": tool_result,
                                 }
+                                tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
+                                if (
+                                    tool_result_obj is not None
+                                    and tool_result_obj.status == "needs_confirmation"
+                                    and self.config.interrupt_on_confirmation
+                                ):
+                                    interrupt_error = self._finalize_tool_interrupt(
+                                        turn_id=turn_id,
+                                        tool_name=tool_name,
+                                        tool_args=tool_args,
+                                        tool_id=tool_id,
+                                        round_number=round_index,
+                                        tool_result=tool_result_obj,
+                                        parent_id=tool_call_event_id,
+                                        mode="tool",
+                                        stream=True,
+                                        turn_history=turn_history,
+                                        tool_message=tool_message,
+                                    )
+                                    self.callback_manager.on_agent_end(self.name, "", success=False, error=interrupt_error)
+                                    yield {
+                                        "type": "interruption",
+                                        "reason": "needs_confirmation",
+                                        "content": tool_result,
+                                        "tool_name": tool_name,
+                                        "tool_id": tool_id,
+                                        "tool_args": tool_args,
+                                        "payload": interrupt_error.to_payload(),
+                                    }
+                                    return
+
                                 self._record_tool_result(
                                     turn_id,
                                     tool_name,
@@ -1623,7 +1789,6 @@ class BasicAgent(BaseAgent):
                                     stream=True,
                                     success=tool_success,
                                 )
-                                tool_message = self.llm.format_tool_result(tool_result, tool_id, tool_name)
                                 messages.append(tool_message)
                                 turn_history.append(tool_message)
                                 if tool_result_obj is not None:
