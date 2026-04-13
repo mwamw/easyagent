@@ -5,7 +5,7 @@ __pycache__/
 
 # Pytest and tooling caches
 .pytest_cache/
-
+*.pyc
 # Local env files
 .env
 .venv/
