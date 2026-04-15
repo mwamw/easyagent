@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
+    from .stream_renderer import BaseStreamDisplayRenderer
+    from .trace_recorder import BaseTraceRecorder
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -71,6 +73,9 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        verbose_thinking: bool = False,
+        trace_recorder: Optional["BaseTraceRecorder"] = None,
+        stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
     ):
         """
         初始化结构化输出 Agent
@@ -99,6 +104,9 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
             history_via_context_manager=history_via_context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            verbose_thinking=verbose_thinking,
+            trace_recorder=trace_recorder,
+            stream_renderer=stream_renderer,
         )
         
         self.output_model = output_model

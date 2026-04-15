@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
+    from .stream_renderer import BaseStreamDisplayRenderer
+    from .trace_recorder import BaseTraceRecorder
 
 
 class ReactAgent(BasicAgent):
@@ -70,6 +72,9 @@ class ReactAgent(BasicAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        verbose_thinking: bool = False,
+        trace_recorder: Optional["BaseTraceRecorder"] = None,
+        stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
     ):
         """
         初始化 ReAct Agent
@@ -97,6 +102,9 @@ class ReactAgent(BasicAgent):
             history_via_context_manager=history_via_context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            verbose_thinking=verbose_thinking,
+            trace_recorder=trace_recorder,
+            stream_renderer=stream_renderer,
         )
         self.verbose = verbose
         self.scratchpad: List[str] = []  # 记录推理过程

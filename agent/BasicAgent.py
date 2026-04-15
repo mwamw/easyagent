@@ -6,11 +6,11 @@ from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
+from .stream_renderer import BaseStreamDisplayRenderer, ConsoleStreamDisplayRenderer
+from .trace_recorder import BaseTraceRecorder, InMemoryTraceRecorder
 import asyncio
 import json
 import logging
-from datetime import datetime
-from uuid import uuid4
 from core.Exception import *
 from prompt import (
     PromptBlock,
@@ -49,6 +49,9 @@ class BasicAgent(BaseAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        verbose_thinking: bool = False,
+        trace_recorder: Optional[BaseTraceRecorder] = None,
+        stream_renderer: Optional[BaseStreamDisplayRenderer] = None,
         reasoning: Optional[dict[str, Any]] = None,
     ):
         """
@@ -90,19 +93,17 @@ class BasicAgent(BaseAgent):
             callback_manager=callback_manager,
             skill_manager=skill_manager,
         )
-        
+        self.reasoning: Optional[dict[str, Any]] = None
         if reasoning:
             assert isinstance(reasoning, dict)
-            if "effort" not in reasoning:
+            if "effort" in reasoning:
                 assert reasoning['effort'] in ["low", "medium", "high"]
-            if "summary" not in reasoning:
+            if "summary" in reasoning:
                 assert reasoning['summary'] in ["auto", "none"]
             self.reasoning = reasoning
-        self.trace_history: list[dict[str, Any]] = []  # 记录完整会话转录
-        self._trace_session_id = f"trace_{uuid4().hex}"
-        self._trace_event_counter = 0
-        self._trace_seq = 0
-        self._trace_turn_counter = 0
+        self.verbose_thinking = verbose_thinking
+        self.trace_recorder = trace_recorder or InMemoryTraceRecorder()
+        self.stream_renderer = stream_renderer or ConsoleStreamDisplayRenderer()
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
         self._extension_prompt_blocks: list[PromptBlock] = []
@@ -112,47 +113,32 @@ class BasicAgent(BaseAgent):
 
     def _get_serializable_state(self) -> dict[str, Any]:
         state = super()._get_serializable_state()
+        trace_state = self.trace_recorder.export_state()
         state.update({
             "history_via_context_manager": self.history_via_context_manager,
-            "trace_history": self.get_trace_history(),
-            "trace_session_id": self._trace_session_id,
-            "trace_event_counter": self._trace_event_counter,
-            "trace_seq": self._trace_seq,
-            "trace_turn_counter": self._trace_turn_counter,
             "last_tool_interrupt": self.get_last_tool_interrupt(),
             "reasoning": self.reasoning,
+            "verbose_thinking": self.verbose_thinking,
         })
+        state.update(trace_state)
         return state
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         super()._restore_serializable_state(state)
         state = state or {}
         self.history_via_context_manager = state.get("history_via_context_manager", False)
-        self.trace_history = list(state.get("trace_history", []))
-        self._trace_session_id = state.get("trace_session_id") or f"trace_{uuid4().hex}"
-        self._trace_event_counter = int(state.get("trace_event_counter") or 0)
-        self._trace_seq = int(state.get("trace_seq") or 0)
-        self._trace_turn_counter = int(state.get("trace_turn_counter") or 0)
+        self.trace_recorder.restore_state(state)
         self._last_tool_interrupt = state.get("last_tool_interrupt")
         self.reasoning = state.get("reasoning")
+        self.verbose_thinking = bool(state.get("verbose_thinking", False))
 
-        legacy_thinking = [str(item) for item in state.get("thinking_history", []) if item is not None]
-        if not self.trace_history and legacy_thinking:
-            for content in legacy_thinking:
-                self.trace_history.append(
-                    {
-                        "id": self._next_trace_event_id(),
-                        "session_id": self._trace_session_id,
-                        "turn_id": None,
-                        "seq": self._next_trace_seq(),
-                        "type": "reasoning",
-                        "timestamp": datetime.now().isoformat(),
-                        "role": "assistant",
-                        "content": content,
-                        "metadata": {"mode": "legacy"},
-                    }
-                )
-        self._normalize_trace_history()
+    @property
+    def trace_history(self) -> list[dict[str, Any]]:
+        return self.trace_recorder.trace_history
+
+    @trace_history.setter
+    def trace_history(self, value: list[dict[str, Any]]) -> None:
+        self.trace_recorder.trace_history = list(value or [])
 
     @staticmethod
     def _as_history_entries(message: Any) -> list[Any]:
@@ -166,135 +152,8 @@ class BasicAgent(BaseAgent):
             return entries
         return [message]
 
-    @staticmethod
-    def _trace_safe(value: Any) -> Any:
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        if isinstance(value, Message):
-            return value.model_dump(mode="json")
-        if isinstance(value, list):
-            return [BasicAgent._trace_safe(item) for item in value]
-        if isinstance(value, tuple):
-            return [BasicAgent._trace_safe(item) for item in value]
-        if isinstance(value, dict):
-            return {key: BasicAgent._trace_safe(item) for key, item in value.items()}
-        return BaseAgent._make_json_safe(value)
-
-    def _next_trace_event_id(self) -> str:
-        self._trace_event_counter += 1
-        return f"evt_{self._trace_event_counter:06d}"
-
-    def _next_trace_seq(self) -> int:
-        self._trace_seq += 1
-        return self._trace_seq
-
-    def _next_turn_id(self) -> str:
-        self._trace_turn_counter += 1
-        return f"turn_{self._trace_turn_counter:04d}"
-
-    def _normalize_trace_history(self) -> None:
-        normalized: list[dict[str, Any]] = []
-        max_seq = self._trace_seq
-        max_event_counter = self._trace_event_counter
-        max_turn_counter = self._trace_turn_counter
-
-        for event in self.trace_history:
-            if not isinstance(event, dict):
-                continue
-            normalized_event = dict(event)
-            event_type = str(normalized_event.get("type") or "unknown")
-            if "timestamp" not in normalized_event:
-                normalized_event["timestamp"] = normalized_event.pop("time", datetime.now().isoformat())
-            if "session_id" not in normalized_event:
-                normalized_event["session_id"] = self._trace_session_id
-            if "seq" not in normalized_event:
-                max_seq += 1
-                normalized_event["seq"] = max_seq
-            else:
-                try:
-                    max_seq = max(max_seq, int(normalized_event["seq"]))
-                except Exception:
-                    max_seq += 1
-                    normalized_event["seq"] = max_seq
-            if "id" not in normalized_event:
-                max_event_counter += 1
-                normalized_event["id"] = f"evt_{max_event_counter:06d}"
-            else:
-                event_id = str(normalized_event["id"])
-                if event_id.startswith("evt_"):
-                    try:
-                        max_event_counter = max(max_event_counter, int(event_id.split("_", 1)[1]))
-                    except Exception:
-                        pass
-            if "turn_id" in normalized_event and normalized_event["turn_id"]:
-                turn_id = str(normalized_event["turn_id"])
-                if turn_id.startswith("turn_"):
-                    try:
-                        max_turn_counter = max(max_turn_counter, int(turn_id.split("_", 1)[1]))
-                    except Exception:
-                        pass
-            if "metadata" not in normalized_event or normalized_event["metadata"] is None:
-                normalized_event["metadata"] = {}
-            if "role" not in normalized_event:
-                if event_type in {"reasoning", "thinking", "assistant_message"}:
-                    normalized_event["role"] = "assistant"
-                elif event_type == "user_message":
-                    normalized_event["role"] = "user"
-                elif event_type == "tool_result":
-                    normalized_event["role"] = "tool"
-                else:
-                    normalized_event["role"] = "assistant"
-            if event_type == "thinking":
-                normalized_event["type"] = "reasoning"
-            normalized.append(normalized_event)
-
-        normalized.sort(key=lambda item: (int(item.get("seq", 0) or 0), str(item.get("timestamp", ""))))
-        self.trace_history = normalized
-        self._trace_seq = max_seq
-        self._trace_event_counter = max_event_counter
-        self._trace_turn_counter = max_turn_counter
-
-    def _record_trace_event(
-        self,
-        event_type: str,
-        *,
-        role: str,
-        content: str = "",
-        turn_id: Optional[str] = None,
-        parent_id: Optional[str] = None,
-        timestamp: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
-        **payload,
-    ) -> dict[str, Any]:
-        event: dict[str, Any] = {
-            "id": self._next_trace_event_id(),
-            "session_id": self._trace_session_id,
-            "turn_id": turn_id,
-            "seq": self._next_trace_seq(),
-            "type": event_type,
-            "timestamp": timestamp or datetime.now().isoformat(),
-            "role": role,
-            "content": content,
-            "metadata": self._trace_safe(metadata or {}),
-        }
-        if parent_id is not None:
-            event["parent_id"] = parent_id
-        for key, value in payload.items():
-            if value is None:
-                continue
-            event[key] = self._trace_safe(value)
-        self.trace_history.append(event)
-        return event
-
     def _begin_trace_turn(self, raw_query: str) -> tuple[str, str]:
-        turn_id = self._next_turn_id()
-        user_event = self._record_trace_event(
-            "user_message",
-            role="user",
-            content=raw_query,
-            turn_id=turn_id,
-        )
-        return turn_id, str(user_event["id"])
+        return self.trace_recorder.begin_turn(raw_query)
 
     def _get_last_turn_event_id(
         self,
@@ -302,14 +161,7 @@ class BasicAgent(BaseAgent):
         *,
         exclude_types: Optional[set[str]] = None,
     ) -> Optional[str]:
-        exclude = exclude_types or set()
-        for event in reversed(self.trace_history):
-            if event.get("turn_id") != turn_id:
-                continue
-            if event.get("type") in exclude:
-                continue
-            return str(event.get("id"))
-        return None
+        return self.trace_recorder.get_last_turn_event_id(turn_id, exclude_types=exclude_types)
 
     def _set_round_reasoning(
         self,
@@ -320,31 +172,13 @@ class BasicAgent(BaseAgent):
         mode: str,
         stream: bool,
     ) -> Optional[str]:
-        if not content:
-            return None
-        for event in reversed(self.trace_history):
-            if (
-                event.get("type") in {"reasoning", "thinking"}
-                and event.get("turn_id") == turn_id
-                and event.get("round") == round_number
-                and (event.get("metadata") or {}).get("mode") == mode
-                and (event.get("metadata") or {}).get("stream") == stream
-            ):
-                event["content"] = content
-                return str(event.get("id"))
-        reasoning_event = self._record_trace_event(
-            "reasoning",
-            role="assistant",
-            content=content,
+        return self.trace_recorder.set_round_reasoning(
+            content,
             turn_id=turn_id,
-            round=round_number,
-            metadata={
-                "mode": mode,
-                "stream": stream,
-                "visibility": "internal",
-            },
+            round_number=round_number,
+            mode=mode,
+            stream=stream,
         )
-        return str(reasoning_event["id"])
 
     def _record_assistant_trace(
         self,
@@ -357,22 +191,15 @@ class BasicAgent(BaseAgent):
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
     ) -> Optional[str]:
-        if not content:
-            return None
-        event = self._record_trace_event(
-            "assistant_message",
-            role="assistant",
-            content=content,
-            turn_id=turn_id,
+        return self.trace_recorder.record_assistant_message(
+            turn_id,
+            content,
             parent_id=parent_id,
-            round=round_number,
-            metadata={
-                "stage": stage,
-                "mode": mode,
-                "stream": stream,
-            },
+            stage=stage,
+            round_number=round_number,
+            mode=mode,
+            stream=stream,
         )
-        return str(event["id"])
 
     def _record_tool_call(
         self,
@@ -386,22 +213,16 @@ class BasicAgent(BaseAgent):
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
     ) -> str:
-        event = self._record_trace_event(
-            "tool_call",
-            role="assistant",
-            content="",
-            turn_id=turn_id,
+        return self.trace_recorder.record_tool_call(
+            turn_id,
+            tool_name,
+            tool_args,
+            tool_id,
             parent_id=parent_id,
-            round=round_number,
-            tool_name=tool_name,
-            tool_args=tool_args,
-            tool_call_id=tool_id,
-            metadata={
-                "mode": mode,
-                "stream": stream,
-            },
+            round_number=round_number,
+            mode=mode,
+            stream=stream,
         )
-        return str(event["id"])
 
     def _record_tool_result(
         self,
@@ -417,23 +238,18 @@ class BasicAgent(BaseAgent):
         stream: Optional[bool] = None,
         success: Optional[bool] = None,
     ) -> str:
-        event = self._record_trace_event(
-            "tool_result",
-            role="tool",
-            content=str(content),
-            turn_id=turn_id,
+        return self.trace_recorder.record_tool_result(
+            turn_id,
+            tool_name,
+            tool_args,
+            tool_id,
+            content,
             parent_id=parent_id,
-            round=round_number,
-            tool_name=tool_name,
-            tool_args=tool_args,
-            tool_call_id=tool_id,
-            metadata={
-                "mode": mode,
-                "stream": stream,
-                "success": success,
-            },
+            round_number=round_number,
+            mode=mode,
+            stream=stream,
+            success=success,
         )
-        return str(event["id"])
 
     def _record_turn_end(
         self,
@@ -444,81 +260,22 @@ class BasicAgent(BaseAgent):
         stream: Optional[bool] = None,
         status: str = "completed",
     ) -> str:
-        event = self._record_trace_event(
-            "turn_end",
-            role="assistant",
-            content="",
-            turn_id=turn_id,
-            metadata={
-                "mode": mode,
-                "stream": stream,
-                "status": status,
-                "final_event_id": final_event_id,
-            },
+        return self.trace_recorder.record_turn_end(
+            turn_id,
+            final_event_id=final_event_id,
+            mode=mode,
+            stream=stream,
+            status=status,
         )
-        return str(event["id"])
+
+    def _new_stream_display_state(self) -> Any:
+        return self.stream_renderer.create_state()
+
+    def _display_stream_event(self, state: Any, event: dict[str, Any]) -> None:
+        self.stream_renderer.render_event(state, event)
 
     @staticmethod
-    def _new_stream_display_state() -> dict[str, Any]:
-        return {
-            "current_round": 0,
-            "current_section": None,
-            "thinking_text": "",
-            "content_text": "",
-            "tool_calls": "",
-        }
-
-    @staticmethod
-    def _start_stream_round(state: dict[str, Any], round_number: int) -> None:
-        if state["current_round"] > 0:
-            print()
-        print(f"round {round_number}")
-        state["current_round"] = round_number
-        state["current_section"] = "round"
-        state["thinking_text"] = ""
-        state["content_text"] = ""
-        state["tool_calls"] = ""
-    @staticmethod
-    def _print_stream_header(state: dict[str, Any], header: str) -> None:
-        if state["current_section"] is None:
-            print(f"{header}:")
-        elif state["current_section"] != header:
-            print()
-            print(f"{header}:")
-        state["current_section"] = header
-
-    @classmethod
-    def _append_stream_text(
-        cls,
-        state: dict[str, Any],
-        header: str,
-        state_key: str,
-        text: str,
-    ) -> None:
-        if not text:
-            return
-        cls._print_stream_header(state, header)
-        print(text, end="", flush=True)
-        state[state_key] += text
-
-    @classmethod
-    def _append_stream_snapshot(
-        cls,
-        state: dict[str, Any],
-        header: str,
-        state_key: str,
-        full_text: str,
-    ) -> None:
-        if not full_text:
-            return
-        delta = cls._snapshot_suffix(state[state_key], full_text)
-        if not delta:
-            return
-        cls._append_stream_text(state, header, state_key, delta)
-
-    @staticmethod
-    def _snapshot_suffix(displayed: str, full_text: str) -> str:
-        # 截取 full_text 中从 displayed 之后开始的后缀
+    def _stream_snapshot_suffix(displayed: str, full_text: str) -> str:
         if not full_text:
             return ""
         if full_text.startswith(displayed):
@@ -526,61 +283,6 @@ class BasicAgent(BaseAgent):
         if displayed:
             return ""
         return full_text
-
-    @classmethod
-    def _display_stream_event(
-        cls,
-        state: dict[str, Any],
-        event: dict[str, Any],
-    ) -> None:
-        event_type = event.get("type")
-        if event_type == "round_start":
-            cls._start_stream_round(state, int(event.get("round", 1) or 1))
-            return
-        if event_type == "thinking_delta":
-            cls._append_stream_text(
-                state,
-                "thinking content",
-                "thinking_text",
-                event.get("delta", "") or "",
-            )
-            return
-        if event_type == "text_delta":
-            cls._append_stream_text(
-                state,
-                "content",
-                "content_text",
-                event.get("delta", "") or "",
-            )
-            return
-        if event_type in {"tool_calls", "final_response", "final"}:
-            cls._append_stream_snapshot(
-                state,
-                "thinking content",
-                "thinking_text",
-                event.get("thinking", "") or "",
-            )
-            cls._append_stream_snapshot(
-                state,
-                "content",
-                "content_text",
-                event.get("content", "") or "",
-            )
-        if event_type == "tool_call":
-            cls._append_stream_text(
-                state,
-                "tool_calls",
-                "tool_calls",
-                f"{event.get('tool_name','')} : {event.get('tool_args','')}\n"
-            )
-            return
-        if event_type == "interruption":
-            cls._append_stream_text(
-                state,
-                "interrupt",
-                "content_text",
-                f"{event.get('content', '')}\n",
-            )
 
     def get_last_tool_interrupt(self) -> Optional[dict[str, Any]]:
         if self._last_tool_interrupt is None:
@@ -661,15 +363,8 @@ class BasicAgent(BaseAgent):
             return ToolConfirmationRequired.from_payload(payload)
         return ToolInterruption.from_payload(payload)
 
-    @staticmethod
-    def _print_stream_final(state: dict[str, Any], final_text: str) -> None:
-        if state["current_section"] is None:
-            print("final res:")
-        else:
-            print()
-            print("final res:")
-        print(final_text)
-        state["current_section"] = "final res"
+    def _print_stream_final(self, state: Any, final_text: str) -> None:
+        self.stream_renderer.render_final(state, final_text)
 
     @classmethod
     def _build_constructor_kwargs_from_snapshot(
@@ -695,6 +390,7 @@ class BasicAgent(BaseAgent):
         kwargs.update(
             {
                 "history_via_context_manager": state.get("history_via_context_manager", False),
+                "verbose_thinking": state.get("verbose_thinking", False),
             }
         )
         return kwargs
@@ -835,7 +531,13 @@ class BasicAgent(BaseAgent):
                 self._capture_context_usage(messages, label="stream_invoke_plain")
                 self.callback_manager.on_llm_start(messages)
                 for chunk in self.llm.stream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
-                    self._append_stream_text(display_state, "content", "content_text", chunk)
+                    self._display_stream_event(
+                        display_state,
+                        {
+                            "type": "text_delta",
+                            "delta": chunk,
+                        },
+                    )
                     final_results.append(chunk)
                 result = "".join(final_results)
                 self.callback_manager.on_llm_end(result)
@@ -878,7 +580,6 @@ class BasicAgent(BaseAgent):
             query,
             max_iter=max_iter,
             temperature=temperature,
-            reasoning=self.reasoning,
             **kwargs,
         )
         loop = asyncio.new_event_loop()
@@ -1184,7 +885,6 @@ class BasicAgent(BaseAgent):
                     max_iter,
                     temperature,
                     trace_query=original_query,
-                    reasoning=self.reasoning,
                     **kwargs,
                 )
                 self.callback_manager.on_agent_end(self.name, result, success=True)
@@ -1533,7 +1233,13 @@ class BasicAgent(BaseAgent):
             self._capture_context_usage(messages, label="astream_invoke_plain")
             self.callback_manager.on_llm_start(messages)
             async for chunk in self.llm.astream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
-                self._append_stream_text(display_state, "content", "content_text", chunk)
+                self._display_stream_event(
+                    display_state,
+                    {
+                        "type": "text_delta",
+                        "delta": chunk,
+                    },
+                )
                 final_results.append(chunk)
             
             result = "".join(final_results)
@@ -1635,11 +1341,12 @@ class BasicAgent(BaseAgent):
                                 mode="tool",
                                 stream=True,
                             )
-                            yield event
+                            if self.verbose_thinking:
+                                yield event
                             continue
 
                         if event_type == "tool_calls":
-                            thinking_suffix = self._snapshot_suffix(
+                            thinking_suffix = self._stream_snapshot_suffix(
                                 streamed_thinking,
                                 event.get("thinking", "") or "",
                             )
@@ -1652,12 +1359,13 @@ class BasicAgent(BaseAgent):
                                     mode="tool",
                                     stream=True,
                                 )
-                                yield {
-                                    "type": "thinking_delta",
-                                    "delta": thinking_suffix,
-                                }
+                                if self.verbose_thinking:
+                                    yield {
+                                        "type": "thinking_delta",
+                                        "delta": thinking_suffix,
+                                    }
 
-                            content_suffix = self._snapshot_suffix(
+                            content_suffix = self._stream_snapshot_suffix(
                                 streamed_content,
                                 event.get("content", "") or "",
                             )
@@ -2239,7 +1947,4 @@ class BasicAgent(BaseAgent):
 
     def clear_trace_history(self) -> None:
         """清空完整会话转录。"""
-        self.trace_history.clear()
-        self._trace_event_counter = 0
-        self._trace_seq = 0
-        self._trace_turn_counter = 0
+        self.trace_recorder.clear()
