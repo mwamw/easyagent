@@ -176,6 +176,75 @@ class ScriptedStreamingProviderWithAssistantItems:
         }
 
 
+class ScriptedStreamingProviderMultiToolRounds:
+    def __init__(self):
+        self.round = 0
+
+    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
+        if self.round == 0:
+            self.round += 1
+            yield {"type": "thinking_delta", "delta": "先翻译"}
+            yield {
+                "type": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_translate",
+                        "name": "translate_tool",
+                        "arguments": "{\"text\": \"你是谁，在哪里\", \"target_lang\": \"en\"}",
+                    }
+                ],
+                "content": "",
+                "thinking": "先翻译",
+            }
+            return
+
+        if self.round == 1:
+            self.round += 1
+            yield {
+                "type": "tool_calls",
+                "tool_calls": [
+                    {
+                        "id": "call_calculator",
+                        "name": "calculator",
+                        "arguments": "{\"expression\": \"3**22\"}",
+                    }
+                ],
+                "content": "",
+                "thinking": "",
+            }
+            return
+
+        yield {"type": "final_response", "content": "全部完成", "thinking": ""}
+
+    def format_tool_result(self, content, tool_id, tool_name):
+        return {
+            "role": "tool",
+            "content": content,
+            "tool_call_id": tool_id,
+            "name": tool_name,
+        }
+
+    def format_assistant_message(self, content=None, tool_calls=None, thinking=None):
+        message = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "type": "function",
+                    "function": {
+                        "name": tool_call["name"],
+                        "arguments": tool_call["arguments"],
+                    },
+                }
+                for tool_call in (tool_calls or [])
+            ],
+        }
+        if thinking:
+            message["reasoning_content"] = thinking
+        return message
+
+
 class DummyLLM(EasyLLM):
     def __init__(self, provider):
         self.provider_name = "mock"
@@ -194,6 +263,26 @@ class PlainStreamingProvider:
     async def async_stream(self, messages, temperature=None, **kwargs):
         yield "hello "
         yield "world"
+
+
+class PlainThinkingProvider:
+    def invoke_raw(self, messages, temperature=None, **kwargs):
+        return SimpleNamespace(content="hello", reasoning_content="先想一想")
+
+    def get_response_content(self, response):
+        return getattr(response, "content", "")
+
+    def get_thinking_content(self, response):
+        return getattr(response, "reasoning_content", None)
+
+    def format_assistant_response(self, response, include_reasoning=False):
+        message = {
+            "role": "assistant",
+            "content": getattr(response, "content", ""),
+        }
+        if include_reasoning:
+            message["reasoning_content"] = getattr(response, "reasoning_content", "")
+        return message
 
 
 class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
@@ -243,7 +332,8 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history[0].role, "user")
         self.assertEqual(history[1]["tool_calls"][0]["function"]["name"], "echo")
         self.assertEqual(history[2]["tool_call_id"], "call_1")
-        self.assertEqual(history[3].role, "assistant")
+        self.assertEqual(history[3]["role"], "assistant")
+        self.assertEqual(history[3]["content"], "pong")
 
     async def test_astream_invoke_tool_mode_returns_final_text(self):
         from agent.BasicAgent import BasicAgent
@@ -323,7 +413,69 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history[1]["type"], "message")
         self.assertEqual(history[2]["type"], "function_call")
         self.assertEqual(history[3]["type"], "function_call_output")
-        self.assertEqual(history[-1].role, "assistant")
+        self.assertEqual(history[-1]["role"], "assistant")
+
+    async def test_astream_invoke_with_tool_records_empty_pre_tool_assistant_nodes(self):
+        from agent.BasicAgent import BasicAgent
+
+        registry = ToolRegistry()
+
+        class TranslateParams(BaseModel):
+            text: str
+            target_lang: str
+
+        class CalculatorParams(BaseModel):
+            expression: str
+
+        @registry.tool("translate_tool", "Translate text", TranslateParams)
+        def translate_tool(text: str, target_lang: str) -> str:
+            return f"Translated: {text}"
+
+        @registry.tool("calculator", "Calculate expression", CalculatorParams)
+        def calculator(expression: str) -> str:
+            return str(eval(expression, {"__builtins__": {}}, {}))
+
+        llm = DummyLLM(ScriptedStreamingProviderMultiToolRounds())
+        agent = BasicAgent(
+            name="streamer",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+            verbose_thinking=True,
+        )
+
+        async for _ in agent.astream_invoke_with_tool("执行多轮工具"):
+            pass
+
+        trace = agent.get_trace_history()
+        self.assertEqual([event["type"] for event in trace], [
+            "user_message",
+            "reasoning",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "assistant_message",
+            "turn_end",
+        ])
+
+        first_pre_tool = trace[2]
+        second_pre_tool = trace[5]
+        first_tool_result = trace[4]
+        second_tool_call = trace[6]
+
+        self.assertEqual(first_pre_tool["metadata"]["stage"], "pre_tool")
+        self.assertEqual(second_pre_tool["metadata"]["stage"], "pre_tool")
+        self.assertEqual(first_pre_tool["content"], "")
+        self.assertEqual(second_pre_tool["content"], "")
+        self.assertEqual(first_pre_tool["parent_id"], trace[1]["id"])
+        self.assertEqual(trace[3]["parent_id"], first_pre_tool["id"])
+        self.assertEqual(second_pre_tool["parent_id"], first_tool_result["id"])
+        self.assertEqual(second_tool_call["parent_id"], second_pre_tool["id"])
+        self.assertEqual(second_pre_tool["round"], 2)
+        self.assertEqual(trace[8]["metadata"]["stage"], "final")
 
     def test_stream_invoke_tool_mode_returns_final_text(self):
         from agent.BasicAgent import BasicAgent
@@ -400,6 +552,24 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(trace[0]["type"], "user_message")
         self.assertEqual(trace[1]["type"], "assistant_message")
         self.assertEqual(trace[-1]["type"], "turn_end")
+
+    def test_invoke_plain_mode_preserves_thinking_in_history(self):
+        from agent.BasicAgent import BasicAgent
+
+        llm = DummyLLM(PlainThinkingProvider())
+        agent = BasicAgent(
+            name="plain-thinking",
+            llm=llm,
+        )
+
+        result = agent.invoke("say hi")
+
+        self.assertEqual(result, "hello")
+        history = agent.get_history()
+        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[1]["role"], "assistant")
+        self.assertEqual(history[1]["content"], "hello")
+        self.assertEqual(history[1]["reasoning_content"], "先想一想")
 
 
 class TestProviderStreamingHelpers(unittest.TestCase):
@@ -564,6 +734,13 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(items[0]["type"], "message")
         self.assertEqual(items[0]["content"][0]["text"], "我先计算")
 
+        items_with_reasoning = provider.format_assistant_response(response, include_reasoning=True)
+        self.assertEqual(len(items_with_reasoning), 2)
+        self.assertEqual(items_with_reasoning[0]["type"], "reasoning")
+        self.assertEqual(items_with_reasoning[0]["summary"][0]["text"], "先分析一下")
+        self.assertEqual(items_with_reasoning[1]["type"], "message")
+        self.assertEqual(items_with_reasoning[1]["content"][0]["text"], "我先计算")
+
     def test_responses_provider_get_response_content_prefers_final_answer(self):
         provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
         response = SimpleNamespace(
@@ -586,7 +763,7 @@ class TestProviderStreamingHelpers(unittest.TestCase):
 
         self.assertEqual(provider.get_response_content(response), "最终结果")
 
-    def test_responses_provider_convert_input_strips_noise_fields(self):
+    def test_responses_provider_convert_input_preserves_reasoning_items(self):
         converted = OpenAIResponsesProvider._convert_input(
             [
                 {
@@ -617,6 +794,12 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(
             converted,
             [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"text": "先分析一下"}],
+                    "encrypted_content": "secret",
+                },
                 {
                     "type": "message",
                     "role": "assistant",
@@ -670,6 +853,25 @@ class TestProviderStreamingHelpers(unittest.TestCase):
                 "content": "sunny",
                 "tool_call_id": "call_1",
                 "name": "weather",
+            },
+        )
+
+    def test_openai_provider_prepare_message_for_request_keeps_reasoning_content(self):
+        provider = OpenAIProvider(model="mock", api_key="k", base_url="http://localhost")
+        payload = provider.prepare_message_for_request(
+            {
+                "role": "assistant",
+                "content": "我先计算",
+                "reasoning_content": "先想一想",
+            }
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "role": "assistant",
+                "content": "我先计算",
+                "reasoning_content": "先想一想",
             },
         )
 

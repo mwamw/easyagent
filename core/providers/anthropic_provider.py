@@ -68,7 +68,7 @@ class AnthropicProvider(BaseProvider):
         """检查是否是 Thinking 模型"""
         return 'thinking' in self.model.lower()
     
-    def format_assistant_response(self, response: Any) -> dict:
+    def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> dict:
         """
         将 OpenAI 格式的 assistant 响应转换为 Claude 格式
         
@@ -105,21 +105,32 @@ class AnthropicProvider(BaseProvider):
                     "input": input_data
                 })
             
-            return {
+            message = {
                 "role": "assistant",
                 "content": content
             }
+            if include_reasoning:
+                thinking = self.get_thinking_content(response)
+                if thinking:
+                    message["reasoning_content"] = thinking
+            return message
         
         # 如果没有 tool_calls，只是普通文本响应
-        return {
+        message = {
             "role": "assistant",
             "content": getattr(response, 'content', '') or ''
         }
+        if include_reasoning:
+            thinking = self.get_thinking_content(response)
+            if thinking:
+                message["reasoning_content"] = thinking
+        return message
 
     def format_assistant_message(
         self,
         content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
     ) -> dict:
         """根据统一 tool call 结构构造 Claude 风格 assistant 消息。"""
         if tool_calls:
@@ -142,11 +153,17 @@ class AnthropicProvider(BaseProvider):
                         "input": input_data,
                     }
                 )
-            return {
+            message = {
                 "role": "assistant",
                 "content": blocks,
             }
-        return {
+            if thinking:
+                message["reasoning_content"] = thinking
+            return message
+        message = {
             "role": "assistant",
             "content": content or "",
         }
+        if thinking:
+            message["reasoning_content"] = thinking
+        return message

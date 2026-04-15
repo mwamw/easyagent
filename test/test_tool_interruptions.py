@@ -10,6 +10,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent.BasicAgent import BasicAgent
+from agent.tool_interrupt_controller import InMemoryToolInterruptController
 from core.Exception import ToolConfirmationRequired
 from core.llm import EasyLLM
 from Tool.BaseTool import Tool
@@ -129,6 +130,23 @@ class DummyLLM(EasyLLM):
         self.client = None
 
 
+class RecordingInterruptController(InMemoryToolInterruptController):
+    def __init__(self):
+        super().__init__()
+        self.payloads: list[dict] = []
+        self.created_statuses: list[str] = []
+
+    def build_payload(self, **kwargs):
+        payload = super().build_payload(**kwargs)
+        self.payloads.append(dict(payload))
+        return payload
+
+    def create_interruption(self, **kwargs):
+        interruption = super().create_interruption(**kwargs)
+        self.created_statuses.append(interruption.status)
+        return interruption
+
+
 class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.registry = ToolRegistry()
@@ -167,3 +185,20 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interruption["reason"], "needs_confirmation")
         self.assertEqual(interruption["tool_name"], "dangerous")
         self.assertEqual(self.agent.get_last_tool_interrupt()["tool_name"], "dangerous")
+
+    def test_basic_agent_uses_custom_interrupt_controller(self):
+        controller = RecordingInterruptController()
+        agent = BasicAgent(
+            name="interruptible-custom",
+            llm=DummyLLM(ConfirmationProvider()),
+            enable_tool=True,
+            tool_registry=self.registry,
+            tool_interrupt_controller=controller,
+        )
+
+        with self.assertRaises(ToolConfirmationRequired):
+            agent.invoke("执行危险操作")
+
+        self.assertEqual(controller.created_statuses, ["needs_confirmation"])
+        self.assertEqual(controller.payloads[0]["tool_name"], "dangerous")
+        self.assertEqual(agent.get_last_tool_interrupt()["tool_name"], "dangerous")

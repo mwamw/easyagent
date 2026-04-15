@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
     from .stream_renderer import BaseStreamDisplayRenderer
+    from .tool_interrupt_controller import BaseToolInterruptController
     from .trace_recorder import BaseTraceRecorder
 
 T = TypeVar('T', bound=BaseModel)
@@ -76,6 +77,7 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
+        tool_interrupt_controller: Optional["BaseToolInterruptController"] = None,
     ):
         """
         初始化结构化输出 Agent
@@ -107,6 +109,7 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
+            tool_interrupt_controller=tool_interrupt_controller,
         )
         
         self.output_model = output_model

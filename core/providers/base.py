@@ -76,16 +76,16 @@ class BaseProvider(ABC):
     
     # ==================== 同步调用实现 ====================
 
-    def invoke(
+    def invoke_raw(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
-    ) -> str | None:
-        """同步调用 LLM"""
+    ) -> Any:
+        """同步调用 LLM，返回 provider 原始 assistant 响应对象。"""
         temperature = temperature if temperature is not None else self.temperature
-        
+
         try:
             if reasoning:
                 response = self.client.chat.completions.create(
@@ -106,13 +106,28 @@ class BaseProvider(ABC):
                     stream=False,
                     **kwargs
                 )
-            msg = response.choices[0].message
-            content = msg.content
-            logger.info(f"✅ {self.provider_name} Provider 响应成功")
-            return content or ""
+            logger.info(f"✅ {self.provider_name} Provider 原始响应成功")
+            return response.choices[0].message
         except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
+            logger.error(f"❌ {self.provider_name} Provider 原始调用失败: {e}")
             raise
+
+    def invoke(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> str | None:
+        """同步调用 LLM"""
+        response = self.invoke_raw(
+            messages,
+            temperature=temperature,
+            reasoning=reasoning,
+            **kwargs,
+        )
+        content = self.get_response_content(response)
+        return content or ""
     
     def stream(
         self,
@@ -150,6 +165,81 @@ class BaseProvider(ABC):
                     yield content
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 流式调用失败: {e}")
+            raise
+
+    def stream_events(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> Generator[dict[str, Any], None, None]:
+        """同步流式调用，返回包含 thinking / text / final 的统一事件流。"""
+        temperature = temperature if temperature is not None else self.temperature
+        text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        terminal_emitted = False
+
+        try:
+            if reasoning:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True,
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=True,
+                )
+            logger.info(f"✅ {self.provider_name} Provider 事件流响应开始")
+            for chunk in response:
+                if not getattr(chunk, "choices", None):
+                    continue
+                choice = chunk.choices[0]
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+                reasoning_delta = (
+                    getattr(delta, "reasoning_content", None)
+                    or getattr(delta, "reasoning", None)
+                )
+                if reasoning_delta:
+                    thinking_parts.append(reasoning_delta)
+                    yield {
+                        "type": "thinking_delta",
+                        "delta": reasoning_delta,
+                    }
+                content_delta = getattr(delta, "content", None) or ""
+                if content_delta:
+                    text_parts.append(content_delta)
+                    yield {
+                        "type": "text_delta",
+                        "delta": content_delta,
+                    }
+                finish_reason = getattr(choice, "finish_reason", None)
+                if finish_reason in {"stop", "length", "content_filter"}:
+                    terminal_emitted = True
+                    yield {
+                        "type": "final_response",
+                        "content": "".join(text_parts),
+                        "thinking": "".join(thinking_parts),
+                        "finish_reason": finish_reason,
+                    }
+            if not terminal_emitted:
+                yield {
+                    "type": "final_response",
+                    "content": "".join(text_parts),
+                    "thinking": "".join(thinking_parts),
+                }
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 事件流调用失败: {e}")
             raise
     
     def invoke_with_tools(
@@ -241,9 +331,26 @@ class BaseProvider(ABC):
         **kwargs
     ) -> str | None:
         """异步调用 LLM"""
+        response = await self.async_invoke_raw(
+            messages,
+            temperature=temperature,
+            reasoning=reasoning,
+            **kwargs,
+        )
+        content = self.get_response_content(response)
+        return content or ""
+
+    async def async_invoke_raw(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> Any:
+        """异步调用 LLM，返回 provider 原始 assistant 响应对象。"""
         temperature = temperature if temperature is not None else self.temperature
         async_client = self._get_async_client()
-        
+
         try:
             if reasoning:
                 response = await async_client.chat.completions.create(
@@ -252,7 +359,7 @@ class BaseProvider(ABC):
                     temperature=temperature,
                     max_tokens=self.max_tokens,
                     reasoning_effort=reasoning["effort"],
-                    stream=False
+                    stream=False,
                 )
             else:
                 response = await async_client.chat.completions.create(
@@ -260,14 +367,12 @@ class BaseProvider(ABC):
                     messages=messages,
                     temperature=temperature,
                     max_tokens=self.max_tokens,
-                stream=False
-            )
-            msg = response.choices[0].message
-            content = msg.content
-            logger.info(f"✅ {self.provider_name} Provider 异步响应成功")
-            return content or ""
+                    stream=False,
+                )
+            logger.info(f"✅ {self.provider_name} Provider 异步原始响应成功")
+            return response.choices[0].message
         except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步调用失败: {e}")
+            logger.error(f"❌ {self.provider_name} Provider 异步原始调用失败: {e}")
             raise
 
     async def async_stream(
@@ -306,6 +411,82 @@ class BaseProvider(ABC):
                     yield content
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 异步流式调用失败: {e}")
+            raise
+
+    async def async_stream_events(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """异步流式调用，返回包含 thinking / text / final 的统一事件流。"""
+        temperature = temperature if temperature is not None else self.temperature
+        async_client = self._get_async_client()
+        text_parts: list[str] = []
+        thinking_parts: list[str] = []
+        terminal_emitted = False
+
+        try:
+            if reasoning:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True,
+                )
+            else:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=True,
+                )
+            logger.info(f"✅ {self.provider_name} Provider 异步事件流响应开始")
+            async for chunk in response:
+                if not getattr(chunk, "choices", None):
+                    continue
+                choice = chunk.choices[0]
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+                reasoning_delta = (
+                    getattr(delta, "reasoning_content", None)
+                    or getattr(delta, "reasoning", None)
+                )
+                if reasoning_delta:
+                    thinking_parts.append(reasoning_delta)
+                    yield {
+                        "type": "thinking_delta",
+                        "delta": reasoning_delta,
+                    }
+                content_delta = getattr(delta, "content", None) or ""
+                if content_delta:
+                    text_parts.append(content_delta)
+                    yield {
+                        "type": "text_delta",
+                        "delta": content_delta,
+                    }
+                finish_reason = getattr(choice, "finish_reason", None)
+                if finish_reason in {"stop", "length", "content_filter"}:
+                    terminal_emitted = True
+                    yield {
+                        "type": "final_response",
+                        "content": "".join(text_parts),
+                        "thinking": "".join(thinking_parts),
+                        "finish_reason": finish_reason,
+                    }
+            if not terminal_emitted:
+                yield {
+                    "type": "final_response",
+                    "content": "".join(text_parts),
+                    "thinking": "".join(thinking_parts),
+                }
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步事件流调用失败: {e}")
             raise
 
     async def async_invoke_with_tools(
@@ -375,9 +556,9 @@ class BaseProvider(ABC):
                     messages=messages,
                     tools=tools,
                     temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=True
-            )
+                    max_tokens=self.max_tokens,
+                    stream=True
+                )
             logger.info(f"✅ {self.provider_name} Provider 异步流式工具调用开始")
             state = self._init_chat_tool_stream_state()
             async for chunk in response:
@@ -413,13 +594,16 @@ class BaseProvider(ABC):
     def format_assistant_message(
         self,
         content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
     ) -> dict[str, Any]:
         """根据统一 tool call 结构构造 assistant 消息。"""
         message: dict[str, Any] = {
             "role": "assistant",
             "content": content or None,
         }
+        if thinking:
+            message["reasoning_content"] = thinking
         if tool_calls:
             message["tool_calls"] = [
                 {
@@ -434,9 +618,10 @@ class BaseProvider(ABC):
             ]
         return message
 
-    def format_assistant_response(self, response: Any) -> dict[str, Any]:
+    def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> dict[str, Any]:
         """将 provider 响应对象转换为可复用、可序列化的 assistant 消息。"""
         content = getattr(response, "content", None) or None
+        thinking = self.get_thinking_content(response) if include_reasoning else None
         tool_calls_data = getattr(response, "tool_calls", None) or []
         tool_calls: list[dict[str, Any]] = []
 
@@ -454,7 +639,20 @@ class BaseProvider(ABC):
         return self.format_assistant_message(
             content=content,
             tool_calls=tool_calls or None,
+            thinking=thinking,
         )
+
+    def prepare_message_for_request(self, message: Any) -> Any:
+        """将 history 中 richer message 转换为当前 provider 可接受的请求消息。"""
+        if not isinstance(message, dict):
+            return message
+        item_type = message.get("type")
+        if item_type == "reasoning":
+            return None
+        payload = dict(message)
+        if "thinking" in payload:
+            payload["reasoning_content"] = payload.pop("thinking")
+        return payload
 
     # ==================== 通用辅助方法 ====================
 

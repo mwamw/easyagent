@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
     from .stream_renderer import BaseStreamDisplayRenderer
+    from .tool_interrupt_controller import BaseToolInterruptController
     from .trace_recorder import BaseTraceRecorder
 
 
@@ -67,6 +68,7 @@ class PlanningAgent(BasicAgent):
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
+        tool_interrupt_controller: Optional["BaseToolInterruptController"] = None,
     ):
         """
         初始化规划 Agent
@@ -98,6 +100,7 @@ class PlanningAgent(BasicAgent):
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
+            tool_interrupt_controller=tool_interrupt_controller,
         )
         self.max_steps = max_steps
         self.allow_replan = allow_replan

@@ -281,6 +281,22 @@ class EasyLLM:
         """
         messages = self._convert_messages(messages) # type: ignore
         return self._provider.invoke(messages, temperature=temperature,reasoning=reasoning, **kwargs) # type: ignore
+
+    def invoke_raw(
+        self,
+        messages: list[dict[str, str] | Message],
+        reasoning: Optional[dict[str, Any]] = None,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Any:
+        """同步调用并返回 provider 原始响应对象。"""
+        messages = self._convert_messages(messages) # type: ignore
+        provider = getattr(self, "_provider", None)
+        if provider is not None:
+            if hasattr(provider, "invoke_raw"):
+                return provider.invoke_raw(messages, temperature=temperature, reasoning=reasoning, **kwargs)  # type: ignore
+            return provider.invoke(messages, temperature=temperature, reasoning=reasoning, **kwargs)  # type: ignore
+        return self.invoke(messages, temperature=temperature, reasoning=reasoning, **kwargs)
     
     def stream(
         self,
@@ -301,6 +317,31 @@ class EasyLLM:
         """
         messages = self._convert_messages(messages) # type: ignore
         yield from self._provider.stream(messages, temperature=temperature,reasoning=reasoning, **kwargs)
+
+    def stream_events(
+        self,
+        messages: list[dict[str, str] | Message],
+        reasoning: Optional[dict[str, Any]] = None,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Generator[dict[str, Any], None, None]:
+        """流式调用，返回 thinking / text / final 事件。"""
+        messages = self._convert_messages(messages) # type: ignore
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "stream_events"):
+            yield from provider.stream_events(messages, temperature=temperature, reasoning=reasoning, **kwargs)  # type: ignore
+            return
+
+        collected = []
+        stream_source = provider.stream if provider is not None else self.stream  # type: ignore[attr-defined]
+        for chunk in stream_source(messages, temperature=temperature, reasoning=reasoning, **kwargs):  # type: ignore
+            collected.append(chunk)
+            yield {"type": "text_delta", "delta": chunk}
+        yield {
+            "type": "final_response",
+            "content": "".join(collected),
+            "thinking": "",
+        }
     
     def invoke_with_tools(
         self,
@@ -366,7 +407,7 @@ class EasyLLM:
         """
         return self._provider.format_tool_result(content, tool_id, tool_name)
     
-    def format_assistant_response(self, response: Any) -> dict:
+    def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> Any:
         """
         格式化 assistant 响应为当前 Provider 需要的格式
         
@@ -378,9 +419,15 @@ class EasyLLM:
         Returns:
             格式化后的消息字典
         """
+        if isinstance(response, str):
+            return self.format_assistant_message(content=response)
+        provider = getattr(self, "_provider", None)
         # 检查 Provider 是否有这个方法
-        if hasattr(self._provider, 'format_assistant_response'):
-            return self._provider.format_assistant_response(response) #type: ignore
+        if provider is not None and hasattr(provider, 'format_assistant_response'):
+            try:
+                return provider.format_assistant_response(response, include_reasoning=include_reasoning) #type: ignore
+            except TypeError:
+                return provider.format_assistant_response(response) #type: ignore
         
         # 默认：直接返回原始响应（OpenAI 兼容格式可以直接使用）
         return response
@@ -388,17 +435,27 @@ class EasyLLM:
     def format_assistant_message(
         self,
         content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
     ) -> Any:
         """基于统一 tool call 结构构造 assistant 消息。"""
-        if hasattr(self._provider, "format_assistant_message"):
-            return self._provider.format_assistant_message( # type: ignore
-                content=content,
-                tool_calls=tool_calls,
-            )
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "format_assistant_message"):
+            try:
+                return provider.format_assistant_message( # type: ignore
+                    content=content,
+                    tool_calls=tool_calls,
+                    thinking=thinking,
+                )
+            except TypeError:
+                return provider.format_assistant_message( # type: ignore
+                    content=content,
+                    tool_calls=tool_calls,
+                )
         return {
             "role": "assistant",
             "content": content or "",
+            **({"reasoning_content": thinking} if thinking else {}),
         }
     
     # ==================== 异步 API ====================
@@ -423,6 +480,22 @@ class EasyLLM:
         messages = self._convert_messages(messages) # type: ignore
         return await self._provider.async_invoke(messages, temperature=temperature,reasoning=reasoning, **kwargs) # type: ignore
 
+    async def ainvoke_raw(
+        self,
+        messages: list[dict[str, str] | Message],
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> Any:
+        """异步调用并返回 provider 原始响应对象。"""
+        messages = self._convert_messages(messages) # type: ignore
+        provider = getattr(self, "_provider", None)
+        if provider is not None:
+            if hasattr(provider, "async_invoke_raw"):
+                return await provider.async_invoke_raw(messages, temperature=temperature, reasoning=reasoning, **kwargs)  # type: ignore
+            return await provider.async_invoke(messages, temperature=temperature, reasoning=reasoning, **kwargs)  # type: ignore
+        return await self.ainvoke(messages, temperature=temperature, reasoning=reasoning, **kwargs)
+
     async def astream(
         self,
         messages: list[dict[str, str] | Message],
@@ -443,6 +516,32 @@ class EasyLLM:
         messages = self._convert_messages(messages) # type: ignore
         async for chunk in self._provider.async_stream(messages, reasoning=reasoning,temperature=temperature, **kwargs):
             yield chunk
+
+    async def astream_events(
+        self,
+        messages: list[dict[str, str] | Message],
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """异步流式调用，返回 thinking / text / final 事件。"""
+        messages = self._convert_messages(messages) # type: ignore
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "async_stream_events"):
+            async for event in provider.async_stream_events(messages, reasoning=reasoning, temperature=temperature, **kwargs):  # type: ignore
+                yield event
+            return
+
+        collected = []
+        stream_source = provider.async_stream if provider is not None else self.astream  # type: ignore[attr-defined]
+        async for chunk in stream_source(messages, reasoning=reasoning, temperature=temperature, **kwargs):  # type: ignore
+            collected.append(chunk)
+            yield {"type": "text_delta", "delta": chunk}
+        yield {
+            "type": "final_response",
+            "content": "".join(collected),
+            "thinking": "",
+        }
 
     async def ainvoke_with_tools(
         self,
@@ -521,25 +620,49 @@ class EasyLLM:
     
     def _convert_messages(self, messages: list[dict[str, str] | Message]) -> list[dict[str, str]]:
         """将 Message 对象转换为字典"""
-        return [
-            msg.to_dict() if isinstance(msg, Message) else msg
-            for msg in messages
-        ]
-    
+        converted = []
+        provider = getattr(self, "_provider", None)
+        for msg in messages:
+            payload = msg.to_dict() if isinstance(msg, Message) else msg
+            if provider is not None and hasattr(provider, "prepare_message_for_request"):
+                payload = provider.prepare_message_for_request(payload)  # type: ignore
+            if payload is None:
+                continue
+            converted.append(payload)
+        return converted
+
     def get_thinking_content(self, response: Any) -> Optional[str]:
         """提取思考内容"""
+        if response is None or isinstance(response, str):
+            return None
+        provider = getattr(self, "_provider", None)
+        if provider is None:
+            return getattr(response, "reasoning_content", None)
         return self._provider.get_thinking_content(response)
 
     def get_response_content(self, response: Any) -> Optional[str]:
         """提取响应文本内容（兼容 Chat API 和 Responses API）"""
+        if response is None:
+            return None
+        if isinstance(response, str):
+            return response
+        provider = getattr(self, "_provider", None)
+        if provider is None:
+            return getattr(response, "content", None)
         return self._provider.get_response_content(response)
 
     def has_tool_calls(self, response: Any) -> bool:
         """检查是否有工具调用"""
+        provider = getattr(self, "_provider", None)
+        if provider is None:
+            return bool(getattr(response, "tool_calls", None))
         return self._provider.has_tool_calls(response)
     
     def get_tool_calls(self, response: Any) -> list:
         """获取工具调用列表"""
+        provider = getattr(self, "_provider", None)
+        if provider is None:
+            return getattr(response, "tool_calls", []) or []
         return self._provider.get_tool_calls(response)
     
     def create_client(self):

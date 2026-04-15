@@ -195,6 +195,15 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
                 return f"{message_role}[{phase}]: {content}"
             return f"{message_role}: {content}"
 
+        if msg_type == "reasoning":
+            summary = self._compact_text(self._extract_text(message.get("summary")), limit=18)
+            if summary:
+                return f"assistant[thinking]: {summary}"
+            content = self._compact_text(self._extract_text(message.get("content")), limit=18)
+            if content:
+                return f"assistant[thinking]: {content}"
+            return ""
+
         content = self._compact_text(self._extract_text(message.get("content")), limit=18)
         if role:
             return f"{role}: {content}"
@@ -209,7 +218,7 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             fragments: List[str] = []
             for item in content:
                 if isinstance(item, dict):
-                    if item.get("type") in {"text", "output_text"}:
+                    if item.get("type") in {"text", "output_text", "summary_text"}:
                         fragments.append(str(item.get("text", "")).strip())
                     elif item.get("type") == "tool_use":
                         name = item.get("name", "tool")

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
     from .stream_renderer import BaseStreamDisplayRenderer
+    from .tool_interrupt_controller import BaseToolInterruptController
     from .trace_recorder import BaseTraceRecorder
 
 logger = logging.getLogger(__name__)
@@ -73,6 +74,7 @@ class ConversationalAgent(BasicAgent):
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
+        tool_interrupt_controller: Optional["BaseToolInterruptController"] = None,
     ):
         """
         初始化对话 Agent
@@ -104,6 +106,7 @@ class ConversationalAgent(BasicAgent):
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
+            tool_interrupt_controller=tool_interrupt_controller,
         )
 
         self.auto_save_to_working = auto_save_to_working

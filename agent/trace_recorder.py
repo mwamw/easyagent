@@ -83,6 +83,7 @@ class BaseTraceRecorder(ABC):
         round_number: Optional[int] = None,
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
+        allow_empty: bool = False,
     ) -> Optional[str]:
         pass
 
@@ -296,13 +297,14 @@ class InMemoryTraceRecorder(BaseTraceRecorder):
         round_number: Optional[int] = None,
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
+        allow_empty: bool = False,
     ) -> Optional[str]:
-        if not content:
+        if not allow_empty and not content:
             return None
         event = self.record_event(
             "assistant_message",
             role="assistant",
-            content=content,
+            content=content or "",
             turn_id=turn_id,
             parent_id=parent_id,
             round=round_number,

@@ -58,6 +58,29 @@ class OpenAIResponsesProvider(BaseProvider):
             logger.error(f"❌ {self.provider_name} Provider 调用失败: {e}")
             raise
 
+    def invoke_raw(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> Any:
+        """同步调用并返回完整 Responses API response。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        try:
+            converted_input = self._convert_input(messages)
+            response = self.client.responses.create(
+                model=self.model,
+                input=converted_input,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 原始响应成功")
+            return response
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 原始调用失败: {e}")
+            raise
+
     def stream(
         self,
         messages: list,
@@ -90,6 +113,37 @@ class OpenAIResponsesProvider(BaseProvider):
                         yield event
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 流式调用失败: {e}")
+            raise
+
+    def stream_events(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs
+    ) -> Generator[dict[str, Any], None, None]:
+        """同步流式调用，返回包含 thinking / text / final 的统一事件。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        try:
+            converted_input = self._convert_input(messages)
+            response = self.client.responses.create(
+                model=self.model,
+                input=converted_input,
+                stream=True,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 事件流响应开始")
+            state = self._init_responses_tool_stream_state()
+            for event in response:
+                for item in self._extract_responses_stream_events(event, state):
+                    if item.get("type") != "tool_calls":
+                        yield item
+            final_event = self._finalize_responses_tool_stream_state(state)
+            if final_event.get("type") != "stream_end" and final_event.get("type") != "tool_calls":
+                yield final_event
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 事件流调用失败: {e}")
             raise
 
     def invoke_with_tools(
@@ -194,6 +248,30 @@ class OpenAIResponsesProvider(BaseProvider):
             logger.error(f"❌ {self.provider_name} Provider 异步调用失败: {e}")
             raise
 
+    async def async_invoke_raw(
+        self,
+        messages: list,
+        reasoning: Optional[dict[str, Any]] = None,
+        temperature: Optional[float] = None,
+        **kwargs
+    ) -> Any:
+        """异步调用并返回完整 Responses API response。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        async_client = self._get_async_client()
+        try:
+            converted_input = self._convert_input(messages)
+            response = await async_client.responses.create(
+                model=self.model,
+                input=converted_input,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步原始响应成功")
+            return response
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步原始调用失败: {e}")
+            raise
+
     async def async_stream(
         self,
         messages: list,
@@ -224,6 +302,38 @@ class OpenAIResponsesProvider(BaseProvider):
                         yield event
         except Exception as e:
             logger.error(f"❌ {self.provider_name} Provider 异步流式调用失败: {e}")
+            raise
+
+    async def async_stream_events(
+        self,
+        messages: list,
+        reasoning: Optional[dict[str, Any]] = None,
+        temperature: Optional[float] = None,
+        **kwargs
+    ):
+        """异步流式调用，返回包含 thinking / text / final 的统一事件。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
+        async_client = self._get_async_client()
+        try:
+            converted_input = self._convert_input(messages)
+            response = await async_client.responses.create(
+                model=self.model,
+                input=converted_input,
+                stream=True,
+                **self._base_params(temperature, **kwargs)
+            )
+            logger.info(f"✅ {self.provider_name} Provider 异步事件流响应开始")
+            state = self._init_responses_tool_stream_state()
+            async for event in response:
+                for item in self._extract_responses_stream_events(event, state):
+                    if item.get("type") != "tool_calls":
+                        yield item
+            final_event = self._finalize_responses_tool_stream_state(state)
+            if final_event.get("type") != "stream_end" and final_event.get("type") != "tool_calls":
+                yield final_event
+        except Exception as e:
+            logger.error(f"❌ {self.provider_name} Provider 异步事件流调用失败: {e}")
             raise
 
     async def async_invoke_with_tools(
@@ -384,7 +494,7 @@ class OpenAIResponsesProvider(BaseProvider):
             "output": content,
         }
 
-    def format_assistant_response(self, response: Any) -> list:
+    def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> list:
         """
         将 response.output 列表直接作为 assistant 消息追加到 input
 
@@ -392,7 +502,7 @@ class OpenAIResponsesProvider(BaseProvider):
         """
         result = []
         for item in getattr(response, "output", []):
-            serialized = self._serialize_assistant_history_item(item)
+            serialized = self._serialize_assistant_history_item(item, include_reasoning=include_reasoning)
             if serialized is not None:
                 result.append(serialized)
         return result
@@ -400,9 +510,22 @@ class OpenAIResponsesProvider(BaseProvider):
     def format_assistant_message(
         self,
         content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
+        if thinking:
+            result.append(
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": thinking,
+                        }
+                    ],
+                }
+            )
         if tool_calls:
             for tool_call in tool_calls:
                 result.append(
@@ -636,7 +759,7 @@ class OpenAIResponsesProvider(BaseProvider):
         for item in state.get("output_items", []):
             if not isinstance(item, dict):
                 continue
-            serialized = self._serialize_assistant_history_item(item)
+            serialized = self._serialize_assistant_history_item(item, include_reasoning=True)
             if serialized is not None:
                 assistant_items.append(serialized)
         if assistant_items:
@@ -644,6 +767,7 @@ class OpenAIResponsesProvider(BaseProvider):
         return self.format_assistant_message(
             content="".join(state.get("text_parts", [])),
             tool_calls=tool_calls or None,
+            thinking="".join(state.get("thinking_parts", [])) or None,
         )
 
     def _set_stream_output_item(
@@ -703,11 +827,16 @@ class OpenAIResponsesProvider(BaseProvider):
             payload["encrypted_content"] = self._to_serializable(getattr(item, "encrypted_content"))
         return payload
 
-    def _serialize_assistant_history_item(self, item: Any) -> Optional[dict[str, Any]]:
+    def _serialize_assistant_history_item(self, item: Any, include_reasoning: bool = False) -> Optional[dict[str, Any]]:
         payload = self._serialize_output_item(item)
         item_type = payload.get("type")
         if item_type == "reasoning":
-            return None
+            if not include_reasoning:
+                return None
+            return {
+                "type": "reasoning",
+                "summary": self._to_serializable(payload.get("summary", [])),
+            }
         if item_type == "message":
             message: dict[str, Any] = {
                 "type": "message",
@@ -881,10 +1010,23 @@ class OpenAIResponsesProvider(BaseProvider):
                 "output": item.get("output", ""),
             }
         if item_type == "reasoning":
-            return None
+            sanitized = {
+                "type": "reasoning",
+            }
+            for key in ("id", "summary", "content", "encrypted_content", "status"):
+                if key in item and item.get(key) is not None:
+                    sanitized[key] = item.get(key)
+            return sanitized
         if "role" in item and "content" in item:
-            return {
+            sanitized = {
                 "role": item.get("role"),
                 "content": item.get("content", ""),
             }
+            if item.get("reasoning_content") is not None:
+                sanitized["reasoning_content"] = item.get("reasoning_content")
+            return sanitized
         return item
+
+    def prepare_message_for_request(self, message: Any) -> Any:
+        """将 history 中 richer message 转换为 Responses API 可接受的输入项。"""
+        return self._sanitize_input_item(message)

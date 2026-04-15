@@ -7,6 +7,7 @@ from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
 from .stream_renderer import BaseStreamDisplayRenderer, ConsoleStreamDisplayRenderer
+from .tool_interrupt_controller import BaseToolInterruptController, InMemoryToolInterruptController
 from .trace_recorder import BaseTraceRecorder, InMemoryTraceRecorder
 import asyncio
 import json
@@ -49,9 +50,10 @@ class BasicAgent(BaseAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
-        verbose_thinking: bool = False,
+        verbose_thinking: bool = True,
         trace_recorder: Optional[BaseTraceRecorder] = None,
         stream_renderer: Optional[BaseStreamDisplayRenderer] = None,
+        tool_interrupt_controller: Optional[BaseToolInterruptController] = None,
         reasoning: Optional[dict[str, Any]] = None,
     ):
         """
@@ -104,10 +106,12 @@ class BasicAgent(BaseAgent):
         self.verbose_thinking = verbose_thinking
         self.trace_recorder = trace_recorder or InMemoryTraceRecorder()
         self.stream_renderer = stream_renderer or ConsoleStreamDisplayRenderer()
+        self.tool_interrupt_controller = (
+            tool_interrupt_controller or InMemoryToolInterruptController()
+        )
         self._current_query: str = ""  # 当前查询（供 get_enhanced_prompt 使用）
         self.history_via_context_manager = history_via_context_manager
         self._extension_prompt_blocks: list[PromptBlock] = []
-        self._last_tool_interrupt: Optional[dict[str, Any]] = None
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
@@ -116,11 +120,11 @@ class BasicAgent(BaseAgent):
         trace_state = self.trace_recorder.export_state()
         state.update({
             "history_via_context_manager": self.history_via_context_manager,
-            "last_tool_interrupt": self.get_last_tool_interrupt(),
             "reasoning": self.reasoning,
             "verbose_thinking": self.verbose_thinking,
         })
         state.update(trace_state)
+        state.update(self.tool_interrupt_controller.export_state())
         return state
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
@@ -128,7 +132,7 @@ class BasicAgent(BaseAgent):
         state = state or {}
         self.history_via_context_manager = state.get("history_via_context_manager", False)
         self.trace_recorder.restore_state(state)
-        self._last_tool_interrupt = state.get("last_tool_interrupt")
+        self.tool_interrupt_controller.restore_state(state)
         self.reasoning = state.get("reasoning")
         self.verbose_thinking = bool(state.get("verbose_thinking", False))
 
@@ -151,6 +155,52 @@ class BasicAgent(BaseAgent):
                 entries.extend(BasicAgent._as_history_entries(item))
             return entries
         return [message]
+
+    def _build_assistant_history_entries(
+        self,
+        *,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
+    ) -> list[Any]:
+        formatted = self.llm.format_assistant_message(
+            content=content,
+            tool_calls=tool_calls,
+            thinking=thinking,
+        )
+        entries = self._as_history_entries(formatted)
+        if entries:
+            return entries
+        if content:
+            return [AssistantMessage(content)]
+        return []
+
+    def _build_assistant_history_entries_from_response(
+        self,
+        response: Any,
+        *,
+        include_reasoning: bool = True,
+        fallback_content: Optional[str] = None,
+        fallback_thinking: Optional[str] = None,
+    ) -> list[Any]:
+        provider_content = self.llm.get_response_content(response)
+        provider_thinking = (
+            fallback_thinking
+            if fallback_thinking is not None
+            else self.llm.get_thinking_content(response)
+        )
+        if fallback_content is None or provider_content == fallback_content:
+            formatted = self.llm.format_assistant_response(
+                response,
+                include_reasoning=include_reasoning,
+            )
+            entries = self._as_history_entries(formatted)
+            if entries:
+                return entries
+        return self._build_assistant_history_entries(
+            content=fallback_content if fallback_content is not None else provider_content,
+            thinking=provider_thinking if include_reasoning else None,
+        )
 
     def _begin_trace_turn(self, raw_query: str) -> tuple[str, str]:
         return self.trace_recorder.begin_turn(raw_query)
@@ -190,6 +240,7 @@ class BasicAgent(BaseAgent):
         round_number: Optional[int] = None,
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
+        allow_empty: bool = False,
     ) -> Optional[str]:
         return self.trace_recorder.record_assistant_message(
             turn_id,
@@ -199,6 +250,7 @@ class BasicAgent(BaseAgent):
             round_number=round_number,
             mode=mode,
             stream=stream,
+            allow_empty=allow_empty,
         )
 
     def _record_tool_call(
@@ -285,32 +337,10 @@ class BasicAgent(BaseAgent):
         return full_text
 
     def get_last_tool_interrupt(self) -> Optional[dict[str, Any]]:
-        if self._last_tool_interrupt is None:
-            return None
-        return dict(self._last_tool_interrupt)
+        return self.tool_interrupt_controller.get_last_interrupt()
 
     def _clear_last_tool_interrupt(self) -> None:
-        self._last_tool_interrupt = None
-
-    def _build_tool_interrupt_payload(
-        self,
-        *,
-        tool_name: str,
-        tool_args: dict[str, Any],
-        tool_id: str,
-        round_number: int,
-        tool_result: ToolResult,
-    ) -> dict[str, Any]:
-        return {
-            "message": tool_result.to_display_string(),
-            "tool_name": tool_name,
-            "tool_args": dict(tool_args),
-            "tool_id": tool_id,
-            "round_number": round_number,
-            "status": tool_result.status,
-            "metadata": dict(tool_result.metadata),
-            "error_type": tool_result.error_type,
-        }
+        self.tool_interrupt_controller.clear_last_interrupt()
 
     def _finalize_tool_interrupt(
         self,
@@ -351,17 +381,13 @@ class BasicAgent(BaseAgent):
             stream=stream,
             status=tool_result.status,
         )
-        payload = self._build_tool_interrupt_payload(
+        return self.tool_interrupt_controller.create_interruption(
             tool_name=tool_name,
             tool_args=tool_args,
             tool_id=tool_id,
             round_number=round_number,
             tool_result=tool_result,
         )
-        self._last_tool_interrupt = payload
-        if tool_result.status == "needs_confirmation":
-            return ToolConfirmationRequired.from_payload(payload)
-        return ToolInterruption.from_payload(payload)
 
     def _print_stream_final(self, state: Any, final_text: str) -> None:
         self.stream_renderer.render_final(state, final_text)
@@ -455,7 +481,8 @@ class BasicAgent(BaseAgent):
                 
                 self._capture_context_usage(messages, label="invoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                response = self.llm.invoke(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
+                response_obj = self.llm.invoke_raw(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
+                response = self.llm.get_response_content(response_obj)
                 self.callback_manager.on_llm_end(response or "")
                 
                 # 验证响应
@@ -469,7 +496,13 @@ class BasicAgent(BaseAgent):
                 # Skill 后置拦截
                 response = self.skill_manager.on_after_invoke(query, response)
                 self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(response))
+                self.add_messages(
+                    self._build_assistant_history_entries_from_response(
+                        response_obj,
+                        include_reasoning=True,
+                        fallback_content=response,
+                    )
+                )
                 final_event_id = self._record_assistant_trace(
                     turn_id,
                     response,
@@ -511,7 +544,7 @@ class BasicAgent(BaseAgent):
                 for event in self.stream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
                     self._display_stream_event(display_state, event)
                     if event["type"] == "interruption":
-                        raise ToolConfirmationRequired.from_payload(event["payload"])
+                        raise self.tool_interrupt_controller.interruption_from_payload(event["payload"])
                     if event["type"] == "final":
                         final_result = event["content"]
                         self._print_stream_final(display_state, final_result)
@@ -525,25 +558,45 @@ class BasicAgent(BaseAgent):
             self.callback_manager.on_agent_start(self.name, query)
             messages = self._build_start_messages(query)
             final_results=[]
+            streamed_thinking = ""
+            final_content = ""
             display_state = self._new_stream_display_state()
             try:
                 turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
                 self._capture_context_usage(messages, label="stream_invoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                for chunk in self.llm.stream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
-                    self._display_stream_event(
-                        display_state,
-                        {
-                            "type": "text_delta",
-                            "delta": chunk,
-                        },
-                    )
-                    final_results.append(chunk)
-                result = "".join(final_results)
+                for event in self.llm.stream_events(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
+                    event_type = event.get("type")
+                    if event_type == "thinking_delta":
+                        streamed_thinking += event.get("delta", "") or ""
+                        if self.verbose_thinking:
+                            self._display_stream_event(display_state, event)
+                        continue
+                    if event_type == "text_delta":
+                        final_results.append(event.get("delta", "") or "")
+                        self._display_stream_event(display_state, event)
+                        continue
+                    if event_type == "final_response":
+                        final_content = event.get("content", "") or final_content
+                        streamed_thinking = event.get("thinking", "") or streamed_thinking
+                result = "".join(final_results) or final_content
                 self.callback_manager.on_llm_end(result)
                 result = self.skill_manager.on_after_invoke(query, result)
                 self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(result))
+                self.add_messages(
+                    self._build_assistant_history_entries(
+                        content=result,
+                        thinking=streamed_thinking or None,
+                    )
+                )
+                if streamed_thinking:
+                    self._set_round_reasoning(
+                        streamed_thinking,
+                        turn_id=turn_id,
+                        round_number=1,
+                        mode="plain",
+                        stream=True,
+                    )
                 final_event_id = self._record_assistant_trace(
                     turn_id,
                     result,
@@ -644,6 +697,7 @@ class BasicAgent(BaseAgent):
         messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
+        response: Any = None
         turn_history: list[Any] = [UserMessage(query)]
         turn_id, turn_root_event_id = self._begin_trace_turn(raw_query)
         iteration_count = 0
@@ -680,6 +734,7 @@ class BasicAgent(BaseAgent):
                     break
 
                 thinking_content = self.llm.get_thinking_content(response)
+                logger.info(f"思考内容: {thinking_content}")
                 reasoning_event_id: Optional[str] = None
                 if thinking_content:
                     reasoning_event_id = self._set_round_reasoning(
@@ -691,13 +746,17 @@ class BasicAgent(BaseAgent):
                     )
 
                 if self.llm.has_tool_calls(response):
-                    formatted_response = self.llm.format_assistant_response(response)
+                    formatted_response = self.llm.format_assistant_response(response, include_reasoning=True)
                     if isinstance(formatted_response, list):
                         messages.extend(formatted_response)
                     else:
                         messages.append(formatted_response)
                     turn_history.extend(self._as_history_entries(formatted_response))
-                    assistant_parent_id = reasoning_event_id or turn_root_event_id
+                    assistant_parent_id = (
+                        reasoning_event_id
+                        or self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"})
+                        or turn_root_event_id
+                    )
                     assistant_event_id = self._record_assistant_trace(
                         turn_id,
                         self.llm.get_response_content(response),
@@ -706,6 +765,7 @@ class BasicAgent(BaseAgent):
                         round_number=iteration_count,
                         mode="tool",
                         stream=False,
+                        allow_empty=True,
                     )
 
                     for tool_call in self.llm.get_tool_calls(response):
@@ -795,8 +855,8 @@ class BasicAgent(BaseAgent):
                             tool_msg = self.llm.format_tool_result(error_msg, tool_id, tool_name)
                             messages.append(tool_msg)
                             turn_history.append(tool_msg)
-                        except ToolInterruption:
-                            raise
+                        except ToolInterruption as e:
+                            raise e
                         except Exception as e:
                             logger.error(f"处理工具 '{tool_name}' 调用时发生未知错误: {e}")
                             error_msg = f"工具 '{tool_name}' 处理失败: {str(e)}"
@@ -831,7 +891,13 @@ class BasicAgent(BaseAgent):
                 final_response = "超过最大迭代次数，智能体调用失败!"
             
             final_response = self.skill_manager.on_after_invoke(query, final_response)
-            turn_history.append(AssistantMessage(final_response))
+            turn_history.extend(
+                self._build_assistant_history_entries_from_response(
+                    response,
+                    include_reasoning=True,
+                    fallback_content=final_response,
+                )
+            )
             self.add_messages(turn_history)
             final_event_id = self._record_assistant_trace(
                 turn_id,
@@ -902,7 +968,8 @@ class BasicAgent(BaseAgent):
                 
                 self._capture_context_usage(messages, label="ainvoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                response = await self.llm.ainvoke(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
+                response_obj = await self.llm.ainvoke_raw(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
+                response = self.llm.get_response_content(response_obj)
                 self.callback_manager.on_llm_end(response or "")
                 
                 if response is None:
@@ -914,7 +981,13 @@ class BasicAgent(BaseAgent):
                 
                 response = self.skill_manager.on_after_invoke(query, response)
                 self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(response))
+                self.add_messages(
+                    self._build_assistant_history_entries_from_response(
+                        response_obj,
+                        include_reasoning=True,
+                        fallback_content=response,
+                    )
+                )
                 final_event_id = self._record_assistant_trace(
                     turn_id,
                     response,
@@ -968,6 +1041,7 @@ class BasicAgent(BaseAgent):
         messages = self._build_start_messages(query)
         
         final_response: Optional[str] = None
+        response: Any = None
         turn_history: list[Any] = [UserMessage(query)]
         turn_id, turn_root_event_id = self._begin_trace_turn(raw_query)
         iteration_count = 0
@@ -1011,14 +1085,18 @@ class BasicAgent(BaseAgent):
                     )
 
                 if self.llm.has_tool_calls(response):
-                    formatted_response = self.llm.format_assistant_response(response)
+                    formatted_response = self.llm.format_assistant_response(response, include_reasoning=True)
                     tool_calls = self.llm.get_tool_calls(response)
                     if isinstance(formatted_response, list):
                         messages.extend(formatted_response)
                     else:
                         messages.append(formatted_response)
                     turn_history.extend(self._as_history_entries(formatted_response))
-                    assistant_parent_id = reasoning_event_id or turn_root_event_id
+                    assistant_parent_id = (
+                        reasoning_event_id
+                        or self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"})
+                        or turn_root_event_id
+                    )
                     assistant_event_id = self._record_assistant_trace(
                         turn_id,
                         self.llm.get_response_content(response),
@@ -1027,6 +1105,7 @@ class BasicAgent(BaseAgent):
                         round_number=iteration_count,
                         mode="tool",
                         stream=False,
+                        allow_empty=True,
                     )
 
                     async def _process_single_tool(tool_call) -> Message | dict:
@@ -1173,7 +1252,13 @@ class BasicAgent(BaseAgent):
                 final_response = "超过最大迭代次数，智能体调用失败!"
             
             final_response = self.skill_manager.on_after_invoke(query, final_response)
-            turn_history.append(AssistantMessage(final_response))
+            turn_history.extend(
+                self._build_assistant_history_entries_from_response(
+                    response,
+                    include_reasoning=True,
+                    fallback_content=final_response,
+                )
+            )
             self.add_messages(turn_history)
             final_event_id = self._record_assistant_trace(
                 turn_id,
@@ -1227,26 +1312,46 @@ class BasicAgent(BaseAgent):
         self.callback_manager.on_agent_start(self.name, query)
         messages = self._build_start_messages(query)
         final_results = []
+        streamed_thinking = ""
+        final_content = ""
         display_state = self._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
             self._capture_context_usage(messages, label="astream_invoke_plain")
             self.callback_manager.on_llm_start(messages)
-            async for chunk in self.llm.astream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
-                self._display_stream_event(
-                    display_state,
-                    {
-                        "type": "text_delta",
-                        "delta": chunk,
-                    },
-                )
-                final_results.append(chunk)
+            async for event in self.llm.astream_events(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
+                event_type = event.get("type")
+                if event_type == "thinking_delta":
+                    streamed_thinking += event.get("delta", "") or ""
+                    if self.verbose_thinking:
+                        self._display_stream_event(display_state, event)
+                    continue
+                if event_type == "text_delta":
+                    final_results.append(event.get("delta", "") or "")
+                    self._display_stream_event(display_state, event)
+                    continue
+                if event_type == "final_response":
+                    final_content = event.get("content", "") or final_content
+                    streamed_thinking = event.get("thinking", "") or streamed_thinking
             
-            result = "".join(final_results)
+            result = "".join(final_results) or final_content
             self.callback_manager.on_llm_end(result)
             result = self.skill_manager.on_after_invoke(query, result)
             self.add_message(UserMessage(query))
-            self.add_message(AssistantMessage(result))
+            self.add_messages(
+                self._build_assistant_history_entries(
+                    content=result,
+                    thinking=streamed_thinking or None,
+                )
+            )
+            if streamed_thinking:
+                self._set_round_reasoning(
+                    streamed_thinking,
+                    turn_id=turn_id,
+                    round_number=1,
+                    mode="plain",
+                    stream=True,
+                )
             final_event_id = self._record_assistant_trace(
                 turn_id,
                 result,
@@ -1383,6 +1488,7 @@ class BasicAgent(BaseAgent):
                                 assistant_message = self.llm.format_assistant_message(
                                     content=event.get("content"),
                                     tool_calls=event.get("tool_calls"),
+                                    thinking=streamed_thinking or None,
                                 )
                             if isinstance(assistant_message, list):
                                 messages.extend(assistant_message)
@@ -1401,7 +1507,11 @@ class BasicAgent(BaseAgent):
                                     mode="tool",
                                     stream=True,
                                 )
-                            assistant_parent_id = reasoning_event_id or turn_root_event_id
+                            assistant_parent_id = (
+                                reasoning_event_id
+                                or self._get_last_turn_event_id(turn_id, exclude_types={"turn_end"})
+                                or turn_root_event_id
+                            )
                             assistant_event_id = self._record_assistant_trace(
                                 turn_id,
                                 event.get("content"),
@@ -1410,6 +1520,7 @@ class BasicAgent(BaseAgent):
                                 round_number=round_index,
                                 mode="tool",
                                 stream=True,
+                                allow_empty=True,
                             )
 
                             for tool_call in event.get("tool_calls", []):
@@ -1520,7 +1631,16 @@ class BasicAgent(BaseAgent):
                                     stream=True,
                                 )
                             final_response = self.skill_manager.on_after_invoke(query, final_response)
-                            turn_history.append(AssistantMessage(final_response))
+                            assistant_items = event.get("assistant_items")
+                            if assistant_items and final_response == (event.get("content", "") or ""):
+                                turn_history.extend(self._as_history_entries(assistant_items))
+                            else:
+                                turn_history.extend(
+                                    self._build_assistant_history_entries(
+                                        content=final_response,
+                                        thinking=event.get("thinking", "") or None,
+                                    )
+                                )
                             self.add_messages(turn_history)
                             final_event_id = self._record_assistant_trace(
                                 turn_id,
@@ -1554,7 +1674,11 @@ class BasicAgent(BaseAgent):
             if not final_response:
                 final_response = "超过最大迭代次数，智能体调用失败!"
             final_response = self.skill_manager.on_after_invoke(query, final_response)
-            turn_history.append(AssistantMessage(final_response))
+            turn_history.extend(
+                self._build_assistant_history_entries(
+                    content=final_response,
+                )
+            )
             self.add_messages(turn_history)
             final_event_id = self._record_assistant_trace(
                 turn_id,
