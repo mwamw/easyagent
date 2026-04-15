@@ -80,19 +80,32 @@ class BaseProvider(ABC):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> str | None:
         """同步调用 LLM"""
         temperature = temperature if temperature is not None else self.temperature
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=False
-            )
+            if reasoning:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=False,
+                    **kwargs
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=False,
+                    **kwargs
+                )
             msg = response.choices[0].message
             content = msg.content
             logger.info(f"✅ {self.provider_name} Provider 响应成功")
@@ -105,19 +118,29 @@ class BaseProvider(ABC):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Generator[str, None, None]:
         """流式调用 LLM"""
         temperature = temperature if temperature is not None else self.temperature
-        
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=True
-            )
+            if reasoning:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=True
+                )
             logger.info(f"✅ {self.provider_name} Provider 流式响应开始")
             for chunk in response:
                 if not chunk.choices:
@@ -134,18 +157,31 @@ class BaseProvider(ABC):
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Any:
         """带工具调用的 LLM 调用"""
         temperature = temperature if temperature is not None else self.temperature
         
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                temperature=temperature,
+            if reasoning:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=False
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
                 max_tokens=self.max_tokens,
+
                 stream=False
             )
             logger.info(f"✅ {self.provider_name} Provider 工具调用响应成功")
@@ -159,20 +195,32 @@ class BaseProvider(ABC):
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """同步流式工具调用，返回统一事件流。"""
         temperature = temperature if temperature is not None else self.temperature
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=True
-            )
+            if reasoning:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True
+                )
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=True
+                )
             logger.info(f"✅ {self.provider_name} Provider 流式工具调用开始")
             state = self._init_chat_tool_stream_state()
             for chunk in response:
@@ -189,6 +237,7 @@ class BaseProvider(ABC):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> str | None:
         """异步调用 LLM"""
@@ -196,11 +245,21 @@ class BaseProvider(ABC):
         async_client = self._get_async_client()
         
         try:
-            response = await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
+            if reasoning:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=False
+                )
+            else:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
                 stream=False
             )
             msg = response.choices[0].message
@@ -215,6 +274,7 @@ class BaseProvider(ABC):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """异步流式调用 LLM"""
@@ -222,10 +282,20 @@ class BaseProvider(ABC):
         async_client = self._get_async_client()
         
         try:
-            response = await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
+            if reasoning:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True
+                )
+            else:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
                 max_tokens=self.max_tokens,
                 stream=True
             )
@@ -243,6 +313,7 @@ class BaseProvider(ABC):
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Any:
         """异步带工具调用的 LLM 调用"""
@@ -250,14 +321,25 @@ class BaseProvider(ABC):
         async_client = self._get_async_client()
         
         try:
-            response = await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=False
-            )
+            if reasoning:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=False
+                )
+            else:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    stream=False
+                )
             logger.info(f"✅ {self.provider_name} Provider 异步工具调用响应成功")
             return response.choices[0].message
         except Exception as e:
@@ -269,6 +351,7 @@ class BaseProvider(ABC):
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式工具调用，返回统一事件流。"""
@@ -276,11 +359,22 @@ class BaseProvider(ABC):
         async_client = self._get_async_client()
 
         try:
-            response = await async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools,
-                temperature=temperature,
+            if reasoning:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    max_tokens=self.max_tokens,
+                    reasoning_effort=reasoning["effort"],
+                    stream=True
+                )
+            else:
+                response = await async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
                 max_tokens=self.max_tokens,
                 stream=True
             )

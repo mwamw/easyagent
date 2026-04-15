@@ -40,9 +40,12 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> str | None:
         """同步调用（无工具）"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         try:
             response = self.client.responses.create(
                 model=self.model,
@@ -59,9 +62,12 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Generator[str, None, None]:
         """流式调用（无工具）"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         try:
             response = self.client.responses.create(
                 model=self.model,
@@ -91,6 +97,7 @@ class OpenAIResponsesProvider(BaseProvider):
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Any:
         """
@@ -102,6 +109,8 @@ class OpenAIResponsesProvider(BaseProvider):
 
         返回原始 response 对象（由上层通过辅助方法解析）。
         """
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         try:
             flat_tools = self._convert_tools(tools)
             params = self._base_params(temperature, **kwargs)
@@ -131,10 +140,13 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         tools: list,
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """同步流式工具调用（Responses API 格式）。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         try:
             flat_tools = self._convert_tools(tools)
             params = self._base_params(temperature, **kwargs)
@@ -162,10 +174,13 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_invoke(
         self,
         messages: list,
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> str | None:
         """异步调用（无工具）"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         async_client = self._get_async_client()
         try:
             response = await async_client.responses.create(
@@ -182,10 +197,13 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_stream(
         self,
         messages: list,
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ):
         """异步流式调用（无工具）"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         async_client = self._get_async_client()
         try:
             response = await async_client.responses.create(
@@ -212,10 +230,13 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         tools: list,
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Any:
         """异步带工具调用（Responses API 格式）"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         async_client = self._get_async_client()
         try:
             flat_tools = self._convert_tools(tools)
@@ -243,10 +264,13 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         tools: list,
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ):
         """异步流式工具调用（Responses API 格式）。"""
+        if reasoning:
+            kwargs["reasoning"] = reasoning
         async_client = self._get_async_client()
         try:
             flat_tools = self._convert_tools(tools)

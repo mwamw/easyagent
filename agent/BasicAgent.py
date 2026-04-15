@@ -44,12 +44,12 @@ class BasicAgent(BaseAgent):
         tool_registry: Optional[ToolRegistry] = None,
         description: Optional[str] = None,
         config: Optional[Config] = None,
-        verbose_thinking: bool = False,
         memory_manage: Optional["MemoryManage"] = None,
         context_manager: Optional["ContextManager"] = None,
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        reasoning: Optional[dict[str, Any]] = None,
     ):
         """
         初始化 BasicAgent
@@ -62,7 +62,6 @@ class BasicAgent(BaseAgent):
             tool_registry: 工具注册表
             description: 智能体描述
             config: 配置对象
-            verbose_thinking: 是否显示 LLM 的思考过程
             
         Raises:
             ParameterValidationError: 参数验证失败
@@ -92,8 +91,13 @@ class BasicAgent(BaseAgent):
             skill_manager=skill_manager,
         )
         
-
-        self.verbose_thinking = verbose_thinking
+        if reasoning:
+            assert isinstance(reasoning, dict)
+            if "effort" not in reasoning:
+                assert reasoning['effort'] in ["low", "medium", "high"]
+            if "summary" not in reasoning:
+                assert reasoning['summary'] in ["auto", "none"]
+            self.reasoning = reasoning
         self.trace_history: list[dict[str, Any]] = []  # 记录完整会话转录
         self._trace_session_id = f"trace_{uuid4().hex}"
         self._trace_event_counter = 0
@@ -109,7 +113,6 @@ class BasicAgent(BaseAgent):
     def _get_serializable_state(self) -> dict[str, Any]:
         state = super()._get_serializable_state()
         state.update({
-            "verbose_thinking": self.verbose_thinking,
             "history_via_context_manager": self.history_via_context_manager,
             "trace_history": self.get_trace_history(),
             "trace_session_id": self._trace_session_id,
@@ -117,13 +120,13 @@ class BasicAgent(BaseAgent):
             "trace_seq": self._trace_seq,
             "trace_turn_counter": self._trace_turn_counter,
             "last_tool_interrupt": self.get_last_tool_interrupt(),
+            "reasoning": self.reasoning,
         })
         return state
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         super()._restore_serializable_state(state)
         state = state or {}
-        self.verbose_thinking = state.get("verbose_thinking", False)
         self.history_via_context_manager = state.get("history_via_context_manager", False)
         self.trace_history = list(state.get("trace_history", []))
         self._trace_session_id = state.get("trace_session_id") or f"trace_{uuid4().hex}"
@@ -131,6 +134,7 @@ class BasicAgent(BaseAgent):
         self._trace_seq = int(state.get("trace_seq") or 0)
         self._trace_turn_counter = int(state.get("trace_turn_counter") or 0)
         self._last_tool_interrupt = state.get("last_tool_interrupt")
+        self.reasoning = state.get("reasoning")
 
         legacy_thinking = [str(item) for item in state.get("thinking_history", []) if item is not None]
         if not self.trace_history and legacy_thinking:
@@ -714,8 +718,7 @@ class BasicAgent(BaseAgent):
             ParameterValidationError: 参数验证失败
             LLMInvokeError: LLM 调用失败
         """
-        if self.verbose_thinking:
-            kwargs["reasoning"] = {"effort": "medium","summary": "auto"}
+
         # 参数验证
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
@@ -756,7 +759,7 @@ class BasicAgent(BaseAgent):
                 
                 self._capture_context_usage(messages, label="invoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                response = self.llm.invoke(messages, temperature=temperature, **kwargs)
+                response = self.llm.invoke(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
                 self.callback_manager.on_llm_end(response or "")
                 
                 # 验证响应
@@ -831,7 +834,7 @@ class BasicAgent(BaseAgent):
                 turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
                 self._capture_context_usage(messages, label="stream_invoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                for chunk in self.llm.stream(messages, temperature=temperature, **kwargs):
+                for chunk in self.llm.stream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
                     self._append_stream_text(display_state, "content", "content_text", chunk)
                     final_results.append(chunk)
                 result = "".join(final_results)
@@ -875,6 +878,7 @@ class BasicAgent(BaseAgent):
             query,
             max_iter=max_iter,
             temperature=temperature,
+            reasoning=self.reasoning,
             **kwargs,
         )
         loop = asyncio.new_event_loop()
@@ -955,6 +959,7 @@ class BasicAgent(BaseAgent):
                         messages,
                         self.tool_registry.get_openai_tools(),
                         temperature=temperature,
+                        reasoning=self.reasoning,
                         **kwargs
                     )
                     self.callback_manager.on_llm_end(getattr(response, 'content', '') or '')
@@ -983,9 +988,6 @@ class BasicAgent(BaseAgent):
                         mode="tool",
                         stream=False,
                     )
-                    if self.verbose_thinking:
-                        logger.info(f"💭 模型思考: {thinking_content}")
-                    # messages.append(AssistantMessage(thinking_content))
 
                 if self.llm.has_tool_calls(response):
                     formatted_response = self.llm.format_assistant_response(response)
@@ -1162,8 +1164,6 @@ class BasicAgent(BaseAgent):
         Returns:
             智能体返回结果
         """
-        if self.verbose_thinking:
-            kwargs["reasoning"] = {"effort": "medium", "summary": "auto"}
         self._validate_invoke_params(query, max_iter, temperature)
         original_query = query
         self._current_query = query
@@ -1184,6 +1184,7 @@ class BasicAgent(BaseAgent):
                     max_iter,
                     temperature,
                     trace_query=original_query,
+                    reasoning=self.reasoning,
                     **kwargs,
                 )
                 self.callback_manager.on_agent_end(self.name, result, success=True)
@@ -1201,7 +1202,7 @@ class BasicAgent(BaseAgent):
                 
                 self._capture_context_usage(messages, label="ainvoke_plain")
                 self.callback_manager.on_llm_start(messages)
-                response = await self.llm.ainvoke(messages, temperature=temperature, **kwargs)
+                response = await self.llm.ainvoke(messages, temperature=temperature,reasoning=self.reasoning, **kwargs)
                 self.callback_manager.on_llm_end(response or "")
                 
                 if response is None:
@@ -1282,6 +1283,7 @@ class BasicAgent(BaseAgent):
                     response = await self.llm.ainvoke_with_tools(
                         messages,
                         self.tool_registry.get_openai_tools(),
+                        reasoning=self.reasoning,
                         temperature=temperature,
                         **kwargs
                     )
@@ -1307,8 +1309,6 @@ class BasicAgent(BaseAgent):
                         mode="tool",
                         stream=False,
                     )
-                    if self.verbose_thinking:
-                        logger.info(f"💭 模型思考: {thinking_content}")
 
                 if self.llm.has_tool_calls(response):
                     formatted_response = self.llm.format_assistant_response(response)
@@ -1532,7 +1532,7 @@ class BasicAgent(BaseAgent):
             turn_id, last_trace_event_id = self._begin_trace_turn(original_query)
             self._capture_context_usage(messages, label="astream_invoke_plain")
             self.callback_manager.on_llm_start(messages)
-            async for chunk in self.llm.astream(messages, temperature=temperature, **kwargs):
+            async for chunk in self.llm.astream(messages, temperature=temperature,reasoning=self.reasoning, **kwargs):
                 self._append_stream_text(display_state, "content", "content_text", chunk)
                 final_results.append(chunk)
             
@@ -1574,8 +1574,6 @@ class BasicAgent(BaseAgent):
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式工具调用，逐步产出文本、工具与最终结果事件。"""
-        if self.verbose_thinking:
-            kwargs.setdefault("reasoning", {"effort": "medium", "summary": "auto"})
         self._validate_invoke_params(query, max_iter, temperature)
         raw_query = trace_query if trace_query is not None else query
         self._current_query = query
@@ -1605,6 +1603,7 @@ class BasicAgent(BaseAgent):
                     messages,
                     self.tool_registry.get_openai_tools(),
                     temperature=temperature,
+                    reasoning=self.reasoning,
                     **kwargs
                 )
                 should_continue = False
@@ -1636,8 +1635,7 @@ class BasicAgent(BaseAgent):
                                 mode="tool",
                                 stream=True,
                             )
-                            if self.verbose_thinking:
-                                yield event
+                            yield event
                             continue
 
                         if event_type == "tool_calls":
@@ -1654,11 +1652,10 @@ class BasicAgent(BaseAgent):
                                     mode="tool",
                                     stream=True,
                                 )
-                                if self.verbose_thinking:
-                                    yield {
-                                        "type": "thinking_delta",
-                                        "delta": thinking_suffix,
-                                    }
+                                yield {
+                                    "type": "thinking_delta",
+                                    "delta": thinking_suffix,
+                                }
 
                             content_suffix = self._snapshot_suffix(
                                 streamed_content,

@@ -265,6 +265,7 @@ class EasyLLM:
     def invoke(
         self,
         messages: list[dict[str, str] | Message],
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> str | None:
@@ -279,11 +280,12 @@ class EasyLLM:
             LLM 响应内容
         """
         messages = self._convert_messages(messages) # type: ignore
-        return self._provider.invoke(messages, temperature=temperature, **kwargs) # type: ignore
+        return self._provider.invoke(messages, temperature=temperature,reasoning=reasoning, **kwargs) # type: ignore
     
     def stream(
         self,
         messages: list[dict[str, str] | Message],
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[str, None, None]:
@@ -298,12 +300,13 @@ class EasyLLM:
             响应内容片段
         """
         messages = self._convert_messages(messages) # type: ignore
-        yield from self._provider.stream(messages, temperature=temperature, **kwargs)
+        yield from self._provider.stream(messages, temperature=temperature,reasoning=reasoning, **kwargs)
     
     def invoke_with_tools(
         self,
         messages: list[dict[str, str] | Message],
         tools: list[dict],
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Any:
@@ -320,7 +323,7 @@ class EasyLLM:
         """
         messages = self._convert_messages(messages) # type: ignore
         try:
-            result=self._provider.invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
+            result=self._provider.invoke_with_tools(messages, tools,reasoning=reasoning, temperature=temperature, **kwargs)
             return result
         except Exception as e:
             logger.error(f"LLM工具调用失败 当前消息{messages[-1]}")
@@ -330,6 +333,7 @@ class EasyLLM:
         self,
         messages: list[dict[str, str] | Message],
         tools: list[dict],
+        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
@@ -338,6 +342,7 @@ class EasyLLM:
         yield from self._provider.stream_with_tools(
             messages,
             tools,
+            reasoning=reasoning,
             temperature=temperature,
             **kwargs,
         )
@@ -402,6 +407,7 @@ class EasyLLM:
         self,
         messages: list[dict[str, str] | Message],
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> str | None:
         """
@@ -415,12 +421,13 @@ class EasyLLM:
             LLM 响应内容
         """
         messages = self._convert_messages(messages) # type: ignore
-        return await self._provider.async_invoke(messages, temperature=temperature, **kwargs) # type: ignore
+        return await self._provider.async_invoke(messages, temperature=temperature,reasoning=reasoning, **kwargs) # type: ignore
 
     async def astream(
         self,
         messages: list[dict[str, str] | Message],
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[str, None]:
         """
@@ -434,7 +441,7 @@ class EasyLLM:
             响应内容片段
         """
         messages = self._convert_messages(messages) # type: ignore
-        async for chunk in self._provider.async_stream(messages, temperature=temperature, **kwargs):
+        async for chunk in self._provider.async_stream(messages, reasoning=reasoning,temperature=temperature, **kwargs):
             yield chunk
 
     async def ainvoke_with_tools(
@@ -442,6 +449,7 @@ class EasyLLM:
         messages: list[dict[str, str] | Message],
         tools: list[dict],
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Any:
         """
@@ -457,7 +465,7 @@ class EasyLLM:
         """
         messages = self._convert_messages(messages) # type: ignore
         try:
-            result = await self._provider.async_invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
+            result = await self._provider.async_invoke_with_tools(messages, tools,reasoning=reasoning, temperature=temperature, **kwargs)
             return result
         except Exception as e:
             logger.error(f"LLM 异步工具调用失败 当前消息{messages[-1]}")
@@ -468,6 +476,7 @@ class EasyLLM:
         messages: list[dict[str, str] | Message],
         tools: list[dict],
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式带工具调用，返回统一事件流。"""
@@ -475,6 +484,7 @@ class EasyLLM:
         async for event in self._provider.async_stream_with_tools(
             messages,
             tools,
+            reasoning=reasoning,
             temperature=temperature,
             **kwargs,
         ):
@@ -485,21 +495,23 @@ class EasyLLM:
     def think(
         self,
         messages: list[dict[str, str] | Message],
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None ,
+        reasoning: Optional[dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """流式输出（向后兼容）"""
         messages = self._convert_messages(messages) # type: ignore
-        for chunk in self._provider.stream(messages, temperature=temperature):
+        for chunk in self._provider.stream(messages, temperature=temperature,reasoning=reasoning):
             print(chunk, end="", flush=True)
             yield chunk
     
     def stream_invoke(
         self,
         messages: list[dict[str, str] | Message],
-        temperature: Optional[float] = None
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """流式调用（向后兼容）"""
-        yield from self.think(messages, temperature)
+        yield from self.think(messages, temperature,reasoning)
     
     def get_client(self):
         """获取底层客户端（向后兼容）"""
