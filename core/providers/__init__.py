@@ -45,7 +45,7 @@ def create_provider(
         provider_name = detect_provider_from_model(model)
     
     provider_map = {
-        "openai": OpenAIProvider,
+        "openai": OpenAIResponsesProvider,
         "openai_responses": OpenAIResponsesProvider,
         "google": GoogleProvider,
         "gemini": GoogleProvider,

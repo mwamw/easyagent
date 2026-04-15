@@ -159,7 +159,7 @@ class ClaudeAskUserQuestionInput(BaseModel):
 
 class ClaudeConfigInput(BaseModel):
     setting: str = Field(description="配置 key")
-    value: Optional[str | bool | int | float] = Field(default=None, description="新的配置值")
+    value: Optional[str] = Field(default=None, description="新的配置值(如果是复杂类型可以转字符串传入)")
 
 
 class ClaudeEnterWorktreeInput(BaseModel):

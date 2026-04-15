@@ -962,10 +962,10 @@ class BasicAgent(BaseAgent):
                     if response is None:
                         raise LLMInvokeError("LLM 返回了空响应!")
 
-                    _output = getattr(response, "output", None)
-                    if _output is not None:
-                        _types = [getattr(item, "type", repr(item)) for item in _output]
-                        logger.info(f"📦 response.output 类型列表: {_types}")
+                    # _output = getattr(response, "output", None)
+                    # if _output is not None:
+                    #     _types = [getattr(item, "type", repr(item)) for item in _output]
+                    #     logger.info(f"📦 response.output 类型列表: {_types}")
                 except LLMInvokeError:
                     raise
                 except Exception as e:
@@ -1494,7 +1494,7 @@ class BasicAgent(BaseAgent):
         finally:
             self._clear_ephemeral_skill_state()
 
-    async def astream_invoke(self, query: str, temperature: float = 0.7, **kwargs) -> str:
+    async def astream_invoke(self, query: str,max_iter:int=10, temperature: float = 0.7, **kwargs) -> str:
         """
         异步流式调用智能体
         
@@ -1512,7 +1512,7 @@ class BasicAgent(BaseAgent):
             display_state = self._new_stream_display_state()
             final_result = ""
             try:
-                async for event in self.astream_invoke_with_tool(query, temperature=temperature, trace_query=original_query, **kwargs):
+                async for event in self.astream_invoke_with_tool(query, max_iter=max_iter,temperature=temperature, trace_query=original_query, **kwargs):
                     self._display_stream_event(display_state, event)
                     if event["type"] == "final":
                         final_result = event["content"]

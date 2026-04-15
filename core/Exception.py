@@ -13,6 +13,10 @@ class ToolRegistryError(AgentError):
     """工具注册表相关异常"""
     pass
 
+class ToolNotFoundError(ToolRegistryError):
+    """工具未找到"""
+    pass
+
 
 class ToolExecutionError(AgentError):
     """工具执行异常"""

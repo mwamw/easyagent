@@ -106,7 +106,7 @@ class EasyLLM:
         """自动检测 Provider 类型"""
         # 1. 根据环境变量判断
         if os.getenv("OPENAI_API_KEY"):
-            return "openai"
+            return "openai_responses"
         if os.getenv("Google_API_KEY") or os.getenv("GOOGLE_API_KEY"):
             return "google"
         if os.getenv("ANTHROPIC_API_KEY"):
@@ -131,7 +131,7 @@ class EasyLLM:
         base_url_lower = base_url.lower()
         
         if "api.openai.com" in base_url_lower:
-            return "openai"
+            return "openai_responses"
         elif "google" in base_url_lower:
             return "google"
         elif "anthropic" in base_url_lower:
@@ -156,7 +156,7 @@ class EasyLLM:
         if self.model:
             model_lower = self.model.lower()
             if "gpt" in model_lower:
-                return "openai"
+                return "openai_responses"
             elif "gemini" in model_lower:
                 return "google"
             elif "claude" in model_lower:

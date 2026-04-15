@@ -5,6 +5,7 @@
 """
 import os
 import logging
+from urllib.parse import urlparse
 from typing import Optional
 from pydantic import BaseModel, Field
 
@@ -18,6 +19,8 @@ class SearchParams(BaseModel):
     """搜索参数"""
     query: str = Field(description="搜索关键词")
     num_results: int = Field(default=5, description="返回结果数量，默认5条")
+    allowed_domains: list[str] = Field(default_factory=list, description="允许域名白名单")
+    blocked_domains: list[str] = Field(default_factory=list, description="禁止域名黑名单")
 
 
 SEARCH_TOOL_PROMPT = """仅在你需要最新外部信息、公开网页资料或当前上下文无法回答的问题时使用此工具。
@@ -38,6 +41,63 @@ def _format_search_output(query: str, results: list[dict[str, str]]) -> str:
             output_lines.append(f"   链接: {r['link']}")
         output_lines.append(f"   摘要: {r.get('snippet', '')}\n")
     return "\n".join(output_lines)
+
+
+def _normalize_domain_filters(domains: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for domain in domains or []:
+        value = str(domain).strip().lower()
+        if not value:
+            continue
+        if value.startswith("*."):
+            value = value[2:]
+        normalized.append(value)
+    return normalized
+
+
+def _hostname_from_url(url: str) -> str:
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _domain_matches(hostname: str, domain: str) -> bool:
+    if not hostname or not domain:
+        return False
+    return hostname == domain or hostname.endswith(f".{domain}")
+
+
+def _filter_results_by_domains(
+    results: list[dict[str, str]],
+    *,
+    allowed_domains: list[str] | None = None,
+    blocked_domains: list[str] | None = None,
+) -> list[dict[str, str]]:
+    allowed = _normalize_domain_filters(allowed_domains)
+    blocked = _normalize_domain_filters(blocked_domains)
+    filtered: list[dict[str, str]] = []
+    seen_links: set[str] = set()
+
+    for item in results:
+        link = str(item.get("link", "") or "")
+        hostname = _hostname_from_url(link)
+
+        if link and link in seen_links:
+            continue
+        if blocked and hostname and any(_domain_matches(hostname, domain) for domain in blocked):
+            continue
+        if allowed:
+            if not hostname:
+                continue
+            if not any(_domain_matches(hostname, domain) for domain in allowed):
+                continue
+
+        if link:
+            seen_links.add(link)
+        filtered.append(item)
+
+    return filtered
 
 
 class WebSearchTool(Tool):
@@ -93,24 +153,37 @@ class WebSearchTool(Tool):
         """执行搜索"""
         query = parameters.get("query", "")
         num_results = parameters.get("num_results", 5)
+        allowed_domains = list(parameters.get("allowed_domains") or [])
+        blocked_domains = list(parameters.get("blocked_domains") or [])
         
         if not query:
             return ToolResult.error("错误：搜索关键词不能为空", error_type="invalid_parameters")
         
         try:
             if self.backend == "serpapi":
-                return self._search_serpapi(query, num_results)
+                return self._search_serpapi(query, num_results, allowed_domains, blocked_domains)
             else:
-                return self._search_duckduckgo(query, num_results)
+                return self._search_duckduckgo(query, num_results, allowed_domains, blocked_domains)
         except Exception as e:
             logger.error(f"搜索失败: {e}")
             return ToolResult.error(
                 f"搜索失败: {str(e)}",
                 error_type="search_failed",
-                metadata={"backend": self.backend, "query": query},
+                metadata={
+                    "backend": self.backend,
+                    "query": query,
+                    "allowed_domains": allowed_domains,
+                    "blocked_domains": blocked_domains,
+                },
             )
     
-    def _search_serpapi(self, query: str, num_results: int) -> ToolResult:
+    def _search_serpapi(
+        self,
+        query: str,
+        num_results: int,
+        allowed_domains: list[str],
+        blocked_domains: list[str],
+    ) -> ToolResult:
         """使用 SerpAPI 搜索"""
         try:
             import requests
@@ -124,11 +197,12 @@ class WebSearchTool(Tool):
             )
         
         url = "https://serpapi.com/search"
+        requested_num = max(num_results, min(num_results * 4, 20)) if (allowed_domains or blocked_domains) else num_results
         params = {
             "q": query,
             "api_key": self.api_key,
             "engine": "google",
-            "num": num_results
+            "num": requested_num
         }
         
         response = requests.get(url, params=params, timeout=30)
@@ -137,43 +211,76 @@ class WebSearchTool(Tool):
         
         # 提取搜索结果
         results = []
-        for item in data.get("organic_results", [])[:num_results]:
+        for item in data.get("organic_results", []):
             results.append({
                 "title": item.get("title", ""),
                 "link": item.get("link", ""),
                 "snippet": item.get("snippet", "")
             })
+        results = _filter_results_by_domains(
+            results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )[:num_results]
         
         return ToolResult.success(
             _format_search_output(query, results),
             structured_data=results,
-            metadata={"backend": "serpapi", "query": query},
+            metadata={
+                "backend": "serpapi",
+                "query": query,
+                "allowed_domains": allowed_domains,
+                "blocked_domains": blocked_domains,
+            },
         )
     
-    def _search_duckduckgo(self, query: str, num_results: int) -> ToolResult:
+    def _search_duckduckgo(
+        self,
+        query: str,
+        num_results: int,
+        allowed_domains: list[str],
+        blocked_domains: list[str],
+    ) -> ToolResult:
         """使用 DuckDuckGo 搜索（无需 API Key）"""
         try:
             from duckduckgo_search import DDGS
         except ImportError:
             # 如果没有安装 duckduckgo_search，使用简单的 HTTP 请求
-            return self._search_duckduckgo_lite(query, num_results)
+            return self._search_duckduckgo_lite(query, num_results, allowed_domains, blocked_domains)
         
         results = []
+        requested_num = max(num_results, min(num_results * 4, 20)) if (allowed_domains or blocked_domains) else num_results
         with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=num_results):
+            for r in ddgs.text(query, max_results=requested_num):
                 results.append({
                     "title": r.get("title", ""),
                     "link": r.get("href", ""),
                     "snippet": r.get("body", "")
                 })
+        results = _filter_results_by_domains(
+            results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )[:num_results]
         
         return ToolResult.success(
             _format_search_output(query, results),
             structured_data=results,
-            metadata={"backend": "duckduckgo", "query": query},
+            metadata={
+                "backend": "duckduckgo",
+                "query": query,
+                "allowed_domains": allowed_domains,
+                "blocked_domains": blocked_domains,
+            },
         )
     
-    def _search_duckduckgo_lite(self, query: str, num_results: int) -> ToolResult:
+    def _search_duckduckgo_lite(
+        self,
+        query: str,
+        num_results: int,
+        allowed_domains: list[str],
+        blocked_domains: list[str],
+    ) -> ToolResult:
         """备用的简单 DuckDuckGo 搜索"""
         try:
             import requests
@@ -209,18 +316,33 @@ class WebSearchTool(Tool):
                     "link": topic.get("FirstURL", ""),
                     "snippet": topic.get("Text", "")
                 })
+        results = _filter_results_by_domains(
+            results,
+            allowed_domains=allowed_domains,
+            blocked_domains=blocked_domains,
+        )[:num_results]
         
         if not results:
             return ToolResult.success(
                 f"DuckDuckGo 未找到「{query}」的相关结果。建议安装 duckduckgo-search 获取更好的搜索结果。",
                 structured_data=[],
-                metadata={"backend": "duckduckgo_lite", "query": query},
+                metadata={
+                    "backend": "duckduckgo_lite",
+                    "query": query,
+                    "allowed_domains": allowed_domains,
+                    "blocked_domains": blocked_domains,
+                },
             )
 
         return ToolResult.success(
             _format_search_output(query, results),
             structured_data=results,
-            metadata={"backend": "duckduckgo_lite", "query": query},
+            metadata={
+                "backend": "duckduckgo_lite",
+                "query": query,
+                "allowed_domains": allowed_domains,
+                "blocked_domains": blocked_domains,
+            },
         )
 
 

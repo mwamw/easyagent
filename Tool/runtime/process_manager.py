@@ -50,6 +50,7 @@ class _ManagedBackgroundTask:
     finished_at: Optional[float] = None
     stdout_thread: Optional[threading.Thread] = None
     stderr_thread: Optional[threading.Thread] = None
+    stop_requested: bool = False
 
     def append_stdout(self, chunk: str) -> None:
         with self.lock:
@@ -63,7 +64,12 @@ class _ManagedBackgroundTask:
         return_code = self.process.poll()
         if return_code is not None and self.finished_at is None:
             self.finished_at = time.time()
-        status = "running" if return_code is None else "completed"
+        if return_code is None:
+            status = "running"
+        elif self.stop_requested:
+            status = "terminated"
+        else:
+            status = "completed"
         return BackgroundTaskSnapshot(
             task_id=self.task_id,
             command=self.command,
@@ -160,14 +166,26 @@ class ProcessManager:
             self._tasks[task.task_id] = task
         return task.snapshot()
 
-    def get_task(self, task_id: str) -> BackgroundTaskSnapshot:
-        task = self._tasks.get(task_id)
-        if task is None:
-            raise KeyError(f"后台任务不存在: {task_id}")
+    def get_task(
+        self,
+        task_id: str,
+        *,
+        block: bool = False,
+        timeout_ms: Optional[int] = None,
+    ) -> BackgroundTaskSnapshot:
+        task = self._get_managed_task(task_id)
+        if block:
+            self._wait_for_task(task, timeout_ms=timeout_ms)
         return task.snapshot()
 
-    def get_output(self, task_id: str) -> ProcessExecutionResult:
-        snapshot = self.get_task(task_id)
+    def get_output(
+        self,
+        task_id: str,
+        *,
+        block: bool = False,
+        timeout_ms: Optional[int] = None,
+    ) -> ProcessExecutionResult:
+        snapshot = self.get_task(task_id, block=block, timeout_ms=timeout_ms)
         return ProcessExecutionResult(
             command=snapshot.command,
             cwd=snapshot.cwd,
@@ -178,10 +196,9 @@ class ProcessManager:
         )
 
     def stop(self, task_id: str, *, kill: bool = False) -> BackgroundTaskSnapshot:
-        task = self._tasks.get(task_id)
-        if task is None:
-            raise KeyError(f"后台任务不存在: {task_id}")
+        task = self._get_managed_task(task_id)
         if task.process.poll() is None:
+            task.stop_requested = True
             if kill:
                 task.process.kill()
             else:
@@ -191,7 +208,7 @@ class ProcessManager:
             except subprocess.TimeoutExpired:
                 task.process.kill()
                 task.process.wait(timeout=5)
-        task.finished_at = time.time()
+        self._finalize_task(task)
         return task.snapshot()
 
     def list_tasks(self) -> list[BackgroundTaskSnapshot]:
@@ -202,6 +219,40 @@ class ProcessManager:
         for snapshot in self.list_tasks():
             if snapshot.status == "running":
                 self.stop(snapshot.task_id, kill=True)
+
+    def _get_managed_task(self, task_id: str) -> _ManagedBackgroundTask:
+        task = self._tasks.get(task_id)
+        if task is None:
+            raise KeyError(f"后台任务不存在: {task_id}")
+        return task
+
+    def _wait_for_task(
+        self,
+        task: _ManagedBackgroundTask,
+        *,
+        timeout_ms: Optional[int] = None,
+    ) -> None:
+        if task.process.poll() is not None:
+            self._finalize_task(task)
+            return
+
+        timeout_s = None if timeout_ms is None or timeout_ms <= 0 else timeout_ms / 1000
+        try:
+            task.process.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            return
+        self._finalize_task(task)
+
+    def _finalize_task(self, task: _ManagedBackgroundTask) -> None:
+        task.finished_at = task.finished_at or time.time()
+        self._join_reader_thread(task.stdout_thread)
+        self._join_reader_thread(task.stderr_thread)
+
+    @staticmethod
+    def _join_reader_thread(thread: Optional[threading.Thread]) -> None:
+        if thread is None:
+            return
+        thread.join(timeout=0.2)
 
     def _build_popen_kwargs(
         self,

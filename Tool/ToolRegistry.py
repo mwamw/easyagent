@@ -8,8 +8,7 @@ from pydantic import BaseModel
 from .BaseTool import Tool, ToolResult, ToolSpec
 
 ToolVisibility = Literal["resident", "runtime", "turn"]
-
-
+from core.Exception import ToolNotFoundError
 class ToolRegistry:
     def __init__(self):
         self.tools: dict[str, Tool] = {}
@@ -100,7 +99,7 @@ class ToolRegistry:
     def validate_tool_call(self, name: str, parameters: dict[str, Any]) -> tuple[Tool, dict[str, Any]]:
         tool = self.get_tool(name)
         if tool is None:
-            raise ValueError(f"Tool {name} not found")
+            raise ToolNotFoundError(f"Tool {name} not found")
         if not isinstance(parameters, dict):
             raise ValueError(f"工具参数必须是 dict，收到: {type(parameters).__name__}")
         validated = tool.validate_parameters(parameters)
@@ -132,14 +131,18 @@ class ToolRegistry:
         return ToolResult.success(str(raw_result), metadata={"tool_name": name})
 
     def execute_tool_result(self, name: str, parameters: dict[str, Any]) -> ToolResult:
-        tool, validated = self.validate_tool_call(name, parameters)
-        auth_result = self.authorize_tool_call(tool, validated)
-        if auth_result is not None:
-            self._enrich_tool_result(tool, auth_result)
-            return auth_result
-        raw_result = tool.run(validated)
-        result = self.normalize_tool_result(name, raw_result)
-        self._enrich_tool_result(tool, result)
+        try:
+            tool, validated = self.validate_tool_call(name, parameters)
+            auth_result = self.authorize_tool_call(tool, validated)
+            if auth_result is not None:
+                self._enrich_tool_result(tool, auth_result)
+                return auth_result
+            raw_result = tool.run(validated)
+            result = self.normalize_tool_result(name, raw_result)
+            self._enrich_tool_result(tool, result)
+        except ToolNotFoundError as e:
+            result = ToolResult.error(str(e), error_type="tool_not_found")
+            raise e
         return result
 
     def _enrich_tool_result(self, tool: Tool, result: ToolResult) -> None:

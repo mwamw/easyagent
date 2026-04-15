@@ -250,3 +250,83 @@ class MCPRuntimeManager:
             resources=list(self._snapshot.resources),
             prompts=list(self._snapshot.prompts),
         )
+
+
+class MCPHub:
+    """Registry for multiple MCP runtime managers keyed by logical server name."""
+
+    def __init__(self):
+        self._managers: Dict[str, MCPRuntimeManager] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def normalize_server_name(value: str) -> str:
+        normalized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value).strip("_")
+        return normalized or "mcp"
+
+    def register_manager(
+        self,
+        manager: MCPRuntimeManager,
+        *,
+        server_name: Optional[str] = None,
+        replace: bool = False,
+    ) -> str:
+        resolved_name = self.normalize_server_name(server_name or manager.server_label)
+        with self._lock:
+            existing = self._managers.get(resolved_name)
+            if existing is not None and existing is not manager and not replace:
+                raise ValueError(f"MCP server '{resolved_name}' 已存在。")
+            self._managers[resolved_name] = manager
+        return resolved_name
+
+    def unregister_manager(self, server_name: str) -> MCPRuntimeManager:
+        resolved_name = self.normalize_server_name(server_name)
+        with self._lock:
+            try:
+                return self._managers.pop(resolved_name)
+            except KeyError as exc:
+                raise KeyError(f"未知 MCP server: {resolved_name}") from exc
+
+    def get_manager(self, server_name: str) -> MCPRuntimeManager:
+        resolved_name = self.normalize_server_name(server_name)
+        with self._lock:
+            try:
+                return self._managers[resolved_name]
+            except KeyError as exc:
+                available = ", ".join(sorted(self._managers.keys()))
+                detail = f"未知 MCP server: {resolved_name}"
+                if available:
+                    detail += f"。可用 server: {available}"
+                raise KeyError(detail) from exc
+
+    def list_servers(self) -> List[str]:
+        with self._lock:
+            return sorted(self._managers.keys())
+
+    def list_resources(self, server_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        if server_name:
+            manager = self.get_manager(server_name)
+            resolved_name = self.normalize_server_name(server_name)
+            return [
+                {
+                    "server": resolved_name,
+                    **resource,
+                }
+                for resource in manager.list_remote_resources()
+            ]
+
+        aggregated: List[Dict[str, Any]] = []
+        for current_name in self.list_servers():
+            manager = self.get_manager(current_name)
+            for resource in manager.list_remote_resources():
+                aggregated.append(
+                    {
+                        "server": current_name,
+                        **resource,
+                    }
+                )
+        return aggregated
+
+    def read_resource(self, server_name: str, uri: str) -> Any:
+        manager = self.get_manager(server_name)
+        return manager.read_remote_resource(uri)

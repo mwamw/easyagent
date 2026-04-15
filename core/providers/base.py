@@ -324,7 +324,7 @@ class BaseProvider(ABC):
         """根据统一 tool call 结构构造 assistant 消息。"""
         message: dict[str, Any] = {
             "role": "assistant",
-            "content": content or "",
+            "content": content or None,
         }
         if tool_calls:
             message["tool_calls"] = [
@@ -342,7 +342,7 @@ class BaseProvider(ABC):
 
     def format_assistant_response(self, response: Any) -> dict[str, Any]:
         """将 provider 响应对象转换为可复用、可序列化的 assistant 消息。"""
-        content = getattr(response, "content", None) or ""
+        content = getattr(response, "content", None) or None
         tool_calls_data = getattr(response, "tool_calls", None) or []
         tool_calls: list[dict[str, Any]] = []
 

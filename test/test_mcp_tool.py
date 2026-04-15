@@ -8,7 +8,8 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin.mcp_tool import MCPToolManager
+from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_resource_hub_tools, register_mcp_tools
+from mcp import MCPHub
 from skill.builtin.mcp_skill import MCPSkill
 from skill.manager import SkillManager
 from skill.meta_tools import SkillTool
@@ -128,6 +129,25 @@ class FakeMCPClient:
         ]
 
 
+class FakeMCPClientBeta(FakeMCPClient):
+    async def list_resources(self):
+        return [
+            {
+                "uri": "memo://beta",
+                "name": "beta",
+                "description": "Beta memo",
+                "mime_type": "text/plain",
+                "annotations": {},
+            }
+        ]
+
+    async def read_resource(self, uri):
+        self.called.append(("read_resource", {"uri": uri}))
+        if uri == "memo://beta":
+            return "beta body"
+        return ""
+
+
 class TestMCPToolIntegration(unittest.TestCase):
     def setUp(self):
         self.registry = ToolRegistry()
@@ -216,6 +236,76 @@ class TestMCPToolIntegration(unittest.TestCase):
 
         content = self.registry.executeTool("mcp_read_mcp_resource", {"uri": "memo://alpha"})
         self.assertEqual(content, "alpha body")
+
+    def test_mcp_hub_resource_tools_aggregate_servers(self):
+        hub = MCPHub()
+        alpha_manager = MCPToolManager(server_source="alpha", client=self.fake_client)
+        beta_client = FakeMCPClientBeta()
+        beta_manager = MCPToolManager(server_source="beta", client=beta_client)
+
+        hub.register_manager(alpha_manager, server_name="alpha")
+        hub.register_manager(beta_manager, server_name="beta")
+        register_mcp_resource_hub_tools(self.registry, hub)
+
+        listing_result = self.registry.execute_tool_result("ListMcpResources", {})
+        self.assertEqual(listing_result.status, "success")
+        resources = listing_result.structured_data["resources"]
+        self.assertEqual({item["server"] for item in resources}, {"alpha", "beta"})
+        self.assertIn("memo://alpha", listing_result.to_display_string())
+        self.assertIn("memo://beta", listing_result.to_display_string())
+
+        filtered_result = self.registry.execute_tool_result("ListMcpResources", {"server": "beta"})
+        self.assertEqual(filtered_result.status, "success")
+        filtered_resources = filtered_result.structured_data["resources"]
+        self.assertEqual(len(filtered_resources), 1)
+        self.assertEqual(filtered_resources[0]["server"], "beta")
+
+        read_result = self.registry.execute_tool_result(
+            "ReadMcpResource",
+            {"server": "beta", "uri": "memo://beta"},
+        )
+        self.assertEqual(read_result.status, "success")
+        self.assertEqual(read_result.structured_data["server"], "beta")
+        self.assertEqual(read_result.structured_data["content"], "beta body")
+
+    def test_register_mcp_tools_with_hub_uses_global_resource_tools(self):
+        hub = MCPHub()
+
+        alpha_manager = register_mcp_tools(
+            self.registry,
+            server_source="alpha",
+            client=self.fake_client,
+            include_resources=True,
+            hub=hub,
+            server_name="alpha",
+        )
+        beta_client = FakeMCPClientBeta()
+        beta_manager = register_mcp_tools(
+            self.registry,
+            server_source="beta",
+            client=beta_client,
+            include_resources=True,
+            hub=hub,
+            server_name="beta",
+        )
+
+        self.assertIsNotNone(alpha_manager)
+        self.assertIsNotNone(beta_manager)
+        self.assertIn("ListMcpResources", self.registry.tools)
+        self.assertIn("ReadMcpResource", self.registry.tools)
+        self.assertNotIn("alpha_list_mcp_resources", self.registry.tools)
+        self.assertNotIn("beta_list_mcp_resources", self.registry.tools)
+
+        listing = self.registry.execute_tool_result("ListMcpResources", {})
+        self.assertEqual(listing.status, "success")
+        self.assertEqual({item["server"] for item in listing.structured_data["resources"]}, {"alpha", "beta"})
+
+        content = self.registry.execute_tool_result(
+            "ReadMcpResource",
+            {"server": "alpha", "uri": "memo://alpha"},
+        )
+        self.assertEqual(content.status, "success")
+        self.assertEqual(content.structured_data["content"], "alpha body")
 
     def test_mcp_annotations_map_to_tool_spec(self):
         manager = MCPToolManager(server_source="unused", client=self.fake_client, tool_prefix="mcp_")
