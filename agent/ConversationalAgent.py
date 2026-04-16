@@ -17,9 +17,14 @@ from core.Exception import *
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
     from context.manager import ContextManager
-    from .stream_renderer import BaseStreamDisplayRenderer
-    from .tool_interrupt_controller import BaseToolInterruptController
-    from .trace_recorder import BaseTraceRecorder
+    from .components.history_message_assembler import BaseHistoryMessageAssembler
+    from .components.prompt_composer import BasePromptComposer
+    from .components.runtime_skill_context_bridge import BaseRuntimeSkillContextBridge
+    from .components.stream_renderer import BaseStreamDisplayRenderer
+    from .components.invocation_runner import BaseInvocationRunner
+    from .components.tool_interrupt_controller import BaseToolInterruptController
+    from .components.tool_loop_engine import BaseToolLoopEngine
+    from .components.trace_recorder import BaseTraceRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +79,12 @@ class ConversationalAgent(BasicAgent):
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
+        prompt_composer: Optional["BasePromptComposer"] = None,
+        history_message_assembler: Optional["BaseHistoryMessageAssembler"] = None,
+        runtime_skill_context_bridge: Optional["BaseRuntimeSkillContextBridge"] = None,
         tool_interrupt_controller: Optional["BaseToolInterruptController"] = None,
+        tool_loop_engine: Optional["BaseToolLoopEngine"] = None,
+        invocation_runner: Optional["BaseInvocationRunner"] = None,
     ):
         """
         初始化对话 Agent
@@ -106,7 +116,12 @@ class ConversationalAgent(BasicAgent):
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
+            prompt_composer=prompt_composer,
+            history_message_assembler=history_message_assembler,
+            runtime_skill_context_bridge=runtime_skill_context_bridge,
             tool_interrupt_controller=tool_interrupt_controller,
+            tool_loop_engine=tool_loop_engine,
+            invocation_runner=invocation_runner,
         )
 
         self.auto_save_to_working = auto_save_to_working
