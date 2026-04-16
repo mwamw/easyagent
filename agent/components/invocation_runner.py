@@ -74,6 +74,20 @@ class BaseInvocationRunner(ABC):
 class DefaultInvocationRunner(BaseInvocationRunner):
     """Default invocation runner that preserves current BasicAgent behavior."""
 
+    @staticmethod
+    def _drain_loop_awaitable(loop: asyncio.AbstractEventLoop, awaitable: Any) -> None:
+        try:
+            if loop.is_closed():
+                return
+            loop.run_until_complete(awaitable)
+        except Exception:
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
     def invoke(
         self,
         agent: Any,
@@ -289,6 +303,15 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         temperature: float = 0.7,
         **kwargs,
     ):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "stream_invoke_with_tool cannot run inside an active event loop; "
+                "use `await agent.astream_invoke(...)` instead."
+            )
         async_gen = agent.tool_loop_engine.astream_invoke(
             agent,
             query,
@@ -312,15 +335,15 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 yield event
         finally:
             try:
-                loop.run_until_complete(async_gen.aclose())
+                self._drain_loop_awaitable(loop, async_gen.aclose())
             except Exception:
                 pass
             try:
-                loop.run_until_complete(loop.shutdown_asyncgens())
+                self._drain_loop_awaitable(loop, loop.shutdown_asyncgens())
             except Exception:
                 pass
             try:
-                loop.run_until_complete(loop.shutdown_default_executor())
+                self._drain_loop_awaitable(loop, loop.shutdown_default_executor())
             except Exception:
                 pass
             asyncio.set_event_loop(previous_loop)

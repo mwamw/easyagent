@@ -477,6 +477,26 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_pre_tool["round"], 2)
         self.assertEqual(trace[8]["metadata"]["stage"], "final")
 
+    async def test_stream_invoke_tool_mode_rejects_running_event_loop(self):
+        from agent.BasicAgent import BasicAgent
+
+        registry = ToolRegistry()
+
+        @registry.tool("echo", "Echo tool", EchoParams)
+        def echo(text: str) -> str:
+            return text
+
+        llm = DummyLLM(ScriptedStreamingProvider())
+        agent = BasicAgent(
+            name="streamer",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "active event loop"):
+            agent.stream_invoke("say hi")
+
     def test_stream_invoke_tool_mode_returns_final_text(self):
         from agent.BasicAgent import BasicAgent
 
@@ -843,7 +863,7 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(events[0]["content"], "我先计算")
 
     def test_google_provider_format_tool_result(self):
-        provider = GoogleProvider(model="mock", api_key="k", base_url="http://localhost")
+        provider = GoogleProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
         message = provider.format_tool_result("sunny", "call_1", "weather")
 
         self.assertEqual(
@@ -876,7 +896,7 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
     def test_anthropic_provider_format_assistant_message(self):
-        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost")
+        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
         message = provider.format_assistant_message(
             content="checking",
             tool_calls=[
@@ -903,16 +923,15 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
     def test_anthropic_provider_format_assistant_response_preserves_text_and_tool_use(self):
-        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost")
+        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
         response = SimpleNamespace(
-            content="checking",
-            tool_calls=[
+            content=[
+                SimpleNamespace(type="text", text="checking"),
                 SimpleNamespace(
+                    type="tool_use",
                     id="call_1",
-                    function=SimpleNamespace(
-                        name="weather",
-                        arguments="{\"city\": \"Beijing\"}",
-                    ),
+                    name="weather",
+                    input={"city": "Beijing"},
                 )
             ],
         )

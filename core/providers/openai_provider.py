@@ -4,12 +4,12 @@ OpenAI Provider
 支持 OpenAI API 及其兼容接口（DeepSeek、Qwen、Kimi 等）。
 """
 import logging
-from .base import BaseProvider
+from .openai_compatible_provider import OpenAICompatibleProviderBase
 
 logger = logging.getLogger(__name__)
 
 
-class OpenAIProvider(BaseProvider):
+class OpenAIProvider(OpenAICompatibleProviderBase):
     """
     OpenAI API Provider
     

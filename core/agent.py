@@ -190,8 +190,10 @@ class BaseAgent(ABC):
         if self.tool_registry is None:
             self.tool_registry = ToolRegistry()
             self.enable_tool = True
-        
-        self.skill_manager.register(skill)
+        try:
+            self.skill_manager.register(skill)
+        except Exception as e:
+            logger.error(f"注册 Skill 失败: {e}")
         return self
 
     def remove_skill(self, name: str) -> None:

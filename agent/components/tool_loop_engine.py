@@ -64,6 +64,16 @@ class BaseToolLoopEngine(ABC):
 class DefaultToolLoopEngine(BaseToolLoopEngine):
     """Default tool loop engine that preserves current BasicAgent behavior."""
 
+    @staticmethod
+    def _extract_tool_id(tool_call: Any, fallback: str = "unknown") -> str:
+        if isinstance(tool_call, dict):
+            return str(tool_call.get("call_id") or tool_call.get("id") or fallback)
+        return str(
+            getattr(tool_call, "call_id", None)
+            or getattr(tool_call, "id", None)
+            or fallback
+        )
+
     def invoke(
         self,
         agent: Any,
@@ -112,8 +122,8 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 except LLMInvokeError:
                     raise
                 except Exception as e:
-                    logger.error(f"智能体调用失败: {e}")
-                    final_response = f"智能体调用失败: {str(e)}"
+                    logger.error(f"智能体调用失败: {str(e)[:500]}")
+                    final_response = f"智能体调用失败: {str(e)[:500]}"
                     break
 
                 thinking_content = agent.llm.get_thinking_content(response)
@@ -157,10 +167,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     for tool_call in agent.llm.get_tool_calls(response):
                         tool_name = "unknown_tool"
                         tool_args: dict[str, Any] = {}
-                        tool_id = (
-                            getattr(tool_call, "call_id", None)
-                            or getattr(tool_call, "id", "unknown")
-                        )
+                        tool_id = self._extract_tool_id(tool_call)
 
                         try:
                             tool_name = agent._safe_get_tool_name(tool_call)
@@ -357,8 +364,8 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 except LLMInvokeError:
                     raise
                 except Exception as e:
-                    logger.error(f"异步智能体调用失败: {e}")
-                    final_response = f"智能体调用失败: {str(e)}"
+                    logger.error(f"异步智能体调用失败: {str(e)[:500]}")
+                    final_response = f"智能体调用失败: {str(e)[:500]}"
                     break
 
                 thinking_content = agent.llm.get_thinking_content(response)
@@ -402,10 +409,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     async def _process_single_tool(tool_call) -> dict[str, Any]:
                         tool_name = "unknown_tool"
                         tool_args: dict[str, Any] = {}
-                        tool_id = (
-                            getattr(tool_call, "call_id", None)
-                            or getattr(tool_call, "id", "unknown")
-                        )
+                        tool_id = self._extract_tool_id(tool_call)
 
                         try:
                             tool_name = agent._safe_get_tool_name(tool_call)
@@ -724,12 +728,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             for tool_call in event.get("tool_calls", []):
                                 tool_name = agent._safe_get_tool_name(tool_call)
                                 tool_args = agent._safe_parse_tool_args(tool_call)
-                                tool_id = (
-                                    tool_call.get("id", "unknown")
-                                    if isinstance(tool_call, dict)
-                                    else getattr(tool_call, "call_id", None)
-                                    or getattr(tool_call, "id", "unknown")
-                                )
+                                tool_id = self._extract_tool_id(tool_call)
                                 yield {
                                     "type": "tool_call",
                                     "tool_name": tool_name,

@@ -14,12 +14,12 @@ Chat Completions API (client.chat.completions.create)。
 from typing import Optional, Any, Generator
 import logging
 import json
-from .base import BaseProvider
+from .openai_compatible_provider import OpenAICompatibleProviderBase
 
 logger = logging.getLogger(__name__)
 
 
-class OpenAIResponsesProvider(BaseProvider):
+class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
     """
     OpenAI Responses API Provider
 
@@ -187,15 +187,16 @@ class OpenAIResponsesProvider(BaseProvider):
             logger.info(f"✅ {self.provider_name} Provider 工具调用响应成功")
             return response
         except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
+            # logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
             raise
 
     def stream_with_tools(
         self,
         messages: list,
         tools: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """同步流式工具调用（Responses API 格式）。"""
@@ -228,8 +229,9 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_invoke(
         self,
         messages: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+
         **kwargs
     ) -> str | None:
         """异步调用（无工具）"""
@@ -251,8 +253,9 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_invoke_raw(
         self,
         messages: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+
         **kwargs
     ) -> Any:
         """异步调用并返回完整 Responses API response。"""
@@ -275,8 +278,8 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_stream(
         self,
         messages: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ):
         """异步流式调用（无工具）"""
@@ -307,8 +310,8 @@ class OpenAIResponsesProvider(BaseProvider):
     async def async_stream_events(
         self,
         messages: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ):
         """异步流式调用，返回包含 thinking / text / final 的统一事件。"""
@@ -340,8 +343,9 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         tools: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+
         **kwargs
     ) -> Any:
         """异步带工具调用（Responses API 格式）"""
@@ -374,8 +378,9 @@ class OpenAIResponsesProvider(BaseProvider):
         self,
         messages: list,
         tools: list,
-        reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+
         **kwargs
     ):
         """异步流式工具调用（Responses API 格式）。"""

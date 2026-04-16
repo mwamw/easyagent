@@ -4,7 +4,7 @@ EasyLLM - 统一的 LLM 接口
 提供对不同 LLM 服务的统一访问接口。
 """
 from .Message import Message
-from .providers import create_provider, BaseProvider
+from .providers import create_provider, BaseProvider, provider_requires_base_url
 from typing import Optional, Any, Generator, AsyncGenerator
 import logging
 import os
@@ -54,7 +54,7 @@ class EasyLLM:
             api_key: API 密钥
             base_url: API 地址
             timeout: 超时时间
-            provider: Provider 类型 (auto, openai, openai_responses,google, anthropic, ...)
+        provider: Provider 类型 (auto, openai, openai_responses, google, google_native, anthropic, anthropic_native, ...)
         """
         self.provider_name = provider
         self.model = model or os.getenv("LLM_MODEL_ID")
@@ -77,8 +77,10 @@ class EasyLLM:
             self.model = self._get_default_model()
         
         # 验证配置
-        if not self.resolve_api_key or not self.resolve_base_url:
-            raise ValueError("API密钥和服务地址必须被提供或在.env文件中定义。")
+        if not self.resolve_api_key:
+            raise ValueError("API密钥必须被提供或在.env文件中定义。")
+        if provider_requires_base_url(self.provider_name or "") and not self.resolve_base_url:
+            raise ValueError("服务地址必须被提供或在.env文件中定义。")
         
         # 创建 Provider
         self._provider: BaseProvider = create_provider(
@@ -108,9 +110,9 @@ class EasyLLM:
         if os.getenv("OPENAI_API_KEY"):
             return "openai_responses"
         if os.getenv("Google_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-            return "google"
+            return "google_native"
         if os.getenv("ANTHROPIC_API_KEY"):
-            return "anthropic"
+            return "anthropic_native"
         if os.getenv("DEEPSEEK_API_KEY"):
             return "deepseek"
         if os.getenv("DASHSCOPE_API_KEY"):
@@ -133,9 +135,9 @@ class EasyLLM:
         if "api.openai.com" in base_url_lower:
             return "openai_responses"
         elif "google" in base_url_lower:
-            return "google"
+            return "google_native"
         elif "anthropic" in base_url_lower:
-            return "anthropic"
+            return "anthropic_native"
         elif "api.deepseek.com" in base_url_lower:
             return "deepseek"
         elif "dashscope.aliyuncs.com" in base_url_lower:
@@ -158,9 +160,9 @@ class EasyLLM:
             if "gpt" in model_lower:
                 return "openai_responses"
             elif "gemini" in model_lower:
-                return "google"
+                return "google_native"
             elif "claude" in model_lower:
-                return "anthropic"
+                return "anthropic_native"
             elif "deepseek" in model_lower:
                 return "deepseek"
             elif "qwen" in model_lower:
@@ -185,7 +187,9 @@ class EasyLLM:
             "openai": "gpt-3.5-turbo",
             "openai_responses": "gpt-4o",
             "google": "gemini-2.5-pro",
+            "google_native": "gemini-2.5-pro",
             "anthropic": "claude-4.5-sonnet",
+            "anthropic_native": "claude-4.5-sonnet",
             "deepseek": "deepseek-chat",
             "qwen": "qwen3-32b",
             "modelscope": "Qwen/Qwen2.5-VL-72B-Instruct",
@@ -212,11 +216,19 @@ class EasyLLM:
             ),
             "google": (
                 os.getenv("GOOGLE_API_KEY"),
-                os.getenv("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta")
+                os.getenv("GOOGLE_BASE_URL", "")
+            ),
+            "google_native": (
+                os.getenv("GOOGLE_API_KEY"),
+                os.getenv("GOOGLE_BASE_URL", "")
             ),
             "anthropic": (
                 os.getenv("ANTHROPIC_API_KEY"),
                 os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1")
+            ),
+            "anthropic_native": (
+                os.getenv("ANTHROPIC_API_KEY"),
+                os.getenv("ANTHROPIC_BASE_URL", "")
             ),
             "deepseek": (
                 os.getenv("DEEPSEEK_API_KEY"),
@@ -615,15 +627,30 @@ class EasyLLM:
     def get_client(self):
         """获取底层客户端（向后兼容）"""
         return self.client
+
+    def close(self) -> None:
+        """关闭底层 Provider 客户端。"""
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "close"):
+            provider.close()  # type: ignore[misc]
+
+    async def aclose(self) -> None:
+        """异步关闭底层 Provider 客户端。"""
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "aclose"):
+            await provider.aclose()  # type: ignore[misc]
     
     # ==================== 辅助方法 ====================
     
     def _convert_messages(self, messages: list[dict[str, str] | Message]) -> list[dict[str, str]]:
         """将 Message 对象转换为字典"""
-        converted = []
         provider = getattr(self, "_provider", None)
-        for msg in messages:
-            payload = msg.to_dict() if isinstance(msg, Message) else msg
+        payloads = [msg.to_dict() if isinstance(msg, Message) else msg for msg in messages]
+        if provider is not None and hasattr(provider, "prepare_messages_for_request"):
+            return provider.prepare_messages_for_request(payloads)  # type: ignore[return-value]
+
+        converted = []
+        for payload in payloads:
             if provider is not None and hasattr(provider, "prepare_message_for_request"):
                 payload = provider.prepare_message_for_request(payload)  # type: ignore
             if payload is None:

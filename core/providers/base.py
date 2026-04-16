@@ -1,12 +1,13 @@
 """
 Provider 基类
 
-定义 LLM Provider 的统一接口。
-提供基于 OpenAI SDK 的通用实现，子类只需覆写差异化方法。
+定义与底层 SDK 无关的统一 Provider 抽象与共享辅助方法。
 """
+
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Optional, Any, Generator, AsyncGenerator
-from openai import OpenAI, AsyncOpenAI
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,17 +15,13 @@ logger = logging.getLogger(__name__)
 
 class BaseProvider(ABC):
     """
-    LLM Provider 抽象基类
-    
-    所有 Provider（OpenAI、Claude、Gemini 等）均通过 OpenAI 兼容层调用。
-    通用的 invoke / stream / invoke_with_tools 已在此基类中实现，
-    子类只需覆写 format_tool_result 等差异化方法即可。
-    
-    异步支持：
-    - async_invoke / async_stream / async_invoke_with_tools 使用 AsyncOpenAI 客户端
-    - 异步客户端惰性创建，首次调用异步方法时才初始化
+    LLM Provider 抽象基类。
+
+    这个基类不再假设底层一定是 OpenAI 兼容 SDK。
+    原生 Google / Anthropic Provider 与 OpenAI 兼容 Provider
+    都应在这里收敛到同一套接口。
     """
-    
+
     def __init__(
         self,
         model: str,
@@ -33,19 +30,8 @@ class BaseProvider(ABC):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         timeout: int = 60,
-        **kwargs
+        **kwargs,
     ):
-        """
-        初始化 Provider
-        
-        Args:
-            model: 模型名称
-            api_key: API 密钥
-            base_url: API 地址
-            temperature: 温度参数
-            max_tokens: 最大 token 数
-            timeout: 超时时间
-        """
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
@@ -54,541 +40,202 @@ class BaseProvider(ABC):
         self.timeout = timeout
         self.kwargs = kwargs
         self.client = self._create_client()
-        self._async_client: Optional[AsyncOpenAI] = None
-    
-    def _create_client(self) -> OpenAI:
-        """创建 OpenAI 兼容客户端"""
-        return OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            timeout=self.timeout
-        )
-    
-    def _get_async_client(self) -> AsyncOpenAI:
-        """获取或创建 AsyncOpenAI 客户端（惰性初始化）"""
-        if self._async_client is None:
-            self._async_client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout
-            )
-        return self._async_client
-    
-    # ==================== 同步调用实现 ====================
+        self._async_client: Any = None
 
-    def invoke_raw(
-        self,
-        messages: list,
-        temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
-    ) -> Any:
-        """同步调用 LLM，返回 provider 原始 assistant 响应对象。"""
-        temperature = temperature if temperature is not None else self.temperature
+    @abstractmethod
+    def _create_client(self) -> Any:
+        pass
 
-        try:
-            if reasoning:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=False,
-                    **kwargs
-                )
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=False,
-                    **kwargs
-                )
-            logger.info(f"✅ {self.provider_name} Provider 原始响应成功")
-            return response.choices[0].message
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 原始调用失败: {e}")
-            raise
+    def _get_async_client(self) -> Any:
+        raise NotImplementedError(f"{self.provider_name} provider does not implement async client access")
+
+    def close(self) -> None:
+        client = getattr(self, "client", None)
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+
+    async def aclose(self) -> None:
+        async_client = getattr(self, "_async_client", None)
+        aclose = getattr(async_client, "aclose", None)
+        if callable(aclose):
+            await aclose() 
+            return
+        close = getattr(async_client, "close", None)
+        if callable(close):
+            close()
 
     def invoke(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> str | None:
-        """同步调用 LLM"""
         response = self.invoke_raw(
             messages,
             temperature=temperature,
             reasoning=reasoning,
             **kwargs,
         )
-        content = self.get_response_content(response)
-        return content or ""
-    
+        return self.get_response_content(response) or ""
+
+    @abstractmethod
+    def invoke_raw(
+        self,
+        messages: list,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        **kwargs,
+    ) -> Any:
+        pass
+
+    @abstractmethod
     def stream(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Generator[str, None, None]:
-        """流式调用 LLM"""
-        temperature = temperature if temperature is not None else self.temperature
-        try:
-            if reasoning:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True
-                )
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=True
-                )
-            logger.info(f"✅ {self.provider_name} Provider 流式响应开始")
-            for chunk in response:
-                if not chunk.choices:
-                    continue
-                content = chunk.choices[0].delta.content or ""
-                if content:
-                    yield content
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 流式调用失败: {e}")
-            raise
+        pass
 
     def stream_events(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Generator[dict[str, Any], None, None]:
-        """同步流式调用，返回包含 thinking / text / final 的统一事件流。"""
-        temperature = temperature if temperature is not None else self.temperature
         text_parts: list[str] = []
-        thinking_parts: list[str] = []
-        terminal_emitted = False
+        for chunk in self.stream(
+            messages,
+            temperature=temperature,
+            reasoning=reasoning,
+            **kwargs,
+        ):
+            text_parts.append(chunk)
+            yield {
+                "type": "text_delta",
+                "delta": chunk,
+            }
+        yield {
+            "type": "final_response",
+            "content": "".join(text_parts),
+            "thinking": "",
+        }
 
-        try:
-            if reasoning:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True,
-                )
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=True,
-                )
-            logger.info(f"✅ {self.provider_name} Provider 事件流响应开始")
-            for chunk in response:
-                if not getattr(chunk, "choices", None):
-                    continue
-                choice = chunk.choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
-                reasoning_delta = (
-                    getattr(delta, "reasoning_content", None)
-                    or getattr(delta, "reasoning", None)
-                )
-                if reasoning_delta:
-                    thinking_parts.append(reasoning_delta)
-                    yield {
-                        "type": "thinking_delta",
-                        "delta": reasoning_delta,
-                    }
-                content_delta = getattr(delta, "content", None) or ""
-                if content_delta:
-                    text_parts.append(content_delta)
-                    yield {
-                        "type": "text_delta",
-                        "delta": content_delta,
-                    }
-                finish_reason = getattr(choice, "finish_reason", None)
-                if finish_reason in {"stop", "length", "content_filter"}:
-                    terminal_emitted = True
-                    yield {
-                        "type": "final_response",
-                        "content": "".join(text_parts),
-                        "thinking": "".join(thinking_parts),
-                        "finish_reason": finish_reason,
-                    }
-            if not terminal_emitted:
-                yield {
-                    "type": "final_response",
-                    "content": "".join(text_parts),
-                    "thinking": "".join(thinking_parts),
-                }
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 事件流调用失败: {e}")
-            raise
-    
+    @abstractmethod
     def invoke_with_tools(
         self,
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Any:
-        """带工具调用的 LLM 调用"""
-        temperature = temperature if temperature is not None else self.temperature
-        
-        try:
-            if reasoning:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=False
-                )
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                max_tokens=self.max_tokens,
+        pass
 
-                stream=False
-            )
-            logger.info(f"✅ {self.provider_name} Provider 工具调用响应成功")
-            return response.choices[0].message
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 工具调用失败: {e}")
-            raise
-
+    @abstractmethod
     def stream_with_tools(
         self,
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Generator[dict[str, Any], None, None]:
-        """同步流式工具调用，返回统一事件流。"""
-        temperature = temperature if temperature is not None else self.temperature
-
-        try:
-            if reasoning:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True
-                )
-            else:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=True
-                )
-            logger.info(f"✅ {self.provider_name} Provider 流式工具调用开始")
-            state = self._init_chat_tool_stream_state()
-            for chunk in response:
-                for event in self._extract_chat_stream_events(chunk, state):
-                    yield event
-            yield self._finalize_chat_tool_stream_state(state)
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 流式工具调用失败: {e}")
-            raise
-
-    # ==================== 异步调用实现 ====================
+        pass
 
     async def async_invoke(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> str | None:
-        """异步调用 LLM"""
         response = await self.async_invoke_raw(
             messages,
             temperature=temperature,
             reasoning=reasoning,
             **kwargs,
         )
-        content = self.get_response_content(response)
-        return content or ""
+        return self.get_response_content(response) or ""
 
+    @abstractmethod
     async def async_invoke_raw(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Any:
-        """异步调用 LLM，返回 provider 原始 assistant 响应对象。"""
-        temperature = temperature if temperature is not None else self.temperature
-        async_client = self._get_async_client()
+        pass
 
-        try:
-            if reasoning:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=False,
-                )
-            else:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=False,
-                )
-            logger.info(f"✅ {self.provider_name} Provider 异步原始响应成功")
-            return response.choices[0].message
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步原始调用失败: {e}")
-            raise
-
+    @abstractmethod
     async def async_stream(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncGenerator[str, None]:
-        """异步流式调用 LLM"""
-        temperature = temperature if temperature is not None else self.temperature
-        async_client = self._get_async_client()
-        
-        try:
-            if reasoning:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True
-                )
-            else:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                max_tokens=self.max_tokens,
-                stream=True
-            )
-            logger.info(f"✅ {self.provider_name} Provider 异步流式响应开始")
-            async for chunk in response:
-                content = chunk.choices[0].delta.content or ""
-                if content:
-                    yield content
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步流式调用失败: {e}")
-            raise
+        pass
 
     async def async_stream_events(
         self,
         messages: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """异步流式调用，返回包含 thinking / text / final 的统一事件流。"""
-        temperature = temperature if temperature is not None else self.temperature
-        async_client = self._get_async_client()
         text_parts: list[str] = []
-        thinking_parts: list[str] = []
-        terminal_emitted = False
+        async for chunk in self.async_stream(
+            messages,
+            temperature=temperature,
+            reasoning=reasoning,
+            **kwargs,
+        ):
+            text_parts.append(chunk)
+            yield {
+                "type": "text_delta",
+                "delta": chunk,
+            }
+        yield {
+            "type": "final_response",
+            "content": "".join(text_parts),
+            "thinking": "",
+        }
 
-        try:
-            if reasoning:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True,
-                )
-            else:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=True,
-                )
-            logger.info(f"✅ {self.provider_name} Provider 异步事件流响应开始")
-            async for chunk in response:
-                if not getattr(chunk, "choices", None):
-                    continue
-                choice = chunk.choices[0]
-                delta = getattr(choice, "delta", None)
-                if delta is None:
-                    continue
-                reasoning_delta = (
-                    getattr(delta, "reasoning_content", None)
-                    or getattr(delta, "reasoning", None)
-                )
-                if reasoning_delta:
-                    thinking_parts.append(reasoning_delta)
-                    yield {
-                        "type": "thinking_delta",
-                        "delta": reasoning_delta,
-                    }
-                content_delta = getattr(delta, "content", None) or ""
-                if content_delta:
-                    text_parts.append(content_delta)
-                    yield {
-                        "type": "text_delta",
-                        "delta": content_delta,
-                    }
-                finish_reason = getattr(choice, "finish_reason", None)
-                if finish_reason in {"stop", "length", "content_filter"}:
-                    terminal_emitted = True
-                    yield {
-                        "type": "final_response",
-                        "content": "".join(text_parts),
-                        "thinking": "".join(thinking_parts),
-                        "finish_reason": finish_reason,
-                    }
-            if not terminal_emitted:
-                yield {
-                    "type": "final_response",
-                    "content": "".join(text_parts),
-                    "thinking": "".join(thinking_parts),
-                }
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步事件流调用失败: {e}")
-            raise
-
+    @abstractmethod
     async def async_invoke_with_tools(
         self,
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> Any:
-        """异步带工具调用的 LLM 调用"""
-        temperature = temperature if temperature is not None else self.temperature
-        async_client = self._get_async_client()
-        
-        try:
-            if reasoning:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=False
-                )
-            else:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=False
-                )
-            logger.info(f"✅ {self.provider_name} Provider 异步工具调用响应成功")
-            return response.choices[0].message
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步工具调用失败: {e}")
-            raise
+        pass
 
+    @abstractmethod
     async def async_stream_with_tools(
         self,
         messages: list,
         tools: list,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        """异步流式工具调用，返回统一事件流。"""
-        temperature = temperature if temperature is not None else self.temperature
-        async_client = self._get_async_client()
-
-        try:
-            if reasoning:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    reasoning_effort=reasoning["effort"],
-                    stream=True
-                )
-            else:
-                response = await async_client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    max_tokens=self.max_tokens,
-                    stream=True
-                )
-            logger.info(f"✅ {self.provider_name} Provider 异步流式工具调用开始")
-            state = self._init_chat_tool_stream_state()
-            async for chunk in response:
-                for event in self._extract_chat_stream_events(chunk, state):
-                    yield event
-            yield self._finalize_chat_tool_stream_state(state)
-        except Exception as e:
-            logger.error(f"❌ {self.provider_name} Provider 异步流式工具调用失败: {e}")
-            raise
-    
-    # ==================== 需子类覆写的方法 ====================
+        pass
 
     @abstractmethod
     def format_tool_result(
         self,
         content: str,
         tool_id: str,
-        tool_name: str
+        tool_name: str,
     ) -> dict:
-        """
-        格式化工具执行结果为该 Provider 需要的消息格式
-        
-        Args:
-            content: 工具执行结果
-            tool_id: 工具调用 ID
-            tool_name: 工具名称
-            
-        Returns:
-            格式化后的消息字典
-        """
         pass
 
     def format_assistant_message(
@@ -597,7 +244,6 @@ class BaseProvider(ABC):
         tool_calls: Optional[list[dict[str, Any]]] = None,
         thinking: Optional[str] = None,
     ) -> dict[str, Any]:
-        """根据统一 tool call 结构构造 assistant 消息。"""
         message: dict[str, Any] = {
             "role": "assistant",
             "content": content or None,
@@ -619,7 +265,6 @@ class BaseProvider(ABC):
         return message
 
     def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> dict[str, Any]:
-        """将 provider 响应对象转换为可复用、可序列化的 assistant 消息。"""
         content = getattr(response, "content", None) or None
         thinking = self.get_thinking_content(response) if include_reasoning else None
         tool_calls_data = getattr(response, "tool_calls", None) or []
@@ -643,7 +288,6 @@ class BaseProvider(ABC):
         )
 
     def prepare_message_for_request(self, message: Any) -> Any:
-        """将 history 中 richer message 转换为当前 provider 可接受的请求消息。"""
         if not isinstance(message, dict):
             return message
         item_type = message.get("type")
@@ -654,7 +298,14 @@ class BaseProvider(ABC):
             payload["reasoning_content"] = payload.pop("thinking")
         return payload
 
-    # ==================== 通用辅助方法 ====================
+    def prepare_messages_for_request(self, messages: list[Any]) -> list[Any]:
+        prepared: list[Any] = []
+        for message in messages:
+            payload = self.prepare_message_for_request(message)
+            if payload is None:
+                continue
+            prepared.append(payload)
+        return prepared
 
     def _init_chat_tool_stream_state(self) -> dict[str, Any]:
         return {
@@ -685,18 +336,12 @@ class BaseProvider(ABC):
         )
         if reasoning_delta:
             state["thinking_parts"].append(reasoning_delta)
-            events.append({
-                "type": "thinking_delta",
-                "delta": reasoning_delta,
-            })
+            events.append({"type": "thinking_delta", "delta": reasoning_delta})
 
         content = getattr(delta, "content", None) or ""
         if content:
             state["text_parts"].append(content)
-            events.append({
-                "type": "text_delta",
-                "delta": content,
-            })
+            events.append({"type": "text_delta", "delta": content})
 
         for tool_call in getattr(delta, "tool_calls", None) or []:
             index = getattr(tool_call, "index", 0) or 0
@@ -709,7 +354,6 @@ class BaseProvider(ABC):
                     "arguments": "",
                 },
             )
-
             tool_call_id = getattr(tool_call, "id", None)
             if tool_call_id:
                 current["id"] = tool_call_id
@@ -725,29 +369,31 @@ class BaseProvider(ABC):
 
         finish_reason = getattr(choice, "finish_reason", None)
         if finish_reason == "tool_calls":
-            events.append({
-                "type": "tool_calls",
-                "tool_calls": self._normalize_stream_tool_calls(state["tool_calls"]),
-                "content": "".join(state["text_parts"]),
-                "thinking": "".join(state["thinking_parts"]),
-            })
+            events.append(
+                {
+                    "type": "tool_calls",
+                    "tool_calls": self._normalize_stream_tool_calls(state["tool_calls"]),
+                    "content": "".join(state["text_parts"]),
+                    "thinking": "".join(state["thinking_parts"]),
+                }
+            )
             state["terminal_emitted"] = True
         elif finish_reason in {"stop", "length", "content_filter"}:
-            events.append({
-                "type": "final_response",
-                "content": "".join(state["text_parts"]),
-                "thinking": "".join(state["thinking_parts"]),
-                "finish_reason": finish_reason,
-            })
+            events.append(
+                {
+                    "type": "final_response",
+                    "content": "".join(state["text_parts"]),
+                    "thinking": "".join(state["thinking_parts"]),
+                    "finish_reason": finish_reason,
+                }
+            )
             state["terminal_emitted"] = True
 
         return events
 
     def _finalize_chat_tool_stream_state(self, state: dict[str, Any]) -> dict[str, Any]:
         if state.get("terminal_emitted"):
-            return {
-                "type": "stream_end",
-            }
+            return {"type": "stream_end"}
         tool_calls = self._normalize_stream_tool_calls(state["tool_calls"])
         if tool_calls:
             return {
@@ -772,27 +418,20 @@ class BaseProvider(ABC):
         return normalized
 
     def get_thinking_content(self, response: Any) -> Optional[str]:
-        """提取思考内容（如果模型支持）"""
-        thinking= getattr(response, 'reasoning_content', None)
-        if thinking:
-            return thinking
-        else:
-            return None
+        thinking = getattr(response, "reasoning_content", None)
+        return thinking or None
+
     def get_response_content(self, response: Any) -> Optional[str]:
-        """提取响应内容"""
-        return getattr(response, 'content', None)
-    
+        return getattr(response, "content", None)
+
     def has_tool_calls(self, response: Any) -> bool:
-        """检查响应是否包含工具调用"""
-        return bool(hasattr(response, 'tool_calls') and response.tool_calls)
-    
+        return bool(hasattr(response, "tool_calls") and response.tool_calls)
+
     def get_tool_calls(self, response: Any) -> list:
-        """获取工具调用列表"""
         if self.has_tool_calls(response):
             return response.tool_calls
         return []
-    
+
     @property
     def provider_name(self) -> str:
-        """Provider 名称"""
-        return self.__class__.__name__.replace('Provider', '').lower()
+        return self.__class__.__name__.replace("Provider", "").lower()

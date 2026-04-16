@@ -4,17 +4,23 @@ LLM Providers 模块
 提供对不同 LLM 服务的统一适配。
 """
 from .base import BaseProvider
+from .openai_compatible_provider import OpenAICompatibleProviderBase
 from .openai_provider import OpenAIProvider
 from .openai_responses_provider import OpenAIResponsesProvider
 from .google_provider import GoogleProvider
 from .anthropic_provider import AnthropicProvider
+from .google_native_provider import GoogleNativeProvider
+from .anthropic_native_provider import AnthropicNativeProvider
 
 __all__ = [
     "BaseProvider",
+    "OpenAICompatibleProviderBase",
     "OpenAIProvider",
     "OpenAIResponsesProvider",
     "GoogleProvider",
     "AnthropicProvider",
+    "GoogleNativeProvider",
+    "AnthropicNativeProvider",
 ]
 
 
@@ -29,7 +35,7 @@ def create_provider(
     工厂函数：根据 provider 名称创建对应的 Provider 实例
     
     Args:
-        provider_name: Provider 名称 (openai, google, anthropic, auto, openai_responses)
+        provider_name: Provider 名称 (openai, google, google_native, anthropic, anthropic_native, auto, openai_responses)
         model: 模型名称
         api_key: API 密钥
         base_url: API 地址
@@ -45,12 +51,16 @@ def create_provider(
         provider_name = detect_provider_from_model(model)
     
     provider_map = {
-        "openai": OpenAIResponsesProvider,
+        "openai": OpenAIProvider,
         "openai_responses": OpenAIResponsesProvider,
         "google": GoogleProvider,
         "gemini": GoogleProvider,
+        "google_native": GoogleNativeProvider,
+        "gemini_native": GoogleNativeProvider,
         "anthropic": AnthropicProvider,
         "claude": AnthropicProvider,
+        "anthropic_native": AnthropicNativeProvider,
+        "claude_native": AnthropicNativeProvider,
         # 以下都使用 OpenAI 兼容接口
         "deepseek": OpenAIProvider,
         "qwen": OpenAIProvider,
@@ -65,6 +75,12 @@ def create_provider(
     
     provider_class = provider_map.get(provider_name, OpenAIProvider)
     return provider_class(model=model, api_key=api_key, base_url=base_url, **kwargs)
+
+
+def provider_requires_base_url(provider_name: str) -> bool:
+    """Return whether the provider requires an explicit base_url to function."""
+    normalized = (provider_name or "").lower()
+    return normalized not in {"google_native", "gemini_native", "anthropic_native", "claude_native"}
 
 
 def detect_provider_from_model(model: str) -> str:
@@ -86,9 +102,9 @@ def detect_provider_from_model(model: str) -> str:
     if "gpt" in model_lower:
         return "openai"
     elif "gemini" in model_lower:
-        return "google"
+        return "google_native"
     elif "claude" in model_lower:
-        return "anthropic"
+        return "anthropic_native"
     elif "deepseek" in model_lower:
         return "deepseek"
     elif "qwen" in model_lower:
