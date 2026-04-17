@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import json
 import logging
 
+from core.history import is_canonical_message
 from context.token.counter import TokenCounter
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
         normalized = [self._clone_message(message) for message in history or []]
         if not normalized or max_tokens <= 0:
             return []
+        canonical_mode = any(is_canonical_message(message) for message in normalized)
         turns = self._group_turns(normalized)
         total_tokens = sum(turn["token_count"] for turn in turns)
         if total_tokens <= max_tokens:
@@ -71,7 +73,7 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
         recent_messages: List[Dict[str, Any]] = normalized
 
         while True:
-            summary_messages = self._summarize_turns(turns[:compacted_turn_count])
+            summary_messages = self._summarize_turns(turns[:compacted_turn_count], canonical_mode=canonical_mode)
             recent_turns = turns[compacted_turn_count:]
             recent_messages = self._flatten_turns(recent_turns)
             combined_messages = [*summary_messages, *recent_messages]
@@ -144,7 +146,12 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             kept.pop(0)
         return kept
 
-    def _summarize_turns(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _summarize_turns(
+        self,
+        turns: List[Dict[str, Any]],
+        *,
+        canonical_mode: bool = False,
+    ) -> List[Dict[str, Any]]:
         if not turns:
             return []
 
@@ -157,9 +164,36 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
                     parts.append(summary)
             if parts:
                 lines.append(f"- 第{index}轮: {' | '.join(parts)}")
-        return self._summary_lines_to_messages(lines)
+        return self._summary_lines_to_messages(lines, canonical_mode=canonical_mode)
 
     def _summarize_message(self, message: Dict[str, Any]) -> str:
+        if is_canonical_message(message):
+            role = message.get("role", "assistant")
+            parts = []
+            for block in message.get("content", []) or []:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text":
+                    text = self._compact_text(self._extract_text(block), limit=18)
+                    if text:
+                        parts.append(text)
+                elif block_type == "reasoning":
+                    text = self._compact_text(self._extract_text(block), limit=18)
+                    if text:
+                        parts.append(f"thinking:{text}")
+                elif block_type == "function_call":
+                    name = block.get("name", "unknown_tool")
+                    arguments = self._compact_text(self._stringify(block.get("arguments", "")), limit=16)
+                    parts.append(f"调用工具 {name}({arguments})")
+                elif block_type == "function_response":
+                    name = block.get("name") or block.get("call_id") or "tool"
+                    output = self._compact_text(self._extract_text(block.get("output")), limit=16)
+                    parts.append(f"工具结果 {name}: {output}")
+            if parts:
+                return f"{role}: {' | '.join(parts)}"
+            return f"{role}: {self._compact_text(self._extract_text(message.get('content')), limit=18)}"
+
         msg_type = message.get("type")
         role = message.get("role")
 
@@ -214,17 +248,49 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             return ""
         if isinstance(content, str):
             return content.strip()
+        if isinstance(content, dict):
+            item_type = content.get("type")
+            if item_type in {"text", "output_text", "summary_text"}:
+                return str(content.get("text", "")).strip()
+            if item_type == "reasoning":
+                if content.get("text"):
+                    return str(content.get("text", "")).strip()
+                if content.get("summary") is not None:
+                    return self._extract_text(content.get("summary"))
+            if item_type == "function_call":
+                name = content.get("name", "tool")
+                return f"[function_call:{name}]"
+            if item_type == "function_response":
+                name = content.get("name") or content.get("call_id") or "tool"
+                return f"[function_response:{name}]"
+            if item_type == "tool_use":
+                name = content.get("name", "tool")
+                return f"[tool_use:{name}]"
+            if item_type == "tool_result":
+                return f"[tool_result:{self._extract_text(content.get('content'))}]"
+            return self._stringify(content)
         if isinstance(content, list):
             fragments: List[str] = []
             for item in content:
                 if isinstance(item, dict):
                     if item.get("type") in {"text", "output_text", "summary_text"}:
                         fragments.append(str(item.get("text", "")).strip())
+                    elif item.get("type") == "reasoning":
+                        if item.get("text"):
+                            fragments.append(str(item.get("text", "")).strip())
+                        elif item.get("summary"):
+                            fragments.append(self._extract_text(item.get("summary")))
                     elif item.get("type") == "tool_use":
                         name = item.get("name", "tool")
                         fragments.append(f"[tool_use:{name}]")
                     elif item.get("type") == "tool_result":
                         fragments.append(f"[tool_result:{self._extract_text(item.get('content'))}]")
+                    elif item.get("type") == "function_call":
+                        name = item.get("name", "tool")
+                        fragments.append(f"[function_call:{name}]")
+                    elif item.get("type") == "function_response":
+                        name = item.get("name") or item.get("call_id") or "tool"
+                        fragments.append(f"[function_response:{name}]")
                     else:
                         fragments.append(self._stringify(item))
                 else:
@@ -249,6 +315,8 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
         self,
         lines: List[str],
         max_message_tokens: int = 180,
+        *,
+        canonical_mode: bool = False,
     ) -> List[Dict[str, Any]]:
         if not lines:
             return []
@@ -266,7 +334,24 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
 
         if current_lines:
             messages.append({"role": "assistant", "content": "\n".join(current_lines)})
-        return messages
+        if not canonical_mode:
+            return messages
+        return [
+            {
+                "record_type": "canonical_message",
+                "role": "assistant",
+                "provider": "history_compactor",
+                "provider_message_type": "summary",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": message["content"],
+                    }
+                ],
+                "metadata": {"compacted_summary": True},
+            }
+            for message in messages
+        ]
 
     def _fit_summary_messages(
         self,

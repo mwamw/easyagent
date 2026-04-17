@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -16,6 +17,8 @@ from agent import BaseToolLoopEngine
 from agent import InMemoryTraceRecorder
 from core.Message import MetaUserMessage, SystemMessage, UserMessage
 from core.llm import EasyLLM
+from core.providers import OpenAIChatCodec
+from core.request_input import ReplayRequestInput
 from prompt import PromptBlock
 
 
@@ -23,14 +26,36 @@ class PlainProvider:
     def __init__(self):
         self.last_messages = []
 
-    def invoke(self, messages, temperature=None, **kwargs):
-        self.last_messages = list(messages)
-        return "hello world"
+    def build_request(self, messages, *, system_prompt=None, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        request_messages = []
+        if system_prompt:
+            request_messages.append({"role": "system", "content": system_prompt})
+        request_messages.extend(list(messages))
+        return {"messages": request_messages, "stream": stream}
 
-    def stream(self, messages, temperature=None, **kwargs):
-        self.last_messages = list(messages)
-        yield "hello "
-        yield "world"
+    def invoke_raw(self, request):
+        self.last_messages = list(request["messages"])
+        return SimpleNamespace(content="hello world")
+
+    def stream_raw(self, request):
+        self.last_messages = list(request["messages"])
+        return [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="hello ", reasoning_content=None, reasoning=None, tool_calls=None), finish_reason=None)]
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="world", reasoning_content=None, reasoning=None, tool_calls=None), finish_reason="stop")]
+            ),
+        ]
+
+    async def async_invoke_raw(self, request):
+        return self.invoke_raw(request)
+
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self.stream_raw(request):
+                yield item
+        return _stream()
 
 
 class DummyLLM(EasyLLM):
@@ -41,6 +66,39 @@ class DummyLLM(EasyLLM):
         self.api_key = "mock-key"
         self._provider = provider
         self.client = None
+
+
+class RecordingProvider:
+    def __init__(self):
+        self.last_build = None
+
+    def build_request(self, replay_history, *, system_prompt=None, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        self.last_build = {
+            "replay_history": list(replay_history),
+            "system_prompt": system_prompt,
+            "stream": stream,
+        }
+        return dict(self.last_build)
+
+    def invoke_raw(self, request):
+        return SimpleNamespace(content="ok")
+
+    def stream_raw(self, request):
+        return []
+
+    async def async_invoke_raw(self, request):
+        return self.invoke_raw(request)
+
+    async def async_stream_raw(self, request):
+        async def _stream():
+            if False:
+                yield None
+        return _stream()
+
+
+class FailingPrepareCodec(OpenAIChatCodec):
+    def prepare_messages(self, messages):
+        raise AssertionError("prepare_messages should not be called for ReplayRequestInput")
 
 
 class RecordingTraceRecorder(InMemoryTraceRecorder):
@@ -157,6 +215,28 @@ class RecordingToolLoopEngine(BaseToolLoopEngine):
 
 
 class TestAgentInterfaces(unittest.TestCase):
+    def test_llm_replay_request_input_skips_full_message_preparation(self):
+        provider = RecordingProvider()
+        llm = DummyLLM(provider)
+        llm.codec = FailingPrepareCodec("mock")
+        request_input = ReplayRequestInput(
+            provider_name="mock",
+            replay_history=[{"role": "user", "content": "hello"}],
+            system_prompt="system prompt",
+        )
+
+        response = llm.invoke_raw(request_input)
+
+        self.assertEqual(response.content, "ok")
+        self.assertEqual(
+            provider.last_build,
+            {
+                "replay_history": [{"role": "user", "content": "hello"}],
+                "system_prompt": "system prompt",
+                "stream": False,
+            },
+        )
+
     def test_basic_agent_accepts_custom_trace_recorder_and_stream_renderer(self):
         recorder = RecordingTraceRecorder()
         renderer = RecordingRenderer()

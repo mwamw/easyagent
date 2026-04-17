@@ -38,7 +38,10 @@ class DangerousTool(Tool):
 
 
 class ConfirmationProvider:
-    def invoke_with_tools(self, messages, tools, temperature=None, **kwargs):
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "tools": tools or [], "stream": stream}
+
+    def invoke_raw(self, request):
         return SimpleNamespace(
             content="需要确认",
             tool_calls=[
@@ -49,75 +52,45 @@ class ConfirmationProvider:
             ],
         )
 
-    async def async_invoke_with_tools(self, messages, tools, temperature=None, **kwargs):
-        return self.invoke_with_tools(messages, tools, temperature=temperature, **kwargs)
+    def stream_raw(self, request):
+        return [
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="需要确认", reasoning_content=None, reasoning=None, tool_calls=None),
+                        finish_reason=None,
+                    )
+                ]
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content="",
+                            reasoning_content=None,
+                            reasoning=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="call_1",
+                                    function=SimpleNamespace(name="dangerous", arguments="{}"),
+                                )
+                            ],
+                        ),
+                        finish_reason="stop",
+                    )
+                ]
+            ),
+        ]
 
-    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
-        yield {
-            "type": "tool_calls",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "name": "dangerous",
-                    "arguments": "{}",
-                }
-            ],
-            "content": "需要确认",
-            "thinking": "",
-        }
+    async def async_invoke_raw(self, request):
+        return self.invoke_raw(request)
 
-    def format_tool_result(self, content, tool_id, tool_name):
-        return {
-            "role": "tool",
-            "content": content,
-            "tool_call_id": tool_id,
-        }
-
-    def format_assistant_response(self, response):
-        return {
-            "role": "assistant",
-            "content": response.content,
-            "tool_calls": [
-                {
-                    "id": item.id,
-                    "type": "function",
-                    "function": {
-                        "name": item.function.name,
-                        "arguments": item.function.arguments,
-                    },
-                }
-                for item in response.tool_calls
-            ],
-        }
-
-    def format_assistant_message(self, content=None, tool_calls=None):
-        return {
-            "role": "assistant",
-            "content": content or "",
-            "tool_calls": [
-                {
-                    "id": item["id"],
-                    "type": "function",
-                    "function": {
-                        "name": item["name"],
-                        "arguments": item["arguments"],
-                    },
-                }
-                for item in (tool_calls or [])
-            ],
-        }
-
-    def get_thinking_content(self, response):
-        return None
-
-    def get_response_content(self, response):
-        return getattr(response, "content", "")
-
-    def has_tool_calls(self, response):
-        return bool(getattr(response, "tool_calls", None))
-
-    def get_tool_calls(self, response):
-        return getattr(response, "tool_calls", [])
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self.stream_raw(request):
+                yield item
+        return _stream()
 
 
 class DummyLLM(EasyLLM):

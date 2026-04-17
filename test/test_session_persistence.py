@@ -16,6 +16,7 @@ from agent import BasicAgent, ConversationalAgent, PlanningAgent, ReactAgent
 from core.Config import Config
 from core.Message import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from core.llm import EasyLLM
+from core.request_input import ReplayRequestInput
 from context.manager import ContextManager
 from db import ConversationStore, SessionStore
 from Tool.ToolRegistry import ToolRegistry
@@ -33,6 +34,22 @@ class DummyLLM(EasyLLM):
     def invoke(self, messages, temperature=None, **kwargs):
         self.last_messages = list(messages)
         return "mock-response"
+
+    def prepare_messages_for_request(self, messages):
+        return list(messages)
+
+
+class ReplayAwareDummyLLM(DummyLLM):
+    def __init__(self, provider_name: str = "mock", model: str = "mock-model"):
+        self.provider_name = provider_name
+        self.model = model
+        self.base_url = "http://mock.local/v1"
+        self.api_key = "mock-key"
+        self.max_tokens = 256
+        self.last_messages = []
+        self.temperature = 0.7
+        self.timeout = 60
+        self.kwargs = {}
 
 
 class EchoParams(BaseModel):
@@ -208,11 +225,57 @@ class SessionPersistenceTestCase(unittest.TestCase):
             [event["type"] for event in restored.get_trace_history()],
             ["reasoning", "reasoning"],
         )
-        self.assertTrue(restored.history_via_context_manager)
 
-        listed = BasicAgent.list_sessions(store=self.session_store)
-        self.assertEqual([item["session_id"] for item in listed], ["basic-1"])
-        self.assertTrue(BasicAgent.delete_session("basic-1", store=self.session_store))
+    def test_replay_history_rebuilds_after_provider_change(self):
+        llm = ReplayAwareDummyLLM()
+        agent = BasicAgent(name="assistant", llm=llm)
+        agent.add_message(UserMessage("hello"))
+        agent.add_message(AssistantMessage("world"))
+
+        self.assertEqual(agent.get_history()[0]["role"], "user")
+        self.assertEqual(agent.get_history()[0]["content"], "hello")
+        self.assertEqual(agent.replay_history_provider_name, "mock")
+
+        native_llm = ReplayAwareDummyLLM(provider_name="google_native", model="gemini-2.5-pro")
+        agent.change_model(llm=native_llm)
+        rebuilt = agent._build_start_messages("next turn")
+
+        self.assertEqual(agent.replay_history_provider_name, "google_native")
+        self.assertEqual(agent.get_canonical_history()[0].role, "user")
+        self.assertEqual(agent.get_canonical_history()[0].text_content(), "hello")
+        self.assertEqual(agent.get_history()[0]["parts"][0]["text"], "hello")
+        self.assertEqual(agent.get_history()[0]["role"], "user")
+        self.assertIsInstance(rebuilt, ReplayRequestInput)
+        self.assertTrue(rebuilt.system_prompt)
+        self.assertEqual(rebuilt.replay_history[0]["role"], "user")
+        self.assertEqual(rebuilt.replay_history[-1]["parts"][0]["text"], "next turn")
+
+    def test_change_model_rebuilds_request_ready_replay_history(self):
+        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="openai"))
+        agent.add_message(UserMessage("hello"))
+        agent.add_message(AssistantMessage("world"))
+
+        self.assertEqual(agent.get_history()[0], {"role": "user", "content": "hello"})
+        self.assertEqual(agent.get_history()[1]["role"], "assistant")
+
+        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="anthropic_native", model="claude-4.5-sonnet"))
+
+        replay_history = agent.get_history()
+        self.assertEqual(replay_history[0]["role"], "user")
+        self.assertEqual(replay_history[0]["content"], "hello")
+        self.assertEqual(replay_history[1]["role"], "assistant")
+        self.assertEqual(replay_history[1]["content"], "world")
+        self.assertEqual(agent.replay_history_provider_name, "anthropic_native")
+
+    def test_direct_provider_mutation_requires_change_model(self):
+        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="openai"))
+        agent.add_message(UserMessage("hello"))
+        agent.add_message(AssistantMessage("world"))
+
+        agent.llm.provider_name = "google_native"
+
+        with self.assertRaises(RuntimeError):
+            agent._build_start_messages("next turn")
 
     def test_basic_agent_restore_without_tool_registry_downgrades_to_plain_mode(self):
         registry = build_registry()

@@ -2,15 +2,22 @@ import os
 import sys
 import unittest
 import asyncio
+import base64
 from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from core.providers import create_provider, provider_requires_base_url, detect_provider_from_model
-from core.providers.anthropic_native_provider import AnthropicNativeProvider
-from core.providers.google_native_provider import GoogleNativeProvider
+from core.providers import (
+    AnthropicNativeProvider,
+    GoogleNativeProvider,
+    create_codec,
+    create_provider,
+    detect_provider_from_model,
+    provider_requires_base_url,
+)
+from core.request_input import ReplayRequestInput
 
 
 class _FakeGoogleModels:
@@ -158,7 +165,8 @@ class TestNativeProviders(unittest.TestCase):
             base_url="",
             client=client,
         )
-        assistant_message = provider.format_assistant_message(
+        codec = create_codec("google_native")
+        assistant_message = codec.build_assistant_message(
             content="checking",
             tool_calls=[
                 {
@@ -168,15 +176,18 @@ class TestNativeProviders(unittest.TestCase):
                 }
             ],
         )
-        tool_message = provider.format_tool_result("sunny", "call_1", "weather")
-
-        provider.invoke_with_tools(
+        tool_message = codec.build_tool_result("sunny", "call_1", "weather")
+        replay_history = codec.prepare_messages(
             [
-                {"role": "system", "content": "system prompt"},
                 {"role": "user", "content": "what is the weather"},
                 assistant_message,
                 tool_message,
-            ],
+            ]
+        )
+
+        request = provider.build_request(
+            replay_history,
+            system_prompt="system prompt",
             tools=[
                 {
                     "type": "function",
@@ -188,6 +199,7 @@ class TestNativeProviders(unittest.TestCase):
                 }
             ],
         )
+        provider.invoke_raw(request)
 
         call = client.models.calls[0]
         self.assertEqual(call["config"]["system_instruction"], "system prompt")
@@ -199,7 +211,7 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(call["contents"][2]["parts"][0]["function_response"]["response"], {"result": "sunny"})
 
     def test_google_provider_format_assistant_response_preserves_thinking_and_function_call(self):
-        provider = GoogleNativeProvider(model="gemini-2.5-pro", api_key="k", base_url="", client=object())
+        codec = create_codec("google_native")
         response = SimpleNamespace(
             candidates=[
                 SimpleNamespace(
@@ -221,15 +233,14 @@ class TestNativeProviders(unittest.TestCase):
             ]
         )
 
-        message = provider.format_assistant_response(response, include_reasoning=True)
+        message = codec.build_assistant_response(response, include_reasoning=True)
 
-        self.assertEqual(message["role"], "assistant")
-        self.assertEqual(message["content"][0]["type"], "thinking")
-        self.assertEqual(message["content"][0]["thought_signature"], "sig-1")
-        self.assertEqual(message["content"][1], {"type": "text", "text": "checking"})
-        self.assertEqual(message["content"][2]["type"], "function_call")
-        self.assertEqual(message["content"][2]["name"], "weather")
-        self.assertEqual(provider.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
+        self.assertEqual(message["role"], "model")
+        self.assertTrue(message["parts"][0]["thought"])
+        self.assertEqual(message["parts"][0]["thought_signature"], "sig-1")
+        self.assertEqual(message["parts"][1], {"text": "checking"})
+        self.assertEqual(message["parts"][2]["function_call"]["name"], "weather")
+        self.assertEqual(codec.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
 
     def test_google_provider_preserves_function_call_thought_signature_for_replay(self):
         client = _FakeGoogleClient()
@@ -259,14 +270,12 @@ class TestNativeProviders(unittest.TestCase):
             ]
         )
 
-        assistant_message = provider.format_assistant_response(response, include_reasoning=True)
-        self.assertEqual(assistant_message["content"][0]["thought_signature"], "sig-call-1")
+        codec = create_codec("google_native")
+        assistant_message = codec.build_assistant_response(response, include_reasoning=True)
+        self.assertEqual(assistant_message["parts"][0]["thought_signature"], "sig-call-1")
 
-        provider.invoke_with_tools(
-            [
-                {"role": "user", "content": "weather"},
-                assistant_message,
-            ],
+        request = provider.build_request(
+            codec.prepare_messages([{"role": "user", "content": "weather"}, assistant_message]),
             tools=[
                 {
                     "type": "function",
@@ -278,6 +287,7 @@ class TestNativeProviders(unittest.TestCase):
                 }
             ],
         )
+        provider.invoke_raw(request)
 
         call = client.models.calls[0]
         self.assertEqual(call["contents"][1]["parts"][0]["thought_signature"], "sig-call-1")
@@ -288,7 +298,7 @@ class TestNativeProviders(unittest.TestCase):
             from google.genai import types as gt
         except Exception as exc:
             self.skipTest(f"google-genai unavailable: {exc}")
-        provider = GoogleNativeProvider(model="gemini-2.5-pro", api_key="k", base_url="", client=object())
+        codec = create_codec("google_native")
         response = SimpleNamespace(
             candidates=[
                 SimpleNamespace(
@@ -304,36 +314,36 @@ class TestNativeProviders(unittest.TestCase):
             ]
         )
 
-        message = provider.format_assistant_response(response, include_reasoning=True)
+        message = codec.build_assistant_response(response, include_reasoning=True)
 
         self.assertEqual(message["content"][0]["type"], "thinking")
         self.assertEqual(message["content"][0]["text"], "plan")
         self.assertEqual(message["content"][0]["thought_signature"], b"sig-1")
         self.assertEqual(message["content"][2]["type"], "function_call")
         self.assertEqual(message["content"][2]["id"], "call_1")
-        self.assertEqual(provider.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
+        self.assertEqual(codec.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
 
     def test_google_provider_prepare_messages_merges_function_responses(self):
-        provider = GoogleNativeProvider(model="gemini-2.5-pro", api_key="k", base_url="", client=object())
-        prepared = provider.prepare_messages_for_request(
+        codec = create_codec("google_native")
+        prepared = codec.prepare_messages(
             [
-                provider.format_assistant_message(
+                codec.build_assistant_message(
                     tool_calls=[
                         {"id": "call_1", "name": "weather", "arguments": "{\"city\": \"Beijing\"}"},
                         {"id": "call_2", "name": "time", "arguments": "{\"zone\": \"Asia/Shanghai\"}"},
                     ]
                 ),
-                provider.format_tool_result("sunny", "call_1", "weather"),
-                provider.format_tool_result("08:00", "call_2", "time"),
+                codec.build_tool_result("sunny", "call_1", "weather"),
+                codec.build_tool_result("08:00", "call_2", "time"),
             ]
         )
 
         self.assertEqual(len(prepared), 2)
-        self.assertEqual(prepared[0]["role"], "assistant")
+        self.assertEqual(prepared[0]["role"], "model")
         self.assertEqual(prepared[1]["role"], "user")
-        self.assertEqual(len(prepared[1]["content"]), 2)
-        self.assertEqual(prepared[1]["content"][0]["id"], "call_1")
-        self.assertEqual(prepared[1]["content"][1]["id"], "call_2")
+        self.assertEqual(len(prepared[1]["parts"]), 2)
+        self.assertEqual(prepared[1]["parts"][0]["function_response"]["id"], "call_1")
+        self.assertEqual(prepared[1]["parts"][1]["function_response"]["id"], "call_2")
 
     def test_google_provider_async_stream_events_awaits_stream_factory(self):
         async_client = _FakeGoogleAsyncClient()
@@ -345,11 +355,16 @@ class TestNativeProviders(unittest.TestCase):
             async_client=async_client,
         )
 
+        codec = create_codec("google_native")
+
         async def _collect():
+            request = provider.build_request(
+                codec.prepare_messages([{"role": "user", "content": "hello"}]),
+                stream=True,
+            )
+            raw_stream = await provider.async_stream_raw(request)
             events = []
-            async for event in provider.async_stream_events(
-                [{"role": "user", "content": "hello"}]
-            ):
+            async for event in codec.astream_events(raw_stream):
                 events.append(event)
             return events
 
@@ -368,27 +383,73 @@ class TestNativeProviders(unittest.TestCase):
             client=client,
         )
 
-        events = list(
-            provider.stream_with_tools(
-                [{"role": "user", "content": "weather"}],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "weather",
-                            "description": "Get weather",
-                            "parameters": {"type": "object", "properties": {}},
-                        },
-                    }
-                ],
-            )
+        codec = create_codec("google_native")
+        request = provider.build_request(
+            codec.prepare_messages([{"role": "user", "content": "weather"}]),
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "weather",
+                        "description": "Get weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            stream=True,
         )
+        events = list(codec.stream_events(provider.stream_raw(request), tools=True))
 
         tool_event = events[-1]
         self.assertEqual(tool_event["type"], "tool_calls")
-        self.assertEqual(tool_event["assistant_items"]["content"][0]["type"], "thinking")
-        self.assertEqual(tool_event["assistant_items"]["content"][0]["thought_signature"], "sig-1")
-        self.assertEqual(tool_event["assistant_items"]["content"][1]["type"], "function_call")
+        self.assertTrue(tool_event["assistant_items"]["parts"][0]["thought"])
+        self.assertEqual(tool_event["assistant_items"]["parts"][0]["thought_signature"], "sig-1")
+        self.assertIn("function_call", tool_event["assistant_items"]["parts"][1])
+
+    def test_google_provider_request_buffer_encodes_binary_thought_signature(self):
+        request_input = ReplayRequestInput(
+            provider_name="google_native",
+            replay_history=[{"role": "user", "parts": [{"text": "weather"}]}],
+            request_ready_checker=lambda message: isinstance(message, dict),
+        )
+        raw_signature = b"\n$\x01\x8f=k"
+        request_input.append(
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "plan",
+                        "thought": True,
+                        "thought_signature": raw_signature,
+                    }
+                ],
+            }
+        )
+        signature = request_input.replay_history[-1]["parts"][0]["thought_signature"]
+        self.assertEqual(signature, base64.b64encode(raw_signature).decode("ascii"))
+
+    def test_google_provider_canonical_replay_preserves_function_call_signature(self):
+        codec = create_codec("google_native")
+        canonical = codec.history_entry_to_canonical(
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "function_call": {
+                            "id": "call_1",
+                            "name": "weather",
+                            "args": {"city": "Beijing"},
+                        },
+                        "thought_signature": b"sig-call-1",
+                    }
+                ],
+            }
+        )
+        replay = codec.prepare_messages(canonical)
+        self.assertEqual(
+            replay[0]["parts"][0]["thought_signature"],
+            base64.b64encode(b"sig-call-1").decode("ascii"),
+        )
 
     def test_anthropic_provider_invoke_with_tools_builds_native_messages(self):
         client = _FakeAnthropicClient()
@@ -398,7 +459,8 @@ class TestNativeProviders(unittest.TestCase):
             base_url="",
             client=client,
         )
-        assistant_message = provider.format_assistant_message(
+        codec = create_codec("anthropic_native")
+        assistant_message = codec.build_assistant_message(
             content="checking",
             tool_calls=[
                 {
@@ -408,15 +470,18 @@ class TestNativeProviders(unittest.TestCase):
                 }
             ],
         )
-        tool_message = provider.format_tool_result("sunny", "call_1", "weather")
-
-        provider.invoke_with_tools(
+        tool_message = codec.build_tool_result("sunny", "call_1", "weather")
+        replay_history = codec.prepare_messages(
             [
-                {"role": "system", "content": "system prompt"},
                 {"role": "user", "content": "what is the weather"},
                 assistant_message,
                 tool_message,
-            ],
+            ]
+        )
+
+        request = provider.build_request(
+            replay_history,
+            system_prompt="system prompt",
             tools=[
                 {
                     "type": "function",
@@ -428,6 +493,7 @@ class TestNativeProviders(unittest.TestCase):
                 }
             ],
         )
+        provider.invoke_raw(request)
 
         call = client.messages.calls[0]
         self.assertEqual(call["system"], "system prompt")
@@ -438,7 +504,7 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(call["messages"][2]["content"][0]["type"], "tool_result")
 
     def test_anthropic_provider_format_assistant_response_preserves_thinking_blocks(self):
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
+        codec = create_codec("anthropic_native")
         response = SimpleNamespace(
             content=[
                 SimpleNamespace(type="thinking", thinking="plan", signature="sig-1"),
@@ -447,19 +513,19 @@ class TestNativeProviders(unittest.TestCase):
             ]
         )
 
-        message = provider.format_assistant_response(response, include_reasoning=True)
+        message = codec.build_assistant_response(response, include_reasoning=True)
 
         self.assertEqual(message["content"][0], {"type": "thinking", "thinking": "plan", "signature": "sig-1"})
         self.assertEqual(message["content"][1], {"type": "text", "text": "checking"})
         self.assertEqual(message["content"][2]["type"], "tool_use")
-        self.assertEqual(provider.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
+        self.assertEqual(codec.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
 
     def test_anthropic_provider_handles_real_sdk_block_objects(self):
         try:
             from anthropic import types as at
         except Exception as exc:
             self.skipTest(f"anthropic unavailable: {exc}")
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
+        codec = create_codec("anthropic_native")
         response = SimpleNamespace(
             content=[
                 at.ThinkingBlock(type="thinking", thinking="plan", signature="sig-1"),
@@ -468,17 +534,17 @@ class TestNativeProviders(unittest.TestCase):
             ]
         )
 
-        message = provider.format_assistant_response(response, include_reasoning=True)
+        message = codec.build_assistant_response(response, include_reasoning=True)
 
         self.assertEqual(message["content"][0], {"type": "thinking", "thinking": "plan", "signature": "sig-1"})
         self.assertEqual(message["content"][1], {"type": "text", "text": "checking"})
         self.assertEqual(message["content"][2]["type"], "tool_use")
         self.assertEqual(message["content"][2]["name"], "weather")
-        self.assertEqual(provider.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
+        self.assertEqual(codec.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
 
     def test_anthropic_provider_stream_tool_calls_preserve_input_json_delta_arguments(self):
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
-        state = provider._init_anthropic_stream_state()
+        codec = create_codec("anthropic_native")
+        state = codec._init_anthropic_stream_state()
         events = [
             {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "call_1", "name": "weather", "input": {}}},
             {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"city\": \"Beijing\"}"}},
@@ -487,17 +553,17 @@ class TestNativeProviders(unittest.TestCase):
 
         emitted = []
         for event in events:
-            emitted.extend(provider._extract_anthropic_stream_events(event, state))
+            emitted.extend(codec._extract_anthropic_stream_events(event, state))
 
         self.assertEqual(emitted[-1]["type"], "tool_calls")
         self.assertEqual(emitted[-1]["tool_calls"][0]["arguments"], {"city": "Beijing"})
-        assistant_message = provider._build_stream_assistant_message(state)
+        assistant_message = codec._build_stream_assistant_message(state)
         self.assertEqual(assistant_message["content"][0]["type"], "tool_use")
         self.assertEqual(assistant_message["content"][0]["input"], {"city": "Beijing"})
 
     def test_anthropic_provider_stream_tool_calls_fallback_to_start_block_input(self):
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
-        state = provider._init_anthropic_stream_state()
+        codec = create_codec("anthropic_native")
+        state = codec._init_anthropic_stream_state()
         events = [
             {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "Beijing"}}},
             {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
@@ -505,20 +571,20 @@ class TestNativeProviders(unittest.TestCase):
 
         emitted = []
         for event in events:
-            emitted.extend(provider._extract_anthropic_stream_events(event, state))
+            emitted.extend(codec._extract_anthropic_stream_events(event, state))
 
         self.assertEqual(emitted[-1]["type"], "tool_calls")
         self.assertEqual(emitted[-1]["tool_calls"][0]["arguments"], {"city": "Beijing"})
 
     def test_anthropic_provider_stream_thinking_signature_is_not_emitted_as_text(self):
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
-        state = provider._init_anthropic_stream_state()
+        codec = create_codec("anthropic_native")
+        state = codec._init_anthropic_stream_state()
 
-        thinking_events = provider._extract_anthropic_stream_events(
+        thinking_events = codec._extract_anthropic_stream_events(
             {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "plan"}},
             state,
         )
-        signature_events = provider._extract_anthropic_stream_events(
+        signature_events = codec._extract_anthropic_stream_events(
             {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig-1"}},
             state,
         )
@@ -526,7 +592,7 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(thinking_events, [{"type": "thinking_delta", "delta": "plan"}])
         self.assertEqual(signature_events, [])
         self.assertEqual(state["thinking_parts"], ["plan"])
-        assistant_message = provider._build_stream_assistant_message(state)
+        assistant_message = codec._build_stream_assistant_message(state)
         self.assertEqual(
             assistant_message["content"][0],
             {"type": "thinking", "thinking": "plan", "signature": "sig-1"},
@@ -534,8 +600,8 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(assistant_message["reasoning_content"], "plan")
 
     def test_anthropic_provider_stream_builds_thinking_block_from_accumulated_text(self):
-        provider = AnthropicNativeProvider(model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
-        state = provider._init_anthropic_stream_state()
+        codec = create_codec("anthropic_native")
+        state = codec._init_anthropic_stream_state()
         state["thinking_parts"] = ["plan"]
         state["assistant_blocks"] = {
             1: {"type": "text", "text": "先处理工具"},
@@ -545,7 +611,7 @@ class TestNativeProviders(unittest.TestCase):
             2: {"id": "call_1", "name": "weather", "input_json": "", "input": {"city": "Beijing"}}
         }
 
-        assistant_message = provider._build_stream_assistant_message(state)
+        assistant_message = codec._build_stream_assistant_message(state)
 
         self.assertEqual(
             assistant_message["content"][0],
@@ -562,8 +628,7 @@ class TestNativeProviders(unittest.TestCase):
         anthropic_compat = create_provider("anthropic", model="claude-sonnet-4-5", api_key="k", base_url="http://localhost", client=object())
         anthropic_native = create_provider("anthropic_native", model="claude-sonnet-4-5", api_key="k", base_url="", client=object())
 
-        from core.providers.google_provider import GoogleProvider
-        from core.providers.anthropic_provider import AnthropicProvider
+        from core.providers import AnthropicProvider, GoogleProvider
 
         self.assertIsInstance(google_compat, GoogleProvider)
         self.assertIsInstance(google_native, GoogleNativeProvider)

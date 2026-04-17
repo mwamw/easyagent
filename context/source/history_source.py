@@ -5,6 +5,7 @@
 """
 import json
 from typing import List, Optional
+from core.history import coerce_canonical_message
 from context.window import ContextItem
 from context.source.base import BaseContextSource
 
@@ -37,8 +38,13 @@ class HistoryContextSource(BaseContextSource):
         items = []
         n = len(messages)
         for i, msg in enumerate(messages):
+            canonical = coerce_canonical_message(msg)
+            if canonical is not None:
+                role = canonical.role
+                raw_message = canonical.to_dict()
+                content = canonical.text_content()
             # 兼容 Message 对象和 dict
-            if hasattr(msg, "to_dict"):
+            elif hasattr(msg, "to_dict"):
                 role = msg.role
                 raw_message = msg.to_dict()
                 content = msg.content

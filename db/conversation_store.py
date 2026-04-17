@@ -14,6 +14,7 @@ from core.Message import (
     ToolMessage,
     UserMessage,
 )
+from core.history import CanonicalMessage
 
 from .session_store import DEFAULT_SESSION_DB_PATH
 
@@ -170,7 +171,10 @@ class ConversationStore:
 
     def _row_to_message(self, row: sqlite3.Row) -> Any:
         if row["raw_message"]:
-            return _json_loads(row["raw_message"])
+            payload = _json_loads(row["raw_message"])
+            if isinstance(payload, dict) and payload.get("record_type", payload.get("schema")) == "canonical_message":
+                return CanonicalMessage.model_validate(payload)
+            return payload
 
         role = row["role"]
         kwargs = {

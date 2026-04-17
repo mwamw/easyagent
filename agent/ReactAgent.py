@@ -210,7 +210,7 @@ class ReactAgent(BasicAgent):
             if self.context_manager is not None:
                 messages = self.context_manager.build_messages(
                     query=round_query,
-                    history=self.history,
+                    history=self.replay_history,
                     system_prompt=system_prompt,
                     include_history=True,
                     include_query=True,

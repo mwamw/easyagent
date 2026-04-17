@@ -14,6 +14,8 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from context.window import ContextItem, ContextWindow
 from context.builder import ContextBuilder
 from context.manager import ContextManager
+from core.providers import create_codec
+from core.replay_converter import canonical_to_replay_history
 from context.source.base import BaseContextSource
 from context.source.history_source import HistoryContextSource
 from context.source.memory_source import MemoryContextSource
@@ -360,6 +362,110 @@ class TestContextBuilder(unittest.TestCase):
         self.assertTrue(builder._last_history_was_compacted)
         self.assertTrue(builder._last_compacted_history)
         self.assertTrue(builder._last_compacted_history[0]["content"].startswith("历史摘要："))
+
+    def test_build_messages_compacts_canonical_history_without_downgrading_schema(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=190),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        canonical_history = []
+        for message in [
+            {"role": "user", "content": "用户第一轮描述了一个非常长的上下文背景，希望系统压缩历史。"},
+            {"role": "assistant", "content": "助手第一轮确认需要压缩 canonical history，但不能破坏结构。"},
+            {"role": "user", "content": "用户第二轮补充更多限制，要求切换 provider 后也要能重建 replay。"},
+            {"role": "assistant", "content": "助手第二轮总结限制条件，并说明 replay tail 需要原样保留。"},
+            {"role": "user", "content": "u5"},
+            {"role": "assistant", "content": "a5"},
+        ]:
+            canonical_history.extend(create_codec("mock").history_entry_to_canonical(message))
+
+        messages = builder.build_messages(
+            query="q",
+            history=canonical_history,
+            system_prompt="sys",
+        )
+
+        self.assertEqual(messages[0]["role"], "system")
+        self.assertTrue(builder._last_history_was_compacted)
+        self.assertTrue(all(item["record_type"] == "canonical_message" for item in builder._last_compacted_history))
+        self.assertTrue(
+            any(
+                item["content"][0]["type"] == "text"
+                and item["content"][0]["text"].startswith("历史摘要：")
+                for item in builder._last_compacted_history
+            )
+        )
+        self.assertEqual(messages[-1]["content"], "q")
+
+    def test_build_messages_preserves_exact_native_replay_tail(self):
+        builder = ContextBuilder(
+            budget=TokenBudget(max_tokens=220),
+            counter=TokenCounter(chars_per_token=1.0),
+        )
+        replay_history = [
+            {"role": "user", "content": "old question with a lot of context that should be compacted"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "text": "old plan", "thought_signature": "sig-old"},
+                    {"type": "text", "text": "old answer"},
+                ],
+                "reasoning_content": "old plan",
+            },
+            {"role": "user", "content": "recent question"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "text": "recent plan", "thought_signature": "sig-recent"},
+                    {"type": "function_call", "id": "call_recent", "name": "weather", "args": {"city": "Beijing"}},
+                ],
+                "reasoning_content": "recent plan",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "function_response", "id": "call_recent", "name": "weather", "response": {"result": "sunny"}}
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "recent answer"}],
+            },
+        ]
+        canonical_history = []
+        for message in replay_history:
+            canonical_history.extend(create_codec("google_native").history_entry_to_canonical(message))
+
+        messages = builder.build_messages(
+            query="follow-up",
+            history=canonical_history,
+            replay_history=replay_history,
+            history_converter=lambda items: canonical_to_replay_history(items, "google_native"),
+            system_prompt="sys",
+        )
+
+        self.assertEqual(messages[-1], {"role": "user", "content": "follow-up"})
+        self.assertIn(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "text": "recent plan", "thought_signature": "sig-recent"},
+                    {"type": "function_call", "id": "call_recent", "name": "weather", "args": {"city": "Beijing"}},
+                ],
+                "reasoning_content": "recent plan",
+            },
+            messages,
+        )
+        self.assertIn(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "function_response", "id": "call_recent", "name": "weather", "response": {"result": "sunny"}}
+                ],
+            },
+            messages,
+        )
+        self.assertEqual(builder._last_compacted_history[-2]["role"], "tool")
 
     def test_compact_history_preserves_provider_specific_dicts(self):
         builder = ContextBuilder(

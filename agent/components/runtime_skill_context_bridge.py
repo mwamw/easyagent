@@ -9,18 +9,18 @@ from typing import Any
 from Tool.BaseTool import ToolResult
 from core.Message import MetaUserMessage
 
-
+from agent import BasicAgent
 class BaseRuntimeSkillContextBridge(ABC):
     """Bridge for runtime skill/tool ephemeral context injection."""
 
     @abstractmethod
-    def append_runtime_skill_context_message(self, agent: Any, messages: list[Any]) -> None:
+    def append_runtime_skill_context_message(self, agent:BasicAgent, messages: list[Any]) -> None:
         pass
 
     @abstractmethod
     def append_tool_ephemeral_context_message(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         context: Any,
@@ -29,13 +29,13 @@ class BaseRuntimeSkillContextBridge(ABC):
         pass
 
     @abstractmethod
-    def clear_ephemeral_skill_state(self, agent: Any) -> None:
+    def clear_ephemeral_skill_state(self, agent:BasicAgent) -> None:
         pass
 
     @abstractmethod
     def maybe_inject_runtime_skill_context(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         messages: list[Any],
@@ -45,7 +45,7 @@ class BaseRuntimeSkillContextBridge(ABC):
     @abstractmethod
     def maybe_inject_tool_ephemeral_context(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         tool_result: ToolResult,
@@ -57,7 +57,7 @@ class BaseRuntimeSkillContextBridge(ABC):
 class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
     """Default runtime context bridge that preserves current BasicAgent behavior."""
 
-    def append_runtime_skill_context_message(self, agent: Any, messages: list[Any]) -> None:
+    def append_runtime_skill_context_message(self, agent:BasicAgent, messages: list[Any]) -> None:
         runtime_prompt = agent.skill_manager.build_runtime_skill_context_prompt()
         if not runtime_prompt:
             return
@@ -73,7 +73,7 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
 
     def append_tool_ephemeral_context_message(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         context: Any,
@@ -99,12 +99,12 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
             )
         )
 
-    def clear_ephemeral_skill_state(self, agent: Any) -> None:
+    def clear_ephemeral_skill_state(self, agent:BasicAgent) -> None:
         agent.skill_manager.clear_ephemeral_state()
 
     def maybe_inject_runtime_skill_context(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         messages: list[Any],
@@ -117,7 +117,7 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
 
     def maybe_inject_tool_ephemeral_context(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         tool_name: str,
         tool_result: ToolResult,

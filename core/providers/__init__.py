@@ -1,19 +1,21 @@
-"""
-LLM Providers 模块
+"""Provider and codec factory exports."""
 
-提供对不同 LLM 服务的统一适配。
-"""
+from __future__ import annotations
+
+from typing import Optional
+
+from .anthropic_compat import AnthropicCompatCodec, AnthropicProvider
+from .anthropic_native import AnthropicNativeCodec, AnthropicNativeProvider
 from .base import BaseProvider
-from .openai_compatible_provider import OpenAICompatibleProviderBase
-from .openai_provider import OpenAIProvider
-from .openai_responses_provider import OpenAIResponsesProvider
-from .google_provider import GoogleProvider
-from .anthropic_provider import AnthropicProvider
-from .google_native_provider import GoogleNativeProvider
-from .anthropic_native_provider import AnthropicNativeProvider
+from .google_compat import GoogleCompatCodec, GoogleProvider
+from .google_native import GoogleNativeCodec, GoogleNativeProvider
+from .openai_compat import OpenAIChatCodec, OpenAICompatibleProviderBase, OpenAIProvider
+from .openai_responses import OpenAIResponsesCodec, OpenAIResponsesProvider
+from .shared import BaseProviderCodec
 
 __all__ = [
     "BaseProvider",
+    "BaseProviderCodec",
     "OpenAICompatibleProviderBase",
     "OpenAIProvider",
     "OpenAIResponsesProvider",
@@ -21,6 +23,16 @@ __all__ = [
     "AnthropicProvider",
     "GoogleNativeProvider",
     "AnthropicNativeProvider",
+    "OpenAIChatCodec",
+    "GoogleCompatCodec",
+    "AnthropicCompatCodec",
+    "OpenAIResponsesCodec",
+    "GoogleNativeCodec",
+    "AnthropicNativeCodec",
+    "create_codec",
+    "create_provider",
+    "provider_requires_base_url",
+    "detect_provider_from_model",
 ]
 
 
@@ -75,6 +87,21 @@ def create_provider(
     
     provider_class = provider_map.get(provider_name, OpenAIProvider)
     return provider_class(model=model, api_key=api_key, base_url=base_url, **kwargs)
+
+
+def create_codec(provider_name: Optional[str]) -> BaseProviderCodec:
+    normalized = (provider_name or "openai").lower()
+    if normalized in {"google_native", "gemini_native"}:
+        return GoogleNativeCodec(normalized)
+    if normalized in {"anthropic_native", "claude_native"}:
+        return AnthropicNativeCodec(normalized)
+    if normalized == "openai_responses":
+        return OpenAIResponsesCodec(normalized)
+    if normalized in {"google", "gemini"}:
+        return GoogleCompatCodec(normalized)
+    if normalized in {"anthropic", "claude"}:
+        return AnthropicCompatCodec(normalized)
+    return OpenAIChatCodec(normalized)
 
 
 def provider_requires_base_url(provider_name: str) -> bool:

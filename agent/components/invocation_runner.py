@@ -11,7 +11,7 @@ from core.Exception import LLMInvokeError
 from core.Message import UserMessage
 
 logger = logging.getLogger(__name__)
-
+from agent import BasicAgent
 
 class BaseInvocationRunner(ABC):
     """Abstract runner for public agent invocation entrypoints."""
@@ -19,7 +19,7 @@ class BaseInvocationRunner(ABC):
     @abstractmethod
     def invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -30,7 +30,7 @@ class BaseInvocationRunner(ABC):
     @abstractmethod
     def stream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         temperature: float = 0.7,
         **kwargs,
@@ -40,7 +40,7 @@ class BaseInvocationRunner(ABC):
     @abstractmethod
     def stream_invoke_with_tool(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -51,7 +51,7 @@ class BaseInvocationRunner(ABC):
     @abstractmethod
     async def ainvoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -62,7 +62,7 @@ class BaseInvocationRunner(ABC):
     @abstractmethod
     async def astream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -90,7 +90,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
     def invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -188,7 +188,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
     def stream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         temperature: float = 0.7,
         **kwargs,
@@ -297,7 +297,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
     def stream_invoke_with_tool(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -351,7 +351,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
     async def ainvoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -447,7 +447,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
     async def astream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,

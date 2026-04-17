@@ -17,6 +17,7 @@ from context.formatter.base import BaseFormatter
 from context.formatter.plain import PlainFormatter
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
+from core.request_input import ReplayRequestInput
 import logging
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,8 @@ class ContextManager:
         query: str,
         system_prompt: Optional[str] = None,
         history: Optional[List] = None,
+        replay_history: Optional[List] = None,
+        history_converter: Optional[Any] = None,
         include_history: Optional[bool] = None,
         include_query: bool = True,
         include_qeury: Optional[bool] = None,
@@ -174,6 +177,43 @@ class ContextManager:
         return self._builder.build_messages(
             query=query,
             history=history,
+            replay_history=replay_history,
+            history_converter=history_converter,
+            system_prompt=system_prompt,
+            include_history=use_history,
+            include_query=include_query,
+            max_turns=effective_max_turns,
+            **kwargs,
+        )
+
+    def build_request_input(
+        self,
+        query: str,
+        system_prompt: Optional[str] = None,
+        history: Optional[List] = None,
+        replay_history: Optional[List] = None,
+        history_converter: Optional[Any] = None,
+        message_converter: Optional[Any] = None,
+        request_ready_checker: Optional[Any] = None,
+        provider_name: Optional[str] = None,
+        include_history: Optional[bool] = None,
+        include_query: bool = True,
+        include_qeury: Optional[bool] = None,
+        max_turns: Optional[int] = None,
+        **kwargs,
+    ) -> Any:
+        if include_qeury is not None:
+            include_query = include_qeury
+        use_history = self._auto_history if include_history is None else include_history
+        effective_max_turns = max_turns
+        return self._builder.build_request_input(
+            query=query,
+            history=history,
+            replay_history=replay_history,
+            history_converter=history_converter,
+            message_converter=message_converter,
+            request_ready_checker=request_ready_checker,
+            provider_name=provider_name,
             system_prompt=system_prompt,
             include_history=use_history,
             include_query=include_query,
@@ -294,6 +334,8 @@ class ContextManager:
 
     @staticmethod
     def _normalize_messages(messages: Optional[List[Any]]) -> List[Dict[str, Any]]:
+        if isinstance(messages, ReplayRequestInput):
+            messages = messages.as_visible_messages()
         normalized: List[Dict[str, Any]] = []
         for message in messages or []:
             if hasattr(message, "to_dict"):

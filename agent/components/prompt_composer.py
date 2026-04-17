@@ -18,7 +18,7 @@ from prompt import (
     format_tool_catalog,
     format_tool_inventory,
 )
-
+from agent import BasicAgent
 logger = logging.getLogger(__name__)
 
 
@@ -26,21 +26,21 @@ class BasePromptComposer(ABC):
     """Abstract prompt composer used by BasicAgent."""
 
     @abstractmethod
-    def get_enhanced_prompt(self, agent: Any) -> str:
+    def get_enhanced_prompt(self, agent:BasicAgent) -> str:
         pass
 
     @abstractmethod
-    def get_system_prompt_template(self, agent: Any) -> SystemPromptTemplate:
+    def get_system_prompt_template(self, agent:BasicAgent) -> SystemPromptTemplate:
         pass
 
     @abstractmethod
-    def get_system_prompt_blocks(self, agent: Any) -> list[PromptBlock]:
+    def get_system_prompt_blocks(self, agent:BasicAgent) -> list[PromptBlock]:
         pass
 
     @abstractmethod
     def build_core_prompt_blocks(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         start_order: int,
         include_tool_policy: bool,
@@ -48,21 +48,21 @@ class BasePromptComposer(ABC):
         pass
 
     @abstractmethod
-    def get_tool_catalog_prompt(self, agent: Any) -> str:
+    def get_tool_catalog_prompt(self, agent:BasicAgent) -> str:
         pass
 
     @abstractmethod
-    def get_tool_inventory_prompt(self, agent: Any, *, include_parameters: bool = False) -> str:
+    def get_tool_inventory_prompt(self, agent:BasicAgent, *, include_parameters: bool = False) -> str:
         pass
 
     @abstractmethod
-    def build_tool_inventory_block(self, agent: Any, order: int) -> PromptBlock | None:
+    def build_tool_inventory_block(self, agent:BasicAgent, order: int) -> PromptBlock | None:
         pass
 
     @abstractmethod
     def build_shared_prompt_blocks(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         start_order: int,
         include_custom_prompt: bool = True,
@@ -90,13 +90,13 @@ class DefaultPromptComposer(BasePromptComposer):
     def __init__(self):
         self._extension_prompt_blocks: list[PromptBlock] = []
 
-    def get_enhanced_prompt(self, agent: Any) -> str:
+    def get_enhanced_prompt(self, agent:BasicAgent) -> str:
         return self.get_system_prompt_template(agent).render()
 
-    def get_system_prompt_template(self, agent: Any) -> SystemPromptTemplate:
+    def get_system_prompt_template(self, agent:BasicAgent) -> SystemPromptTemplate:
         return SystemPromptTemplate(agent.get_system_prompt_blocks())
 
-    def get_system_prompt_blocks(self, agent: Any) -> list[PromptBlock]:
+    def get_system_prompt_blocks(self, agent:BasicAgent) -> list[PromptBlock]:
         if not agent.enable_tool or not agent.tool_registry:
             blocks = [
                 PromptBlock(
@@ -131,7 +131,7 @@ class DefaultPromptComposer(BasePromptComposer):
 
     def build_core_prompt_blocks(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         start_order: int,
         include_tool_policy: bool,
@@ -165,7 +165,7 @@ class DefaultPromptComposer(BasePromptComposer):
         )
         return blocks
 
-    def get_tool_catalog_prompt(self, agent: Any) -> str:
+    def get_tool_catalog_prompt(self, agent:BasicAgent) -> str:
         if not agent.tool_registry:
             return ""
         try:
@@ -175,7 +175,7 @@ class DefaultPromptComposer(BasePromptComposer):
             return "（工具描述获取失败）"
         return format_tool_catalog(tool_descriptions)
 
-    def get_tool_inventory_prompt(self, agent: Any, *, include_parameters: bool = False) -> str:
+    def get_tool_inventory_prompt(self, agent:BasicAgent, *, include_parameters: bool = False) -> str:
         if not agent.tool_registry:
             return ""
         try:
@@ -185,7 +185,7 @@ class DefaultPromptComposer(BasePromptComposer):
             return "（工具描述获取失败）"
         return format_tool_inventory(tool_descriptions, include_parameters=include_parameters)
 
-    def build_tool_inventory_block(self, agent: Any, order: int) -> PromptBlock | None:
+    def build_tool_inventory_block(self, agent:BasicAgent, order: int) -> PromptBlock | None:
         if not agent._should_include_tool_inventory_block():
             return None
 
@@ -209,7 +209,7 @@ class DefaultPromptComposer(BasePromptComposer):
 
     def build_shared_prompt_blocks(
         self,
-        agent: Any,
+        agent:BasicAgent,
         *,
         start_order: int,
         include_custom_prompt: bool = True,

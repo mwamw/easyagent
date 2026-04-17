@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 import asyncio
 import logging
 from typing import Any, AsyncGenerator, Optional
-
+from agent import BasicAgent
 from core.Exception import (
     LLMInvokeError,
     ToolExecutionError,
@@ -24,7 +24,7 @@ class BaseToolLoopEngine(ABC):
     @abstractmethod
     def invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         messages: list[Any],
         max_iter: int = 10,
@@ -37,7 +37,7 @@ class BaseToolLoopEngine(ABC):
     @abstractmethod
     async def ainvoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         messages: list[Any],
         max_iter: int = 10,
@@ -50,7 +50,7 @@ class BaseToolLoopEngine(ABC):
     @abstractmethod
     async def astream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,
@@ -76,7 +76,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
     def invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         messages: list[Any],
         max_iter: int = 10,
@@ -318,7 +318,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
     async def ainvoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         messages: list[Any],
         max_iter: int = 10,
@@ -580,7 +580,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
     async def astream_invoke(
         self,
-        agent: Any,
+        agent:BasicAgent,
         query: str,
         max_iter: int = 10,
         temperature: float = 0.7,

@@ -16,6 +16,9 @@ from context.token.counter import TokenCounter
 from context.token.budget import TokenBudget
 import logging
 import json
+from core.history import is_canonical_message
+from core.request_input import ReplayRequestInput
+from core.Message import UserMessage
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +207,8 @@ class ContextBuilder:
         query: str,
         system_prompt: Optional[str] = None,
         history: Optional[List[Any]] = None,
+        replay_history: Optional[List[Any]] = None,
+        history_converter: Optional[Any] = None,
         include_history: bool = True,
         include_query: bool = True,
         max_turns: Optional[int] = None,
@@ -221,6 +226,11 @@ class ContextBuilder:
             max_turns=max_turns,
             newest_first=False,
         ) if include_history and history is not None else []
+        normalized_replay_history = self._copy_history_entries(
+            replay_history,
+            max_turns=max_turns,
+            newest_first=False,
+        ) if include_history and replay_history is not None else []
 
         base_reserved = self._counter.count(system_prompt or "")
         if include_query and query:
@@ -256,15 +266,12 @@ class ContextBuilder:
             base_messages.append({"role": "user", "content": query})
 
         history_budget = max(0, self._budget.max_tokens - self._counter.count_messages(base_messages))
-        compacted_history = normalized_history
-        history_was_compacted = False
-
-        if include_history and normalized_history:
-            compacted_history = self._history_compactor.compact(
-                normalized_history,
-                max_tokens=history_budget,
-            )
-            history_was_compacted = compacted_history != normalized_history
+        compacted_history, compacted_canonical_history, history_was_compacted = self._prepare_history_messages(
+            normalized_history,
+            normalized_replay_history,
+            history_budget,
+            history_converter=history_converter,
+        ) if include_history and normalized_history else ([], [], False)
 
         messages = self._assemble_messages(
             system_prompt=system_prompt,
@@ -276,11 +283,12 @@ class ContextBuilder:
         total_tokens = self._counter.count_messages(messages)
         if total_tokens > self._budget.max_tokens and include_history and normalized_history:
             overflow = total_tokens - self._budget.max_tokens
-            compacted_history = self._history_compactor.compact(
+            compacted_history, compacted_canonical_history, history_was_compacted = self._prepare_history_messages(
                 normalized_history,
-                max_tokens=max(0, history_budget - overflow),
+                normalized_replay_history,
+                max(0, history_budget - overflow),
+                history_converter=history_converter,
             )
-            history_was_compacted = compacted_history != normalized_history
             messages = self._assemble_messages(
                 system_prompt=system_prompt,
                 context_text=context_text,
@@ -308,9 +316,90 @@ class ContextBuilder:
                 query=query if include_query else "",
             )
 
-        self._last_compacted_history = self._copy_history_entries(compacted_history, newest_first=False)
+        self._last_compacted_history = self._copy_history_entries(
+            compacted_canonical_history if include_history else [],
+            newest_first=False,
+        )
         self._last_history_was_compacted = history_was_compacted
         return messages
+
+    def build_request_input(
+        self,
+        query: str,
+        system_prompt: Optional[str] = None,
+        history: Optional[List[Any]] = None,
+        replay_history: Optional[List[Any]] = None,
+        history_converter: Optional[Any] = None,
+        message_converter: Optional[Any] = None,
+        request_ready_checker: Optional[Any] = None,
+        provider_name: Optional[str] = None,
+        include_history: bool = True,
+        include_query: bool = True,
+        max_turns: Optional[int] = None,
+        **kwargs,
+    ) -> ReplayRequestInput:
+        normalized_history = self._copy_history_entries(
+            history,
+            max_turns=max_turns,
+            newest_first=False,
+        ) if include_history and history is not None else []
+        normalized_replay_history = self._copy_history_entries(
+            replay_history,
+            max_turns=max_turns,
+            newest_first=False,
+        ) if include_history and replay_history is not None else []
+
+        base_reserved = self._counter.count(system_prompt or "")
+        if include_query and query:
+            base_reserved += self._counter.count(query)
+        base_reserved += 8
+
+        available_after_base = max(0, self._budget.max_tokens - base_reserved)
+        history_reserve = 0
+        if include_history:
+            history_reserve = int(
+                available_after_base * self._budget.allocations.get("history", self._budget.default_allocation)
+            )
+
+        non_history_window = self.build(
+            query,
+            reserved_tokens=base_reserved + history_reserve,
+            exclude_sources={"history"},
+            **kwargs,
+        )
+        non_history_groups: Dict[str, List[ContextItem]] = {}
+        for item in non_history_window.items:
+            non_history_groups.setdefault(item.source, []).append(item)
+        context_text = self._formatter.format_all(non_history_groups)
+
+        history_budget = max(
+            0,
+            self._budget.max_tokens - self._counter.count(system_prompt or "") - self._counter.count(context_text or "") - self._counter.count(query or ""),
+        )
+        compacted_history, compacted_canonical_history, history_was_compacted = self._prepare_history_messages(
+            normalized_history,
+            normalized_replay_history,
+            history_budget,
+            history_converter=history_converter,
+        ) if include_history and normalized_history else ([], [], False)
+
+        combined_system = "\n\n".join(part for part in [system_prompt, context_text] if part) or None
+        request_input = ReplayRequestInput(
+            provider_name=provider_name,
+            replay_history=self._copy_history_entries(compacted_history if include_history else [], newest_first=False),
+            system_prompt=combined_system,
+            message_converter=message_converter,
+            request_ready_checker=request_ready_checker,
+        )
+        if include_query and query:
+            request_input.append(UserMessage(query))
+
+        self._last_compacted_history = self._copy_history_entries(
+            compacted_canonical_history if include_history else [],
+            newest_first=False,
+        )
+        self._last_history_was_compacted = history_was_compacted
+        return request_input
 
     def compact_history(
         self,
@@ -327,6 +416,61 @@ class ContextBuilder:
         self._last_compacted_history = self._copy_history_entries(compacted_history, newest_first=False)
         self._last_history_was_compacted = compacted_history != copied_history
         return compacted_history
+
+    def _prepare_history_messages(
+        self,
+        canonical_history: List[Dict[str, Any]],
+        replay_history: List[Dict[str, Any]],
+        history_budget: int,
+        *,
+        history_converter: Optional[Any] = None,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], bool]:
+        if not canonical_history:
+            return [], [], False
+
+        if not any(is_canonical_message(message) for message in canonical_history):
+            compacted = self._history_compactor.compact(canonical_history, max_tokens=history_budget)
+            return compacted, self._copy_history_entries(compacted, newest_first=False), compacted != canonical_history
+
+        if not replay_history:
+            compacted = self._history_compactor.compact(canonical_history, max_tokens=history_budget)
+            return compacted, self._copy_history_entries(compacted, newest_first=False), compacted != canonical_history
+
+        preserve_tail_turns = max(1, int(getattr(self._history_compactor, "recent_turns", 1) or 1))
+        canonical_prefix, canonical_tail = self._split_turn_tail(canonical_history, preserve_tail_turns)
+        replay_prefix, replay_tail = self._split_turn_tail(replay_history or canonical_history, preserve_tail_turns)
+
+        tail_tokens = self._counter.count_messages(replay_tail) if replay_tail else 0
+        prefix_budget = max(0, history_budget - tail_tokens)
+        compacted_prefix = self._history_compactor.compact(canonical_prefix, max_tokens=prefix_budget)
+        compacted_canonical = [*compacted_prefix, *canonical_tail]
+        history_was_compacted = compacted_canonical != canonical_history
+
+        if history_converter is None:
+            replay_prefix_messages = self._copy_history_entries(compacted_prefix, newest_first=False)
+        else:
+            replay_prefix_messages = self._copy_history_entries(
+                history_converter(compacted_prefix),
+                newest_first=False,
+            )
+        replay_messages = [*replay_prefix_messages, *replay_tail]
+
+        if self._counter.count_messages(replay_messages) > history_budget:
+            overflow = self._counter.count_messages(replay_messages) - history_budget
+            if replay_prefix_messages:
+                reduced_budget = max(0, prefix_budget - overflow)
+                compacted_prefix = self._history_compactor.compact(canonical_prefix, max_tokens=reduced_budget)
+                compacted_canonical = [*compacted_prefix, *canonical_tail]
+                if history_converter is None:
+                    replay_prefix_messages = self._copy_history_entries(compacted_prefix, newest_first=False)
+                else:
+                    replay_prefix_messages = self._copy_history_entries(
+                        history_converter(compacted_prefix),
+                        newest_first=False,
+                    )
+                replay_messages = [*replay_prefix_messages, *replay_tail]
+
+        return replay_messages, compacted_canonical, history_was_compacted
 
     def _assemble_messages(
         self,
@@ -380,6 +524,36 @@ class ContextBuilder:
             normalized.append({"role": str(role), "content": content})
 
         return normalized
+
+    def _group_turns(self, history: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        turns: List[List[Dict[str, Any]]] = []
+        current: List[Dict[str, Any]] = []
+        for message in history:
+            role = message.get("role")
+            if role == "user" and current:
+                turns.append(current)
+                current = [message]
+            else:
+                current.append(message)
+        if current:
+            turns.append(current)
+        return turns
+
+    def _split_turn_tail(
+        self,
+        history: List[Dict[str, Any]],
+        preserve_tail_turns: int,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        if not history:
+            return [], []
+        turns = self._group_turns(history)
+        if preserve_tail_turns <= 0 or preserve_tail_turns >= len(turns):
+            return [], self._copy_history_entries(history, newest_first=False)
+        prefix_turns = turns[:-preserve_tail_turns]
+        tail_turns = turns[-preserve_tail_turns:]
+        prefix = [message for turn in prefix_turns for message in turn]
+        tail = [message for turn in tail_turns for message in turn]
+        return self._copy_history_entries(prefix, newest_first=False), self._copy_history_entries(tail, newest_first=False)
 
     @staticmethod
     def _make_json_copy(value: Any) -> Any:

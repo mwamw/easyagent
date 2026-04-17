@@ -13,236 +13,200 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm import EasyLLM
-from core.providers.anthropic_provider import AnthropicProvider
-from core.providers.google_provider import GoogleProvider
-from core.providers.openai_provider import OpenAIProvider
-from core.providers.openai_responses_provider import OpenAIResponsesProvider
+from core.providers import AnthropicProvider, GoogleProvider, OpenAIProvider, OpenAIResponsesProvider, create_codec
 from Tool.ToolRegistry import ToolRegistry
 
 
 class EchoParams(BaseModel):
     text: str
+
+
+def _openai_text_chunk(text: str = "", *, finish_reason=None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=text, reasoning_content=None, reasoning=None, tool_calls=None),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
+
+
+def _openai_reasoning_chunk(text: str):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content="", reasoning_content=text, reasoning=None, tool_calls=None),
+                finish_reason=None,
+            )
+        ]
+    )
+
+
+def _openai_tool_call_chunk(tool_id: str, name: str, arguments: str, *, finish_reason="stop"):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(
+                    content="",
+                    reasoning_content=None,
+                    reasoning=None,
+                    tool_calls=[
+                        SimpleNamespace(
+                            index=0,
+                            id=tool_id,
+                            function=SimpleNamespace(name=name, arguments=arguments),
+                        )
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
  
 
 class ScriptedStreamingProvider:
     def __init__(self):
         self.round = 0
 
-    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
+
+    def _round_chunks(self):
         if self.round == 0:
             self.round += 1
-            yield {"type": "thinking_delta", "delta": "need tool"}
-            yield {
-                "type": "tool_calls",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "name": "echo",
-                        "arguments": "{\"text\": \"ping\"}",
-                    }
-                ],
-                "content": "",
-                "thinking": "need tool",
-            }
-            return
+            return [
+                _openai_reasoning_chunk("need tool"),
+                _openai_tool_call_chunk("call_1", "echo", "{\"text\": \"ping\"}"),
+            ]
+        return [
+            _openai_text_chunk("pong", finish_reason="stop"),
+        ]
 
-        yield {"type": "text_delta", "delta": "pong"}
-        yield {"type": "final_response", "content": "pong", "thinking": ""}
+    def stream_raw(self, request):
+        return list(self._round_chunks())
 
-    def format_tool_result(self, content, tool_id, tool_name):
-        return {
-            "role": "tool",
-            "content": content,
-            "tool_call_id": tool_id,
-        }
-
-    def format_assistant_message(self, content=None, tool_calls=None):
-        return {
-            "role": "assistant",
-            "content": content or "",
-            "tool_calls": [
-                {
-                    "id": tool_call["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tool_call["name"],
-                        "arguments": tool_call["arguments"],
-                    },
-                }
-                for tool_call in (tool_calls or [])
-            ],
-        }
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self._round_chunks():
+                yield item
+        return _stream()
 
 
 class ScriptedStreamingProviderNoThinking:
     def __init__(self):
         self.round = 0
 
-    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
+
+    def _round_chunks(self):
         if self.round == 0:
             self.round += 1
-            yield {
-                "type": "tool_calls",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "name": "echo",
-                        "arguments": "{\"text\": \"ping\"}",
-                    }
-                ],
-                "content": "准备调用工具",
-                "thinking": "",
-            }
-            return
+            return [
+                _openai_text_chunk("准备调用工具"),
+                _openai_tool_call_chunk("call_1", "echo", "{\"text\": \"ping\"}"),
+            ]
+        return [_openai_text_chunk("pong", finish_reason="stop")]
 
-        yield {"type": "final_response", "content": "pong", "thinking": ""}
+    def stream_raw(self, request):
+        return list(self._round_chunks())
 
-    def format_tool_result(self, content, tool_id, tool_name):
-        return {
-            "role": "tool",
-            "content": content,
-            "tool_call_id": tool_id,
-        }
-
-    def format_assistant_message(self, content=None, tool_calls=None):
-        return {
-            "role": "assistant",
-            "content": content or "",
-            "tool_calls": [
-                {
-                    "id": tool_call["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tool_call["name"],
-                        "arguments": tool_call["arguments"],
-                    },
-                }
-                for tool_call in (tool_calls or [])
-            ],
-        }
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self._round_chunks():
+                yield item
+        return _stream()
 
 
 class ScriptedStreamingProviderWithAssistantItems:
-    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
-        yield {
-            "type": "round_start",
-            "round": 1,
-        }
-        yield {
-            "type": "tool_calls",
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "name": "echo",
-                    "arguments": "{\"text\": \"ping\"}",
-                }
-            ],
-            "content": "我先计算",
-            "thinking": "",
-            "assistant_items": [
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": "我先计算"},
-                    ],
-                },
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "echo",
-                    "arguments": "{\"text\": \"ping\"}",
-                },
-            ],
-        }
-        yield {
-            "type": "round_start",
-            "round": 2,
-        }
-        yield {"type": "final_response", "content": "pong", "thinking": ""}
+    def __init__(self):
+        self.round = 0
 
-    def format_tool_result(self, content, tool_id, tool_name):
-        return {
-            "type": "function_call_output",
-            "call_id": tool_id,
-            "output": content,
-        }
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
 
-    def format_assistant_message(self, content=None, tool_calls=None):
-        return {
-            "role": "assistant",
-            "content": content or "",
-            "tool_calls": tool_calls or [],
-        }
+    def _round_events(self):
+        if self.round == 0:
+            self.round += 1
+            return [
+                SimpleNamespace(
+                    type="response.output_item.done",
+                    item=SimpleNamespace(
+                        type="message",
+                        id="msg_1",
+                        role="assistant",
+                        content=[SimpleNamespace(type="output_text", text="我先计算")],
+                    ),
+                ),
+                SimpleNamespace(
+                    type="response.output_item.done",
+                    item=SimpleNamespace(
+                        type="function_call",
+                        id="fc_1",
+                        call_id="call_1",
+                        name="echo",
+                        arguments="{\"text\": \"ping\"}",
+                    ),
+                ),
+                SimpleNamespace(type="response.completed", response=None),
+            ]
+        return [
+            SimpleNamespace(type="response.output_text.delta", delta="pong"),
+            SimpleNamespace(
+                type="response.output_item.done",
+                item=SimpleNamespace(
+                    type="message",
+                    id="msg_2",
+                    role="assistant",
+                    content=[SimpleNamespace(type="output_text", text="pong")],
+                    phase="final_answer",
+                ),
+            ),
+            SimpleNamespace(type="response.completed", response=None),
+        ]
+
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self._round_events():
+                yield item
+        return _stream()
 
 
 class ScriptedStreamingProviderMultiToolRounds:
     def __init__(self):
         self.round = 0
 
-    async def async_stream_with_tools(self, messages, tools, temperature=None, **kwargs):
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
+
+    def _round_chunks(self):
         if self.round == 0:
             self.round += 1
-            yield {"type": "thinking_delta", "delta": "先翻译"}
-            yield {
-                "type": "tool_calls",
-                "tool_calls": [
-                    {
-                        "id": "call_translate",
-                        "name": "translate_tool",
-                        "arguments": "{\"text\": \"你是谁，在哪里\", \"target_lang\": \"en\"}",
-                    }
-                ],
-                "content": "",
-                "thinking": "先翻译",
-            }
-            return
-
+            return [
+                _openai_reasoning_chunk("先翻译"),
+                _openai_tool_call_chunk(
+                    "call_translate",
+                    "translate_tool",
+                    "{\"text\": \"你是谁，在哪里\", \"target_lang\": \"en\"}",
+                ),
+            ]
         if self.round == 1:
             self.round += 1
-            yield {
-                "type": "tool_calls",
-                "tool_calls": [
-                    {
-                        "id": "call_calculator",
-                        "name": "calculator",
-                        "arguments": "{\"expression\": \"3**22\"}",
-                    }
-                ],
-                "content": "",
-                "thinking": "",
-            }
-            return
+            return [
+                _openai_tool_call_chunk(
+                    "call_calculator",
+                    "calculator",
+                    "{\"expression\": \"3**22\"}",
+                ),
+            ]
+        return [_openai_text_chunk("全部完成", finish_reason="stop")]
 
-        yield {"type": "final_response", "content": "全部完成", "thinking": ""}
-
-    def format_tool_result(self, content, tool_id, tool_name):
-        return {
-            "role": "tool",
-            "content": content,
-            "tool_call_id": tool_id,
-            "name": tool_name,
-        }
-
-    def format_assistant_message(self, content=None, tool_calls=None, thinking=None):
-        message = {
-            "role": "assistant",
-            "content": content,
-            "tool_calls": [
-                {
-                    "id": tool_call["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tool_call["name"],
-                        "arguments": tool_call["arguments"],
-                    },
-                }
-                for tool_call in (tool_calls or [])
-            ],
-        }
-        if thinking:
-            message["reasoning_content"] = thinking
-        return message
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self._round_chunks():
+                yield item
+        return _stream()
 
 
 class DummyLLM(EasyLLM):
@@ -256,33 +220,28 @@ class DummyLLM(EasyLLM):
 
 
 class PlainStreamingProvider:
-    def stream(self, messages, temperature=None, **kwargs):
-        yield "hello "
-        yield "world"
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
 
-    async def async_stream(self, messages, temperature=None, **kwargs):
-        yield "hello "
-        yield "world"
+    def stream_raw(self, request):
+        return [
+            _openai_text_chunk("hello "),
+            _openai_text_chunk("world", finish_reason="stop"),
+        ]
+
+    async def async_stream_raw(self, request):
+        async def _stream():
+            for item in self.stream_raw(request):
+                yield item
+        return _stream()
 
 
 class PlainThinkingProvider:
-    def invoke_raw(self, messages, temperature=None, **kwargs):
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
+
+    def invoke_raw(self, request):
         return SimpleNamespace(content="hello", reasoning_content="先想一想")
-
-    def get_response_content(self, response):
-        return getattr(response, "content", "")
-
-    def get_thinking_content(self, response):
-        return getattr(response, "reasoning_content", None)
-
-    def format_assistant_response(self, response, include_reasoning=False):
-        message = {
-            "role": "assistant",
-            "content": getattr(response, "content", ""),
-        }
-        if include_reasoning:
-            message["reasoning_content"] = getattr(response, "reasoning_content", "")
-        return message
 
 
 class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
@@ -329,7 +288,8 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tool_result", trace_types)
         self.assertEqual(trace_types[-1], "turn_end")
         history = agent.get_history()
-        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[0]["role"], "user")
+        self.assertEqual(history[0]["content"], "say hi")
         self.assertEqual(history[1]["tool_calls"][0]["function"]["name"], "echo")
         self.assertEqual(history[2]["tool_call_id"], "call_1")
         self.assertEqual(history[3]["role"], "assistant")
@@ -398,6 +358,7 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
             return text
 
         llm = DummyLLM(ScriptedStreamingProviderWithAssistantItems())
+        llm.provider_name = "openai_responses"
         agent = BasicAgent(
             name="streamer",
             llm=llm,
@@ -409,7 +370,8 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
             pass
 
         history = agent.get_history()
-        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[0]["role"], "user")
+        self.assertEqual(history[0]["content"], "say hi")
         self.assertEqual(history[1]["type"], "message")
         self.assertEqual(history[2]["type"], "function_call")
         self.assertEqual(history[3]["type"], "function_call_output")
@@ -586,7 +548,8 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "hello")
         history = agent.get_history()
-        self.assertEqual(history[0].role, "user")
+        self.assertEqual(history[0]["role"], "user")
+        self.assertEqual(history[0]["content"], "say hi")
         self.assertEqual(history[1]["role"], "assistant")
         self.assertEqual(history[1]["content"], "hello")
         self.assertEqual(history[1]["reasoning_content"], "先想一想")
@@ -594,8 +557,8 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
 
 class TestProviderStreamingHelpers(unittest.TestCase):
     def test_openai_compatible_tool_call_aggregation(self):
-        provider = OpenAIProvider(model="mock", api_key="k", base_url="http://localhost")
-        state = provider._init_chat_tool_stream_state()
+        codec = create_codec("openai")
+        state = codec._init_chat_tool_stream_state()
 
         chunk1 = SimpleNamespace(
             choices=[
@@ -631,13 +594,13 @@ class TestProviderStreamingHelpers(unittest.TestCase):
                             )
                         ],
                     ),
-                    finish_reason="tool_calls",
+                    finish_reason="stop",
                 )
             ]
         )
 
-        events1 = provider._extract_chat_stream_events(chunk1, state)
-        events2 = provider._extract_chat_stream_events(chunk2, state)
+        events1 = codec._extract_chat_stream_events(chunk1, state)
+        events2 = codec._extract_chat_stream_events(chunk2, state)
 
         self.assertEqual(events1, [])
         self.assertEqual(events2[0]["type"], "tool_calls")
@@ -645,25 +608,25 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(events2[0]["tool_calls"][0]["arguments"], "{\"q\": \"ai\"}")
 
     def test_base_provider_thinking_does_not_fallback_to_content(self):
-        provider = OpenAIProvider(model="mock", api_key="k", base_url="http://localhost")
+        codec = create_codec("openai")
         response = SimpleNamespace(
             reasoning_content=None,
             content="normal content",
         )
 
-        self.assertIsNone(provider.get_thinking_content(response))
+        self.assertIsNone(codec.get_thinking_content(response))
 
     def test_base_provider_has_tool_calls_returns_bool(self):
-        provider = OpenAIProvider(model="mock", api_key="k", base_url="http://localhost")
+        codec = create_codec("openai")
         response = SimpleNamespace(
             tool_calls=[SimpleNamespace(id="call_1")],
         )
 
-        self.assertIs(provider.has_tool_calls(response), True)
+        self.assertIs(codec.has_tool_calls(response), True)
 
     def test_responses_provider_event_aggregation(self):
-        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
-        state = provider._init_responses_tool_stream_state()
+        codec = create_codec("openai_responses")
+        state = codec._init_responses_tool_stream_state()
 
         delta_event = SimpleNamespace(
             type="response.function_call_arguments.delta",
@@ -687,17 +650,17 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             response=None,
         )
 
-        self.assertEqual(provider._extract_responses_stream_events(delta_event, state), [])
-        self.assertEqual(provider._extract_responses_stream_events(done_event, state), [])
-        events = provider._extract_responses_stream_events(complete_event, state)
+        self.assertEqual(codec._extract_responses_stream_events(delta_event, state), [])
+        self.assertEqual(codec._extract_responses_stream_events(done_event, state), [])
+        events = codec._extract_responses_stream_events(complete_event, state)
 
         self.assertEqual(events[0]["type"], "tool_calls")
         self.assertEqual(events[0]["tool_calls"][0]["name"], "weather")
         self.assertEqual(events[0]["tool_calls"][0]["arguments"], "{\"city\": \"Beijing\"}")
 
     def test_responses_provider_event_aggregation_preserves_assistant_item_order(self):
-        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
-        state = provider._init_responses_tool_stream_state()
+        codec = create_codec("openai_responses")
+        state = codec._init_responses_tool_stream_state()
 
         message_event = SimpleNamespace(
             type="response.output_item.done",
@@ -723,21 +686,24 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             response=None,
         )
 
-        self.assertEqual(provider._extract_responses_stream_events(message_event, state), [])
-        self.assertEqual(provider._extract_responses_stream_events(function_call_event, state), [])
-        events = provider._extract_responses_stream_events(complete_event, state)
+        self.assertEqual(codec._extract_responses_stream_events(message_event, state), [])
+        self.assertEqual(codec._extract_responses_stream_events(function_call_event, state), [])
+        events = codec._extract_responses_stream_events(complete_event, state)
 
         self.assertEqual(events[0]["assistant_items"][0]["type"], "message")
         self.assertEqual(events[0]["assistant_items"][1]["type"], "function_call")
 
-    def test_responses_provider_format_assistant_response_preserves_reasoning_summary(self):
-        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
+    def test_responses_provider_format_assistant_response_preserves_reasoning_payload(self):
+        codec = create_codec("openai_responses")
         response = SimpleNamespace(
             output=[
                 SimpleNamespace(
                     type="reasoning",
                     id="rs_1",
                     summary=[SimpleNamespace(type="summary_text", text="先分析一下")],
+                    content=[SimpleNamespace(type="reasoning_text", text="完整推理")],
+                    encrypted_content="secret",
+                    status="completed",
                 ),
                 SimpleNamespace(
                     type="message",
@@ -748,21 +714,25 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             ]
         )
 
-        items = provider.format_assistant_response(response)
+        items = codec.build_assistant_response(response)
 
         self.assertEqual(len(items), 1)
         self.assertEqual(items[0]["type"], "message")
         self.assertEqual(items[0]["content"][0]["text"], "我先计算")
 
-        items_with_reasoning = provider.format_assistant_response(response, include_reasoning=True)
+        items_with_reasoning = codec.build_assistant_response(response, include_reasoning=True)
         self.assertEqual(len(items_with_reasoning), 2)
         self.assertEqual(items_with_reasoning[0]["type"], "reasoning")
+        self.assertEqual(items_with_reasoning[0]["id"], "rs_1")
         self.assertEqual(items_with_reasoning[0]["summary"][0]["text"], "先分析一下")
+        self.assertEqual(items_with_reasoning[0]["content"][0]["text"], "完整推理")
+        self.assertEqual(items_with_reasoning[0]["encrypted_content"], "secret")
+        self.assertEqual(items_with_reasoning[0]["status"], "completed")
         self.assertEqual(items_with_reasoning[1]["type"], "message")
         self.assertEqual(items_with_reasoning[1]["content"][0]["text"], "我先计算")
 
     def test_responses_provider_get_response_content_prefers_final_answer(self):
-        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
+        codec = create_codec("openai_responses")
         response = SimpleNamespace(
             output=[
                 SimpleNamespace(
@@ -781,62 +751,41 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             output_text="最终结果",
         )
 
-        self.assertEqual(provider.get_response_content(response), "最终结果")
+        self.assertEqual(codec.get_response_content(response), "最终结果")
 
-    def test_responses_provider_convert_input_preserves_reasoning_items(self):
-        converted = OpenAIResponsesProvider._convert_input(
-            [
-                {
-                    "type": "reasoning",
-                    "id": "rs_1",
-                    "summary": [{"text": "先分析一下"}],
-                    "encrypted_content": "secret",
-                },
-                {
-                    "type": "message",
-                    "id": "msg_1",
-                    "role": "assistant",
-                    "phase": "commentary",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "我先计算"}],
-                },
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "call_id": "call_1",
-                    "name": "calculator",
-                    "arguments": "{\"expression\":\"3**22\"}",
-                    "status": "completed",
-                },
-            ]
-        )
+    def test_responses_codec_prepare_messages_keeps_request_ready_items(self):
+        codec = create_codec("openai_responses")
+        source = [
+            {
+                "type": "reasoning",
+                "id": "rs_1",
+                "summary": [{"text": "先分析一下"}],
+                "encrypted_content": "secret",
+            },
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "phase": "commentary",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "我先计算"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "calculator",
+                "arguments": "{\"expression\":\"3**22\"}",
+                "status": "completed",
+            },
+        ]
 
-        self.assertEqual(
-            converted,
-            [
-                {
-                    "type": "reasoning",
-                    "id": "rs_1",
-                    "summary": [{"text": "先分析一下"}],
-                    "encrypted_content": "secret",
-                },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "我先计算"}],
-                },
-                {
-                    "type": "function_call",
-                    "call_id": "call_1",
-                    "name": "calculator",
-                    "arguments": "{\"expression\":\"3**22\"}",
-                },
-            ],
-        )
+        prepared = codec.prepare_messages(source)
+        self.assertEqual(prepared, source)
 
     def test_responses_provider_deduplicates_message_done_after_text_delta(self):
-        provider = OpenAIResponsesProvider(model="mock", api_key="k", base_url="http://localhost")
-        state = provider._init_responses_tool_stream_state()
+        codec = create_codec("openai_responses")
+        state = codec._init_responses_tool_stream_state()
 
         delta_event = SimpleNamespace(
             type="response.output_text.delta",
@@ -855,16 +804,16 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
         self.assertEqual(
-            provider._extract_responses_stream_events(delta_event, state),
+            codec._extract_responses_stream_events(delta_event, state),
             [{"type": "text_delta", "delta": "我先计算"}],
         )
-        self.assertEqual(provider._extract_responses_stream_events(message_done_event, state), [])
-        events = provider._extract_responses_stream_events(complete_event, state)
+        self.assertEqual(codec._extract_responses_stream_events(message_done_event, state), [])
+        events = codec._extract_responses_stream_events(complete_event, state)
         self.assertEqual(events[0]["content"], "我先计算")
 
     def test_google_provider_format_tool_result(self):
-        provider = GoogleProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
-        message = provider.format_tool_result("sunny", "call_1", "weather")
+        codec = create_codec("google")
+        message = codec.build_tool_result("sunny", "call_1", "weather")
 
         self.assertEqual(
             message,
@@ -877,14 +826,16 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
     def test_openai_provider_prepare_message_for_request_keeps_reasoning_content(self):
-        provider = OpenAIProvider(model="mock", api_key="k", base_url="http://localhost")
-        payload = provider.prepare_message_for_request(
-            {
-                "role": "assistant",
-                "content": "我先计算",
-                "reasoning_content": "先想一想",
-            }
-        )
+        codec = create_codec("openai")
+        payload = codec.prepare_messages(
+            [
+                {
+                    "role": "assistant",
+                    "content": "我先计算",
+                    "reasoning_content": "先想一想",
+                }
+            ]
+        )[0]
 
         self.assertEqual(
             payload,
@@ -896,8 +847,8 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
     def test_anthropic_provider_format_assistant_message(self):
-        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
-        message = provider.format_assistant_message(
+        codec = create_codec("anthropic")
+        message = codec.build_assistant_message(
             content="checking",
             tool_calls=[
                 {
@@ -923,7 +874,7 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         )
 
     def test_anthropic_provider_format_assistant_response_preserves_text_and_tool_use(self):
-        provider = AnthropicProvider(model="mock", api_key="k", base_url="http://localhost", client=object())
+        codec = create_codec("anthropic")
         response = SimpleNamespace(
             content=[
                 SimpleNamespace(type="text", text="checking"),
@@ -936,7 +887,7 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             ],
         )
 
-        message = provider.format_assistant_response(response)
+        message = codec.build_assistant_response(response)
 
         self.assertEqual(message["role"], "assistant")
         self.assertEqual(

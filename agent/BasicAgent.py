@@ -6,6 +6,7 @@ from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
+from core.request_input import ReplayRequestInput
 from .components.history_message_assembler import (
     BaseHistoryMessageAssembler,
     DefaultHistoryMessageAssembler,

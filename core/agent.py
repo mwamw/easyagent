@@ -2,7 +2,23 @@
 Agent 基类模块
 """
 from core.Exception import ToolExecutionError
-from .Message import Message
+from .Message import (
+    AssistantMessage,
+    GoogleToolMessage,
+    Message,
+    SystemMessage,
+    ToolMessage,
+    UserMessage,
+)
+from .history import (
+    CanonicalMessage,
+    ReplayHistoryState,
+    _json_safe,
+    canonical_text_content,
+    coerce_canonical_message,
+)
+from .replay_converter import canonical_to_replay_history
+from .request_input import ReplayRequestInput
 from typing import Optional, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -77,7 +93,9 @@ class BaseAgent(ABC):
         self.system_prompt = system_prompt
         self.description = description
         self.config = config or Config.from_env()
-        self.history: list[Any] = []
+        self._history: list[Any] = []
+        self.replay_history: list[Any] = []
+        self.replay_history_provider_name: Optional[str] = getattr(llm, "provider_name", None)
         
         # 回调系统
         self.callback_manager = callback_manager or CallbackManager()
@@ -232,13 +250,66 @@ class BaseAgent(ABC):
         return self.invoke(query, max_iter=max_iter, temperature=temperature, **kwargs)
     
     def _append_history_entry(self, message: Any) -> None:
-        """向 history 追加一条消息，支持 Message 或 provider-specific dict。"""
-        self.history.append(message)
-        if len(self.history) > self.config.max_history_length:
-            self.history.pop(0)
+        """向 canonical history 与 replay history 追加一条消息。"""
+        self._assert_replay_history_ready_for_current_provider()
+        canonical_entries = self.llm._get_codec().history_entry_to_canonical(message)
+        for entry in canonical_entries:
+            self._history.append(entry)
+        while len(self._history) > self.config.max_history_length:
+            self._history.pop(0)
 
-        # 触发后台记忆提炼
+        replay_entries = self._build_replay_entries(canonical_entries)
+        for entry in replay_entries:
+            self.replay_history.append(entry)
+        while len(self.replay_history) > self.config.max_history_length:
+            self.replay_history.pop(0)
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+
         self._check_and_trigger_background_memory()
+
+    def _build_replay_entries(self, message: Any) -> list[Any]:
+        messages = message if isinstance(message, list) else [message]
+        return canonical_to_replay_history(
+            list(messages),
+            getattr(self.llm, "provider_name", None),
+        )
+
+    @staticmethod
+    def _serialize_replay_entry(message: Any) -> Any:
+        if hasattr(message, "to_dict"):
+            payload = message.to_dict()
+            if isinstance(payload, dict):
+                return payload
+        if isinstance(message, dict):
+            return _json_safe(message)
+        return message
+
+    @staticmethod
+    def _deserialize_replay_entry(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            return payload
+        role = payload.get("role")
+        content = payload.get("content", "")
+        if role == "user" and isinstance(content, str) and set(payload.keys()) <= {"role", "content"}:
+            return UserMessage(content)
+        if role == "assistant" and isinstance(content, str) and set(payload.keys()) <= {"role", "content", "reasoning_content"}:
+            if "reasoning_content" not in payload:
+                return AssistantMessage(content)
+        if role == "system" and isinstance(content, str) and set(payload.keys()) <= {"role", "content"}:
+            return SystemMessage(content)
+        if role == "tool" and isinstance(content, str):
+            return ToolMessage(
+                content,
+                tool_call_id=payload.get("tool_call_id"),
+                name=payload.get("name"),
+            )
+        if role == "function" and isinstance(content, str):
+            return GoogleToolMessage(
+                content,
+                tool_call_id=payload.get("tool_call_id"),
+                name=payload.get("name"),
+            )
+        return payload
 
     def add_message(self, message: Any) -> None:
         """添加消息到历史"""
@@ -252,7 +323,13 @@ class BaseAgent(ABC):
     @staticmethod
     def _history_entry_to_role_content(message: Any) -> tuple[str, str]:
         """提取 history 条目的 role/content，用于摘要与调试。"""
+        canonical = coerce_canonical_message(message)
+        if canonical is not None:
+            return str(canonical.role), canonical.text_content()
         if isinstance(message, dict):
+            if message.get("record_type", message.get("schema")) == "canonical_message":
+                canonical = CanonicalMessage.model_validate(message)
+                return str(canonical.role), canonical.text_content()
             role = message.get("role") or message.get("type") or "unknown"
             content = message.get("content", "")
         else:
@@ -400,7 +477,9 @@ class BaseAgent(ABC):
     
     def clear_history(self) -> None:
         """清空对话历史"""
-        self.history.clear()
+        self._history.clear()
+        self.replay_history.clear()
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         self._unextracted_msg_count = 0
         logger.info("对话历史已清空")
 
@@ -408,12 +487,31 @@ class BaseAgent(ABC):
         """返回子类需要补充持久化的状态。"""
         return {
             "last_context_usage": self.get_context_usage(),
+            "replay_history_state": ReplayHistoryState(
+                provider_name=self.replay_history_provider_name,
+                messages=[
+                    self._serialize_replay_entry(message)
+                    for message in self.replay_history
+                ],
+            ).to_dict(),
         }
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         """恢复子类持久化状态。"""
         state = state or {}
         self._set_last_context_usage(state.get("last_context_usage") or {})
+        replay_state = state.get("replay_history_state") or {}
+        provider_name = replay_state.get("provider_name")
+        messages = [
+            self._deserialize_replay_entry(message)
+            for message in list(replay_state.get("messages") or [])
+        ]
+        if provider_name and provider_name == getattr(self.llm, "provider_name", None):
+            self.replay_history = messages
+            self.replay_history_provider_name = provider_name
+        else:
+            self.replay_history = []
+            self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         return None
 
     @classmethod
@@ -423,7 +521,7 @@ class BaseAgent(ABC):
 
     @staticmethod
     def _make_json_safe(value: Any) -> Any:
-        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+        return _json_safe(value)
 
     def _build_session_snapshot(self) -> dict[str, Any]:
         tool_names = []
@@ -657,7 +755,10 @@ class BaseAgent(ABC):
         agent._restore_serializable_state(snapshot.get("state") or {})
 
         conversation_store = ConversationStore(db_path=session_store.db_path)
-        agent.history = conversation_store.load_messages(session_id)
+        restored_history = conversation_store.load_messages(session_id)
+        agent._set_history_entries(restored_history, rebuild_replay=not bool(agent.replay_history))
+        if agent.replay_history_provider_name != getattr(agent.llm, "provider_name", None):
+            agent.rebuild_replay_history()
 
         missing_tools = []
         expected_tools = snapshot.get("tool_names") or []
@@ -685,8 +786,20 @@ class BaseAgent(ABC):
         return agent
 
     def get_history(self):
-        """获取对话历史"""
-        return self.history
+        """获取当前 provider 的 replay/raw history（向后兼容）。"""
+        return self.replay_history
+
+    def get_raw_history(self):
+        """获取当前 provider 的 replay/raw history。"""
+        return self.replay_history
+
+    def get_canonical_history(self):
+        """获取 canonical history。"""
+        return self._history
+
+    @property
+    def raw_history(self) -> list[Any]:
+        return self.replay_history
 
     def get_context_usage(self) -> dict[str, Any]:
         """获取最近一次 invoke 构造出的可见上下文 token 使用快照。"""
@@ -699,7 +812,79 @@ class BaseAgent(ABC):
         Returns:
             对话历史条数
         """
-        return len(self.history)
+        return len(self.replay_history)
+
+    def rebuild_replay_history(self) -> list[Any]:
+        self.replay_history = canonical_to_replay_history(
+            self._history,
+            getattr(self.llm, "provider_name", None),
+        )
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        return self.replay_history
+
+    def prepare_replay_history(self, messages: list[Any], provider_name: Optional[str] = None) -> list[Any]:
+        target_provider = provider_name or getattr(self.llm, "provider_name", None)
+        return canonical_to_replay_history(messages, target_provider)
+
+    def _set_history_entries(self, messages: list[Any], *, rebuild_replay: bool = True) -> None:
+        canonical_entries: list[Any] = []
+        for message in list(messages or []):
+            canonical_entries.extend(self.llm._get_codec().history_entry_to_canonical(message))
+        self._history = canonical_entries[-self.config.max_history_length :]
+        if rebuild_replay:
+            self.rebuild_replay_history()
+
+    def _assert_replay_history_ready_for_current_provider(self) -> None:
+        current_provider = getattr(self.llm, "provider_name", None)
+        if self._history and self.replay_history_provider_name != current_provider:
+            raise SessionError(
+                "当前 LLM provider 已变更，但 replay_history 仍属于旧 provider。请调用 change_model() 完成模型切换。"
+            )
+
+    @property
+    def history(self) -> list[Any]:
+        return self._history
+
+    @history.setter
+    def history(self, messages: list[Any]) -> None:
+        self._set_history_entries(messages, rebuild_replay=True)
+
+    def change_model(
+        self,
+        *,
+        llm: Optional[EasyLLM] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        timeout: Optional[int] = None,
+        **kwargs,
+    ) -> EasyLLM:
+        current_llm = self.llm
+        if llm is None:
+            llm_kwargs = dict(getattr(current_llm, "kwargs", {}) or {})
+            llm_kwargs.update(kwargs)
+            llm = EasyLLM(
+                model=model or getattr(current_llm, "model", None),
+                provider=provider or getattr(current_llm, "provider_name", None) or "auto",
+                api_key=api_key or getattr(current_llm, "api_key", None),
+                base_url=base_url if base_url is not None else getattr(current_llm, "base_url", None),
+                temperature=temperature if temperature is not None else getattr(current_llm, "temperature", None),
+                max_tokens=max_tokens if max_tokens is not None else getattr(current_llm, "max_tokens", None),
+                timeout=timeout if timeout is not None else getattr(current_llm, "timeout", None),
+                **llm_kwargs,
+            )
+
+        self.llm = llm
+        self.rebuild_replay_history()
+
+        if current_llm is not llm:
+            close = getattr(current_llm, "close", None)
+            if callable(close):
+                close()
+        return llm
 
     def _capture_context_usage(
         self,
@@ -746,8 +931,17 @@ class BaseAgent(ABC):
         return getattr(self.llm, "max_tokens", None)
 
     def _normalize_context_messages(self, messages: Optional[list[Any]]) -> list[dict[str, Any]]:
+        if isinstance(messages, ReplayRequestInput):
+            messages = messages.as_visible_messages()
         normalized: list[dict[str, Any]] = []
         for message in messages or []:
+            canonical = coerce_canonical_message(message)
+            if canonical is not None:
+                payload = canonical.to_dict()
+                if "content" in payload and not payload.get("content_text"):
+                    payload["content_text"] = canonical.text_content()
+                normalized.append(payload)
+                continue
             if hasattr(message, "to_dict"):
                 payload = message.to_dict()
             elif isinstance(message, dict):
