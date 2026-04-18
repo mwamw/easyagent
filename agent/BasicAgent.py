@@ -1,7 +1,6 @@
 from typing_extensions import override
 from core.agent import BaseAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage, MetaUserMessage
 from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
 from Tool.BaseTool import Tool, ToolResult
@@ -159,64 +158,6 @@ class BasicAgent(BaseAgent):
     def trace_history(self, value: list[dict[str, Any]]) -> None:
         self.trace_recorder.trace_history = list(value or [])
 
-    @staticmethod
-    def _as_history_entries(message: Any) -> list[Any]:
-        """将单条或多条 provider 消息统一展开为 history 条目列表。"""
-        if message is None:
-            return []
-        if isinstance(message, list):
-            entries: list[Any] = []
-            for item in message:
-                entries.extend(BasicAgent._as_history_entries(item))
-            return entries
-        return [message]
-
-    def _build_assistant_history_entries(
-        self,
-        *,
-        content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None,
-        thinking: Optional[str] = None,
-    ) -> list[Any]:
-        formatted = self.llm.format_assistant_message(
-            content=content,
-            tool_calls=tool_calls,
-            thinking=thinking,
-        )
-        entries = self._as_history_entries(formatted)
-        if entries:
-            return entries
-        if content:
-            return [AssistantMessage(content)]
-        return []
-
-    def _build_assistant_history_entries_from_response(
-        self,
-        response: Any,
-        *,
-        include_reasoning: bool = True,
-        fallback_content: Optional[str] = None,
-        fallback_thinking: Optional[str] = None,
-    ) -> list[Any]:
-        provider_content = self.llm.get_response_content(response)
-        provider_thinking = (
-            fallback_thinking
-            if fallback_thinking is not None
-            else self.llm.get_thinking_content(response)
-        )
-        if fallback_content is None or provider_content == fallback_content:
-            formatted = self.llm.format_assistant_response(
-                response,
-                include_reasoning=include_reasoning,
-            )
-            entries = self._as_history_entries(formatted)
-            if entries:
-                return entries
-        return self._build_assistant_history_entries(
-            content=fallback_content if fallback_content is not None else provider_content,
-            thinking=provider_thinking if include_reasoning else None,
-        )
-
     def _begin_trace_turn(self, raw_query: str) -> tuple[str, str]:
         return self.trace_recorder.begin_turn(raw_query)
 
@@ -369,8 +310,10 @@ class BasicAgent(BaseAgent):
         parent_id: Optional[str],
         mode: str,
         stream: bool,
-        turn_history: Optional[list[Any]] = None,
-        tool_message: Optional[Any] = None,
+        turn_canonical_history: Optional[list[Any]] = None,
+        turn_replay_history: Optional[list[Any]] = None,
+        tool_canonical: Optional[list[Any]] = None,
+        tool_replay: Optional[list[Any]] = None,
     ) -> ToolInterruption:
         result_text = tool_result.to_display_string()
         result_event_id = self._record_tool_result(
@@ -385,10 +328,12 @@ class BasicAgent(BaseAgent):
             stream=stream,
             success=False,
         )
-        if turn_history is not None:
-            if tool_message is not None:
-                turn_history.append(tool_message)
-            self.add_messages(turn_history)
+        if turn_canonical_history is not None and turn_replay_history is not None:
+            if tool_canonical:
+                turn_canonical_history.extend(tool_canonical)
+            if tool_replay:
+                turn_replay_history.extend(tool_replay)
+            self._append_dual_history(turn_canonical_history, turn_replay_history)
         self._record_turn_end(
             turn_id,
             final_event_id=result_event_id,
@@ -473,7 +418,6 @@ class BasicAgent(BaseAgent):
     def invoke_with_tool(
         self,
         query: str,
-        messages: list[Message | dict[str, str]],
         max_iter: int = 10,
         temperature: float = 0.7,
         trace_query: Optional[str] = None,
@@ -482,7 +426,6 @@ class BasicAgent(BaseAgent):
         return self.tool_loop_engine.invoke(
             self,
             query,
-            messages,
             max_iter=max_iter,
             temperature=temperature,
             trace_query=trace_query,
@@ -501,7 +444,6 @@ class BasicAgent(BaseAgent):
     async def ainvoke_with_tool(
         self,
         query: str,
-        messages: list[Message | dict[str, str]],
         max_iter: int = 10,
         temperature: float = 0.7,
         trace_query: Optional[str] = None,
@@ -510,7 +452,6 @@ class BasicAgent(BaseAgent):
         return await self.tool_loop_engine.ainvoke(
             self,
             query,
-            messages,
             max_iter=max_iter,
             temperature=temperature,
             trace_query=trace_query,
@@ -666,10 +607,10 @@ class BasicAgent(BaseAgent):
     def _context_include_history(self) -> bool:
         return self.history_message_assembler.context_include_history(self)
 
-    def _append_runtime_history(self, messages: list[Message | dict[str, str]]) -> None:
+    def _append_runtime_history(self, messages: list[dict[str, str]]) -> None:
         self.history_message_assembler.append_runtime_history(self, messages)
 
-    def _build_start_messages(self, query: str) -> list[Any]:
+    def _build_start_messages(self, query: str) -> ReplayRequestInput|None:
         return self.history_message_assembler.build_start_messages(self, query)
 
         

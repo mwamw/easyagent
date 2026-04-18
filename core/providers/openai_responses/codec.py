@@ -98,8 +98,150 @@ def _canonical_from_responses(message: Any, provider_name: str) -> list[Canonica
 
 
 class OpenAIResponsesCodec(BaseProviderCodec):
+    def build_request_token_payload(
+        self,
+        replay_history: list[Any],
+        *,
+        system_prompt: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        pending_messages: Optional[list[Any]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        payload: dict[str, Any] = {
+            "input": [_json_safe(item) for item in replay_history],
+        }
+        if pending_messages:
+            payload["input"].extend(_json_safe(item) for item in pending_messages)
+        if system_prompt:
+            payload["instructions"] = system_prompt
+        if tools:
+            payload["tools"] = _json_safe(tools)
+        if reasoning:
+            payload["reasoning"] = _json_safe(reasoning)
+        return payload
+
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _canonical_from_responses(message, self.provider_name)
+
+    def query_to_replay(self, query: str) -> list[Any]:
+        return [{"role": "user", "content": query}]
+
+    def response_to_replay(self, response: Any, *, include_reasoning: bool = False) -> list[Any]:
+        output = getattr(response, "output", None)
+        if not output:
+            content = getattr(response, "output_text", None)
+            if content:
+                return [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": content}],
+                    }
+                ]
+            return []
+        items: list[Any] = []
+        for item in output:
+            serialized = self._serialize_assistant_history_item(item, include_reasoning=include_reasoning)
+            if serialized is not None:
+                items.append(serialized)
+        return items
+
+    def response_to_canonical(self, response: Any, *, include_reasoning: bool = False) -> list[CanonicalMessage]:
+        entries: list[CanonicalMessage] = []
+        for item in self.response_to_replay(response, include_reasoning=include_reasoning):
+            entries.extend(self.history_entry_to_canonical(item))
+        return entries
+
+    def tool_result_to_canonical(self, content: str, tool_id: str, tool_name: str) -> list[CanonicalMessage]:
+        return [
+            CanonicalMessage(
+                role="tool",
+                content=[
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=tool_id,
+                        name=tool_name or None,
+                        output=content,
+                        payload={"type": "function_call_output", "call_id": tool_id, "output": content},
+                        metadata={"provider_block_type": "function_call_output"},
+                    )
+                ],
+                provider=self.provider_name,
+                provider_message_type="function_call_output",
+            )
+        ]
+
+    def canonical_message_to_replay(self, message: Any) -> list[Any]:
+        canonical = coerce_canonical_message(message)
+        if canonical is None:
+            entries: list[Any] = []
+            for entry in self.history_entry_to_canonical(message):
+                entries.extend(self.canonical_message_to_replay(entry))
+            return entries
+
+        items: list[Any] = []
+        text_fragments: list[str] = []
+
+        for block in canonical.content:
+            payload = block.payload if isinstance(block.payload, dict) else None
+            if block.type == "text" and block.text:
+                text_fragments.append(block.text)
+                continue
+            if block.type == "reasoning":
+                if isinstance(payload, dict) and payload.get("type") == "reasoning":
+                    items.append(dict(payload))
+                else:
+                    item: dict[str, Any] = {"type": "reasoning"}
+                    if block.text:
+                        item["summary"] = [{"type": "summary_text", "text": block.text}]
+                    if block.signature:
+                        item["signature"] = block.signature
+                    items.append(item)
+                continue
+            if block.type == "function_call":
+                if isinstance(payload, dict) and payload.get("type") == "function_call":
+                    items.append(dict(payload))
+                else:
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": block.call_id,
+                            "name": block.name or "",
+                            "arguments": block.arguments if isinstance(block.arguments, str) else json.dumps(block.arguments, ensure_ascii=False, default=str),
+                        }
+                    )
+                continue
+            if block.type == "function_response":
+                if isinstance(payload, dict) and payload.get("type") == "function_call_output":
+                    items.append(dict(payload))
+                else:
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block.call_id,
+                            "output": _json_safe(block.output),
+                        }
+                    )
+                continue
+            if block.type == "provider_item" and isinstance(payload, dict):
+                items.append(dict(payload))
+
+        if text_fragments:
+            text = "".join(text_fragments)
+            if canonical.role == "assistant":
+                items.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}],
+                    }
+                )
+            else:
+                items.append({"role": canonical.role, "content": text})
+
+        if not items:
+            items.append({"role": canonical.role, "content": ""})
+        return items
 
     def is_request_ready_message(self, message: Any) -> bool:
         if not isinstance(message, dict):

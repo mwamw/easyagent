@@ -2,14 +2,6 @@
 Agent 基类模块
 """
 from core.Exception import ToolExecutionError
-from .Message import (
-    AssistantMessage,
-    GoogleToolMessage,
-    Message,
-    SystemMessage,
-    ToolMessage,
-    UserMessage,
-)
 from .history import (
     CanonicalMessage,
     ReplayHistoryState,
@@ -17,7 +9,6 @@ from .history import (
     canonical_text_content,
     coerce_canonical_message,
 )
-from .replay_converter import canonical_to_replay_history
 from .request_input import ReplayRequestInput
 from typing import Optional, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
@@ -43,6 +34,38 @@ if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
 
 logger = logging.getLogger(__name__)
+
+
+def _build_context_usage_payload(
+    *,
+    label: str,
+    request_tokens: int,
+    max_tokens: Optional[int],
+    compaction: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    budget = max_tokens
+    remaining_tokens = (budget - request_tokens) if budget is not None else None
+    overflow_tokens = max(0, request_tokens - budget) if budget is not None else 0
+    compaction = dict(compaction or {})
+    tokens_before = int(compaction.get("tokens_before", request_tokens) or request_tokens)
+    tokens_after = int(compaction.get("tokens_after", request_tokens) or request_tokens)
+    overflow_before = max(0, tokens_before - budget) if budget is not None else 0
+    overflow_after = max(0, tokens_after - budget) if budget is not None else 0
+    return {
+        "label": label,
+        "request_tokens": request_tokens,
+        "used_tokens": request_tokens,
+        "remaining_tokens": remaining_tokens,
+        "overflow_tokens": overflow_tokens,
+        "max_tokens": budget,
+        "request_compacted": bool(compaction.get("was_compacted", False)),
+        "request_compaction_possible": bool(compaction.get("compaction_possible", False)),
+        "request_tokens_before_compaction": tokens_before,
+        "request_tokens_after_compaction": tokens_after,
+        "overflow_tokens_before_compaction": overflow_before,
+        "overflow_tokens_after_compaction": overflow_after,
+        "tracked_at": datetime.now().isoformat(),
+    }
 
 
 class BaseAgent(ABC):
@@ -75,6 +98,7 @@ class BaseAgent(ABC):
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
         skill_manager: Optional["SkillManager"] = None,
+        reasoning: Optional[dict[str, Any]] = None,
     ):
         """
         初始化 Agent
@@ -89,6 +113,7 @@ class BaseAgent(ABC):
             callback_manager: 回调管理器（可选）
         """
         self.name = name
+        self.reasoning = reasoning
         self.llm = llm
         self.system_prompt = system_prompt
         self.description = description
@@ -248,28 +273,81 @@ class BaseAgent(ABC):
     async def ainvoke(self, query: str, max_iter: int=10, temperature: float=0.7, **kwargs) -> str:
         """异步执行 Agent（子类可覆写，默认回退到同步）"""
         return self.invoke(query, max_iter=max_iter, temperature=temperature, **kwargs)
-    
-    def _append_history_entry(self, message: Any) -> None:
-        """向 canonical history 与 replay history 追加一条消息。"""
+
+    def _append_dual_history(
+        self,
+        canonical_entries: list[Any],
+        replay_entries: list[Any],
+    ) -> None:
         self._assert_replay_history_ready_for_current_provider()
-        canonical_entries = self.llm._get_codec().history_entry_to_canonical(message)
+        provider_name = getattr(self.llm, "provider_name", None)
         for entry in canonical_entries:
             self._history.append(entry)
         while len(self._history) > self.config.max_history_length:
             self._history.pop(0)
 
-        replay_entries = self._build_replay_entries(canonical_entries)
         for entry in replay_entries:
-            self.replay_history.append(entry)
+            self.llm.append_replay_entry(self.replay_history, entry, provider_name)
         while len(self.replay_history) > self.config.max_history_length:
             self.replay_history.pop(0)
-        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
-
+        self.replay_history_provider_name = provider_name
         self._check_and_trigger_background_memory()
+
+    def _append_query_history(self, query: str) -> None:
+        self._append_dual_history(
+            self.llm.query_to_canonical(query),
+            self.llm.query_to_replay(query),
+        )
+
+    def _append_response_history(
+        self,
+        response: Any,
+        *,
+        include_reasoning: bool = True,
+    ) -> None:
+        self._append_dual_history(
+            self.llm.response_to_canonical(response, include_reasoning=include_reasoning),
+            self.llm.response_to_replay(response, include_reasoning=include_reasoning),
+        )
+
+    def _append_assistant_message_history(
+        self,
+        *,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
+    ) -> None:
+        self._append_dual_history(
+            self.llm.assistant_message_to_canonical(
+                content=content,
+                tool_calls=tool_calls,
+                thinking=thinking,
+            ),
+            self.llm.assistant_message_to_replay(
+                content=content,
+                tool_calls=tool_calls,
+                thinking=thinking,
+            ),
+        )
+
+    def _append_tool_result_history(self, content: str, tool_id: str, tool_name: str) -> None:
+        self._append_dual_history(
+            self.llm.tool_result_to_canonical(content, tool_id, tool_name),
+            self.llm.tool_result_to_replay(content, tool_id, tool_name),
+        )
+    
+    def _append_history_entries(self, messages: list[Any]) -> None:
+        """向 canonical history 与 replay history 批量追加消息。"""
+        self._assert_replay_history_ready_for_current_provider()
+        canonical_entries: list[Any] = []
+        for message in list(messages or []):
+            canonical_entries.extend(self.llm.history_entry_to_canonical(message))
+        replay_entries = self._build_replay_entries(canonical_entries)
+        self._append_dual_history(canonical_entries, replay_entries)
 
     def _build_replay_entries(self, message: Any) -> list[Any]:
         messages = message if isinstance(message, list) else [message]
-        return canonical_to_replay_history(
+        return self.llm.canonical_to_replay_history(
             list(messages),
             getattr(self.llm, "provider_name", None),
         )
@@ -286,39 +364,15 @@ class BaseAgent(ABC):
 
     @staticmethod
     def _deserialize_replay_entry(payload: Any) -> Any:
-        if not isinstance(payload, dict):
-            return payload
-        role = payload.get("role")
-        content = payload.get("content", "")
-        if role == "user" and isinstance(content, str) and set(payload.keys()) <= {"role", "content"}:
-            return UserMessage(content)
-        if role == "assistant" and isinstance(content, str) and set(payload.keys()) <= {"role", "content", "reasoning_content"}:
-            if "reasoning_content" not in payload:
-                return AssistantMessage(content)
-        if role == "system" and isinstance(content, str) and set(payload.keys()) <= {"role", "content"}:
-            return SystemMessage(content)
-        if role == "tool" and isinstance(content, str):
-            return ToolMessage(
-                content,
-                tool_call_id=payload.get("tool_call_id"),
-                name=payload.get("name"),
-            )
-        if role == "function" and isinstance(content, str):
-            return GoogleToolMessage(
-                content,
-                tool_call_id=payload.get("tool_call_id"),
-                name=payload.get("name"),
-            )
-        return payload
+        return _json_safe(payload)
 
     def add_message(self, message: Any) -> None:
         """添加消息到历史"""
-        self._append_history_entry(message)
+        self._append_history_entries([message])
 
     def add_messages(self, messages: list[Any]) -> None:
         """批量添加消息到历史。"""
-        for message in messages:
-            self._append_history_entry(message)
+        self._append_history_entries(messages)
 
     @staticmethod
     def _history_entry_to_role_content(message: Any) -> tuple[str, str]:
@@ -461,13 +515,11 @@ class BaseAgent(ABC):
     
     def add_user_message(self, content: str) -> None:
         """添加用户消息"""
-        from .Message import UserMessage
-        self.add_message(UserMessage(content))
+        self._append_query_history(content)
     
     def add_assistant_message(self, content: str) -> None:
         """添加助手消息"""
-        from .Message import AssistantMessage
-        self.add_message(AssistantMessage(content))
+        self._append_assistant_message_history(content=content)
     
     def add_context_source(self, source:BaseContextSource) -> None:
         """添加上下文来源"""
@@ -482,6 +534,89 @@ class BaseAgent(ABC):
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         self._unextracted_msg_count = 0
         logger.info("对话历史已清空")
+
+    def _request_budget_max_tokens(self) -> Optional[int]:
+        if self.context_manager is not None:
+            return self.context_manager.budget.max_tokens
+        if self.config.max_tokens is not None:
+            return self.config.max_tokens
+        return getattr(self.llm, "max_tokens", None)
+
+    def compact_request_input_if_needed(
+        self,
+        request_input: Any,
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        if self.context_manager is None or not isinstance(request_input, ReplayRequestInput):
+            return request_input
+        budget = self._request_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return request_input
+        self.context_manager.compact_request_input(
+            request_input,
+            tools=tools,
+            reasoning=reasoning,
+            max_tokens=budget,
+        )
+        return request_input
+
+    async def acompact_request_input_if_needed(
+        self,
+        request_input: Any,
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        if self.context_manager is None or not isinstance(request_input, ReplayRequestInput):
+            return request_input
+        budget = self._request_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return request_input
+        await self.context_manager.acompact_request_input(
+            request_input,
+            tools=tools,
+            reasoning=reasoning,
+            max_tokens=budget,
+        )
+        return request_input
+
+    def compact_persistent_history_if_needed(self) -> bool:
+        if self.context_manager is None or not self._history:
+            return False
+        result = self.context_manager.compact_persistent_history(
+            self._history,
+            self.replay_history,
+            provider_name=getattr(self.llm, "provider_name", None),
+            system_prompt=self.get_enhanced_prompt(),
+            tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+            reasoning=self.reasoning,
+        )
+        if not result.was_compacted:
+            return False
+        self._history = list(result.canonical_history)
+        self.replay_history = list(result.replay_history)
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        return True
+
+    async def acompact_persistent_history_if_needed(self) -> bool:
+        if self.context_manager is None or not self._history:
+            return False
+        result = await self.context_manager.acompact_persistent_history(
+            self._history,
+            self.replay_history,
+            provider_name=getattr(self.llm, "provider_name", None),
+            system_prompt=self.get_enhanced_prompt(),
+            tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+            reasoning=self.reasoning,
+        )
+        if not result.was_compacted:
+            return False
+        self._history = list(result.canonical_history)
+        self.replay_history = list(result.replay_history)
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        return True
 
     def _get_serializable_state(self) -> dict[str, Any]:
         """返回子类需要补充持久化的状态。"""
@@ -803,6 +938,8 @@ class BaseAgent(ABC):
 
     def get_context_usage(self) -> dict[str, Any]:
         """获取最近一次 invoke 构造出的可见上下文 token 使用快照。"""
+
+        
         return self._make_json_safe(self._last_context_usage)
 
     def get_history_length(self) -> int:
@@ -815,7 +952,7 @@ class BaseAgent(ABC):
         return len(self.replay_history)
 
     def rebuild_replay_history(self) -> list[Any]:
-        self.replay_history = canonical_to_replay_history(
+        self.replay_history = self.llm.canonical_to_replay_history(
             self._history,
             getattr(self.llm, "provider_name", None),
         )
@@ -824,12 +961,12 @@ class BaseAgent(ABC):
 
     def prepare_replay_history(self, messages: list[Any], provider_name: Optional[str] = None) -> list[Any]:
         target_provider = provider_name or getattr(self.llm, "provider_name", None)
-        return canonical_to_replay_history(messages, target_provider)
+        return self.llm.canonical_to_replay_history(messages, target_provider)
 
     def _set_history_entries(self, messages: list[Any], *, rebuild_replay: bool = True) -> None:
         canonical_entries: list[Any] = []
         for message in list(messages or []):
-            canonical_entries.extend(self.llm._get_codec().history_entry_to_canonical(message))
+            canonical_entries.extend(self.llm.history_entry_to_canonical(message))
         self._history = canonical_entries[-self.config.max_history_length :]
         if rebuild_replay:
             self.rebuild_replay_history()
@@ -890,27 +1027,50 @@ class BaseAgent(ABC):
         self,
         messages: list[Any],
         *,
-        label: str = "visible_messages",
+        label: str = "messages",
+        tools: Optional[list[dict[str, Any]]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
         """记录最近一次发送给 LLM 的可见上下文使用情况。"""
         if self.context_manager is not None:
-            usage = self.context_manager.update_last_usage(messages, label=label)
+            usage = self.context_manager.update_last_usage(
+                messages,
+                label=label,
+                tools=tools,
+                reasoning=reasoning,
+            )
             self._set_last_context_usage(usage)
             return usage
 
-        normalized = self._normalize_context_messages(messages)
         max_tokens = self._resolve_context_budget_max_tokens()
-        used_tokens = self._context_usage_counter.count_messages(normalized)
-        remaining_tokens = max(0, max_tokens - used_tokens) if max_tokens is not None else None
-        usage = {
-            "label": label,
-            "message_count": len(normalized),
-            "used_tokens": used_tokens,
-            "remaining_tokens": remaining_tokens,
-            "max_tokens": max_tokens,
-            "history_compacted": False,
-            "tracked_at": datetime.now().isoformat(),
-        }
+        if isinstance(messages, ReplayRequestInput):
+            request_tokens = self.llm.count_request_tokens(
+                self._context_usage_counter,
+                messages.replay_history,
+                system_prompt=messages.system_prompt,
+                tools=tools,
+                reasoning=reasoning,
+            )
+            compaction = {}
+            if self.context_manager is not None:
+                compaction = self.context_manager.last_request_compaction
+            usage = _build_context_usage_payload(
+                label=label,
+                request_tokens=request_tokens,
+                max_tokens=max_tokens,
+                compaction=compaction,
+            )
+        else:
+            used_tokens = self._context_usage_counter.count_messages(messages)
+            compaction = {}
+            if self.context_manager is not None:
+                compaction = self.context_manager.last_request_compaction
+            usage = _build_context_usage_payload(
+                label=label,
+                request_tokens=used_tokens,
+                max_tokens=max_tokens,
+                compaction=compaction,
+            )
         self._set_last_context_usage(usage)
         return usage
 
@@ -930,34 +1090,6 @@ class BaseAgent(ABC):
             return self.config.max_tokens
         return getattr(self.llm, "max_tokens", None)
 
-    def _normalize_context_messages(self, messages: Optional[list[Any]]) -> list[dict[str, Any]]:
-        if isinstance(messages, ReplayRequestInput):
-            messages = messages.as_visible_messages()
-        normalized: list[dict[str, Any]] = []
-        for message in messages or []:
-            canonical = coerce_canonical_message(message)
-            if canonical is not None:
-                payload = canonical.to_dict()
-                if "content" in payload and not payload.get("content_text"):
-                    payload["content_text"] = canonical.text_content()
-                normalized.append(payload)
-                continue
-            if hasattr(message, "to_dict"):
-                payload = message.to_dict()
-            elif isinstance(message, dict):
-                payload = self._make_json_safe(message)
-            elif hasattr(message, "role") and hasattr(message, "content"):
-                payload = {
-                    "role": str(getattr(message, "role", "user")),
-                    "content": getattr(message, "content", ""),
-                }
-            else:
-                payload = {"role": "user", "content": str(message)}
-
-            if not isinstance(payload, dict):
-                payload = {"role": "user", "content": str(payload)}
-            normalized.append(payload)
-        return normalized
 
     def __str__(self) -> str:
         return f"Agent(name={self.name}, description={self.description})"

@@ -111,19 +111,46 @@ def _canonical_from_google_native(message: Any, provider_name: str) -> list[Cano
 
 
 class GoogleNativeCodec(BaseProviderCodec):
+    def build_request_token_payload(
+        self,
+        replay_history: list[Any],
+        *,
+        system_prompt: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        pending_messages: Optional[list[Any]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        contents = [_json_safe(item) for item in replay_history]
+        if pending_messages:
+            contents.extend(_json_safe(item) for item in pending_messages)
+        payload: dict[str, Any] = {"contents": contents}
+        config: dict[str, Any] = {}
+        if system_prompt:
+            config["system_instruction"] = system_prompt
+        if tools:
+            config["tools"] = _json_safe(tools)
+        if reasoning:
+            config["reasoning"] = _json_safe(reasoning)
+        if config:
+            payload["config"] = config
+        return payload
+
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _canonical_from_google_native(message, self.provider_name)
+
+    def query_to_replay(self, query: str) -> list[Any]:
+        return [{"role": "user", "parts": [{"text": query}]}]
+
+    def append_replay_entry(self, prepared: list[Any], item: Any) -> None:
+        if self._is_function_response_turn(item) and prepared and self._is_function_response_turn(prepared[-1]):
+            prepared[-1]["parts"].extend(item["parts"])
+            return
+        prepared.append(item)
 
     def is_request_ready_message(self, message: Any) -> bool:
         return isinstance(message, dict) and message.get("role") in {"system", "user", "model"} and isinstance(
             message.get("parts"), list
         )
-
-    def _append_prepared(self, prepared: list[Any], item: Any) -> None:
-        if self._is_function_response_turn(item) and prepared and self._is_function_response_turn(prepared[-1]):
-            prepared[-1]["parts"].extend(item["parts"])
-            return
-        prepared.append(item)
 
     @staticmethod
     def _is_function_response_turn(message: Any) -> bool:
@@ -308,6 +335,30 @@ class GoogleNativeCodec(BaseProviderCodec):
             ],
         }
 
+    def tool_result_to_canonical(self, content: str, tool_id: str, tool_name: str) -> list[CanonicalMessage]:
+        return [
+            CanonicalMessage(
+                role="tool",
+                content=[
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=tool_id,
+                        name=tool_name,
+                        output={"result": content},
+                        payload={
+                            "type": "function_response",
+                            "id": tool_id,
+                            "name": tool_name,
+                            "response": {"result": content},
+                        },
+                        metadata={"provider_block_type": "function_response"},
+                    )
+                ],
+                provider=self.provider_name,
+                provider_message_type="user",
+            )
+        ]
+
     def build_assistant_message(
         self,
         *,
@@ -373,6 +424,203 @@ class GoogleNativeCodec(BaseProviderCodec):
                     payload["thought_signature"] = block["thought_signature"]
                 parts.append(payload)
         return {"role": "model", "parts": parts}
+
+    def response_to_replay(self, response: Any, *, include_reasoning: bool = False) -> list[Any]:
+        if response is None:
+            return []
+        return [self.build_assistant_response(response, include_reasoning=include_reasoning)]
+
+    def response_to_canonical(self, response: Any, *, include_reasoning: bool = False) -> list[CanonicalMessage]:
+        if response is None:
+            return []
+        content = self._candidate_content(response)
+        blocks: list[CanonicalBlock] = []
+        for part in self._content_parts(content):
+            block = self._serialize_gemini_part(part)
+            if block["type"] == "thinking" and not include_reasoning:
+                continue
+            if block["type"] == "thinking":
+                blocks.append(
+                    CanonicalBlock(
+                        type="reasoning",
+                        text=block.get("text", ""),
+                        signature=block.get("thought_signature"),
+                        payload=_json_safe(block),
+                        metadata={"provider_block_type": "thinking"},
+                    )
+                )
+            elif block["type"] == "text":
+                blocks.append(
+                    CanonicalBlock(
+                        type="text",
+                        text=block.get("text", ""),
+                        payload=_json_safe(block),
+                        metadata={"provider_block_type": "text"},
+                    )
+                )
+            elif block["type"] == "function_call":
+                blocks.append(
+                    CanonicalBlock(
+                        type="function_call",
+                        call_id=block.get("id"),
+                        name=block.get("name"),
+                        arguments=_json_safe(block.get("args", {})),
+                        signature=block.get("thought_signature"),
+                        payload=_json_safe(block),
+                        metadata={"provider_block_type": "function_call"},
+                    )
+                )
+            elif block["type"] == "function_response":
+                blocks.append(
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=block.get("id"),
+                        name=block.get("name"),
+                        output=_json_safe(block.get("response", {})),
+                        signature=block.get("thought_signature"),
+                        payload=_json_safe(block),
+                        metadata={"provider_block_type": "function_response"},
+                    )
+                )
+        if not blocks:
+            blocks = [CanonicalBlock(type="provider_item", payload=_json_safe(response))]
+        return [
+            CanonicalMessage(
+                role="assistant",
+                content=blocks,
+                provider=self.provider_name,
+                provider_message_type="model",
+            )
+        ]
+
+    def canonical_message_to_replay(self, message: Any) -> list[Any]:
+        canonical = coerce_canonical_message(message)
+        if canonical is None:
+            entries: list[Any] = []
+            for entry in self.history_entry_to_canonical(message):
+                entries.extend(self.canonical_message_to_replay(entry))
+            return entries
+
+        parts: list[dict[str, Any]] = []
+        for block in canonical.content:
+            payload = block.payload if isinstance(block.payload, dict) else None
+            if block.type == "text":
+                if block.text:
+                    parts.append({"text": block.text})
+                continue
+            if block.type == "reasoning":
+                text = block.text or _reasoning_text(block.summary or block.payload)
+                part = {"text": text, "thought": True}
+                signature = block.signature
+                if signature is None and isinstance(payload, dict):
+                    signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+                if signature is not None:
+                    part["thought_signature"] = signature
+                parts.append(part)
+                continue
+            if block.type == "function_call":
+                if isinstance(payload, dict):
+                    provider_part = self._google_part_from_provider_payload(payload)
+                    if provider_part is not None:
+                        parts.append(provider_part)
+                        continue
+                parts.append(
+                    {
+                        "function_call": {
+                            "id": block.call_id,
+                            "name": block.name or "",
+                            "args": self._dict_arguments(block.arguments),
+                        },
+                        **({"thought_signature": block.signature} if block.signature is not None else {}),
+                    }
+                )
+                continue
+            if block.type == "function_response":
+                if isinstance(payload, dict):
+                    provider_part = self._google_part_from_provider_payload(payload)
+                    if provider_part is not None:
+                        parts.append(provider_part)
+                        continue
+                parts.append(
+                    {
+                        "function_response": {
+                            "id": block.call_id,
+                            "name": block.name or "",
+                            "response": self._function_response_payload(block.output),
+                        },
+                        **({"thought_signature": block.signature} if block.signature is not None else {}),
+                    }
+                )
+                continue
+            if block.type == "provider_item" and isinstance(payload, dict):
+                provider_part = self._google_part_from_provider_payload(payload)
+                if provider_part is not None:
+                    parts.append(provider_part)
+
+        if canonical.role == "system":
+            return [{"role": "system", "parts": parts}]
+        if canonical.role == "assistant":
+            return [{"role": "model", "parts": parts}]
+        return [{"role": "user", "parts": parts}]
+
+    @staticmethod
+    def _dict_arguments(arguments: Any) -> dict[str, Any]:
+        if isinstance(arguments, dict):
+            return dict(arguments)
+        if isinstance(arguments, str):
+            try:
+                loaded = json.loads(arguments)
+            except Exception:
+                return {}
+            if isinstance(loaded, dict):
+                return loaded
+            return {}
+        return {}
+
+    @staticmethod
+    def _function_response_payload(output: Any) -> dict[str, Any]:
+        if isinstance(output, dict):
+            return dict(output)
+        return {"result": output}
+
+    @staticmethod
+    def _google_part_from_provider_payload(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+        if "text" in payload or "function_call" in payload or "function_response" in payload or "inline_data" in payload:
+            return dict(payload)
+        block_type = payload.get("type")
+        if block_type == "text":
+            return {"text": payload.get("text", "")}
+        if block_type == "thinking":
+            part = {"text": payload.get("text") or payload.get("thinking", ""), "thought": True}
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if block_type == "function_call":
+            part = {
+                "function_call": {
+                    "id": payload.get("id"),
+                    "name": payload.get("name", ""),
+                    "args": payload.get("args", {}) or {},
+                }
+            }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if block_type == "function_response":
+            part = {
+                "function_response": {
+                    "id": payload.get("id"),
+                    "name": payload.get("name", ""),
+                    "response": payload.get("response", {}) or {},
+                }
+            }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        return None
 
     def get_thinking_content(self, response: Any) -> Optional[str]:
         content = self._candidate_content(response)
@@ -494,22 +742,26 @@ class GoogleNativeCodec(BaseProviderCodec):
                 "tool_calls": function_calls,
                 "content": "".join(text_parts),
                 "thinking": "".join(thinking_parts),
-                "assistant_items": self._build_stream_assistant_message(
-                    text="".join(text_parts),
-                    thinking="".join(thinking_parts),
-                    raw_blocks=assistant_blocks,
-                ),
+                "assistant_items": [
+                    self._build_stream_assistant_message(
+                        text="".join(text_parts),
+                        thinking="".join(thinking_parts),
+                        raw_blocks=assistant_blocks,
+                    )
+                ],
             }
             return
         yield {
             "type": "final_response",
             "content": "".join(text_parts),
             "thinking": "".join(thinking_parts),
-            "assistant_items": self._build_stream_assistant_message(
-                text="".join(text_parts),
-                thinking="".join(thinking_parts),
-                raw_blocks=assistant_blocks,
-            ),
+            "assistant_items": [
+                self._build_stream_assistant_message(
+                    text="".join(text_parts),
+                    thinking="".join(thinking_parts),
+                    raw_blocks=assistant_blocks,
+                )
+            ],
         }
 
     async def astream_events(self, raw_stream: Any, *, tools: bool = False) -> AsyncGenerator[dict[str, Any], None]:
@@ -546,20 +798,24 @@ class GoogleNativeCodec(BaseProviderCodec):
                 "tool_calls": function_calls,
                 "content": "".join(text_parts),
                 "thinking": "".join(thinking_parts),
-                "assistant_items": self._build_stream_assistant_message(
-                    text="".join(text_parts),
-                    thinking="".join(thinking_parts),
-                    raw_blocks=assistant_blocks,
-                ),
+                "assistant_items": [
+                    self._build_stream_assistant_message(
+                        text="".join(text_parts),
+                        thinking="".join(thinking_parts),
+                        raw_blocks=assistant_blocks,
+                    )
+                ],
             }
             return
         yield {
             "type": "final_response",
             "content": "".join(text_parts),
             "thinking": "".join(thinking_parts),
-            "assistant_items": self._build_stream_assistant_message(
-                text="".join(text_parts),
-                thinking="".join(thinking_parts),
-                raw_blocks=assistant_blocks,
-            ),
+            "assistant_items": [
+                self._build_stream_assistant_message(
+                    text="".join(text_parts),
+                    thinking="".join(thinking_parts),
+                    raw_blocks=assistant_blocks,
+                )
+            ],
         }

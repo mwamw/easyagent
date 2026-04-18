@@ -7,9 +7,9 @@ import json
 from typing import Any
 
 from Tool.BaseTool import ToolResult
-from core.Message import MetaUserMessage
 
 from agent import BasicAgent
+from core.request_input import ReplayRequestInput
 class BaseRuntimeSkillContextBridge(ABC):
     """Bridge for runtime skill/tool ephemeral context injection."""
 
@@ -57,19 +57,20 @@ class BaseRuntimeSkillContextBridge(ABC):
 class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
     """Default runtime context bridge that preserves current BasicAgent behavior."""
 
+    @staticmethod
+    def _append_runtime_text(agent:BasicAgent, messages: list[Any] | ReplayRequestInput, text: str) -> None:
+        replay_entries = agent.llm.query_to_replay(text)
+        if isinstance(messages, ReplayRequestInput):
+            messages.extend_replay(replay_entries)
+            return
+        for entry in replay_entries:
+            messages.append(entry)
+
     def append_runtime_skill_context_message(self, agent:BasicAgent, messages: list[Any]) -> None:
         runtime_prompt = agent.skill_manager.build_runtime_skill_context_prompt()
         if not runtime_prompt:
             return
-        messages.append(
-            MetaUserMessage(
-                runtime_prompt,
-                metadata={
-                    "source": "skill_tool",
-                    "kind": "runtime_skill_context",
-                },
-            )
-        )
+        self._append_runtime_text(agent, messages, runtime_prompt)
 
     def append_tool_ephemeral_context_message(
         self,
@@ -89,14 +90,10 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
             context_text = str(context).strip()
         if not context_text:
             return
-        messages.append(
-            MetaUserMessage(
-                f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>",
-                metadata={
-                    "source": tool_name,
-                    "kind": "runtime_tool_context",
-                },
-            )
+        self._append_runtime_text(
+            agent,
+            messages,
+            f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>",
         )
 
     def clear_ephemeral_skill_state(self, agent:BasicAgent) -> None:

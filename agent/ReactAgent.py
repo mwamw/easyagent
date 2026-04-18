@@ -13,7 +13,6 @@ import logging
 
 from .BasicAgent import BasicAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
@@ -208,22 +207,28 @@ class ReactAgent(BasicAgent):
             # 构建当前消息
             round_query = user_message + "\n\n" + self._get_scratchpad()
             if self.context_manager is not None:
-                messages = self.context_manager.build_messages(
+                messages = self.context_manager.build_request_input(
                     query=round_query,
-                    history=self.replay_history,
+                    replay_history=self.replay_history,
+                    provider_name=getattr(self.llm, "provider_name", None),
                     system_prompt=system_prompt,
-                    include_history=True,
                     include_query=True,
+                    tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+                    reasoning=self.reasoning,
                 )
             else:
                 messages = [
-                    SystemMessage(system_prompt),
-                    UserMessage(round_query)
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": round_query},
                 ]
             
             # 调用 LLM
             try:
-                self._capture_context_usage(messages, label="react_invoke")
+                messages = self.compact_request_input_if_needed(
+                    messages,
+                    reasoning=self.reasoning,
+                )
+                self._capture_context_usage(messages, label="react_invoke", reasoning=self.reasoning)
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs) # type: ignore
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
@@ -276,8 +281,8 @@ class ReactAgent(BasicAgent):
         final_answer = self.skill_manager.on_after_invoke(query, final_answer)
         
         # 保存历史
-        self.add_message(UserMessage(query))
-        self.add_message(AssistantMessage(final_answer))
+        self.add_user_message(query)
+        self.add_assistant_message(final_answer)
         
         return final_answer
     
@@ -460,10 +465,15 @@ Final Answer: 对用户问题的完整回答
         messages = self._build_start_messages(query)
         
         try:
-            self._capture_context_usage(messages, label="react_direct_answer")
+            messages = self.compact_request_input_if_needed(
+                messages,
+                reasoning=self.reasoning,
+            )
+            self._capture_context_usage(messages, label="react_direct_answer", reasoning=self.reasoning)
             response = self.llm.invoke(messages, temperature=temperature, **kwargs)
-            self.add_message(UserMessage(query))
-            self.add_message(AssistantMessage(response))
+            self.add_user_message(query)
+            self.add_assistant_message(response)
+            self.compact_persistent_history_if_needed()
             return response
         except Exception as e:
             raise LLMInvokeError(f"LLM 调用失败: {e}") from e

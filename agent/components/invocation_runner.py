@@ -8,7 +8,6 @@ import logging
 from typing import Any
 
 from core.Exception import LLMInvokeError
-from core.Message import UserMessage
 
 logger = logging.getLogger(__name__)
 from agent import BasicAgent
@@ -45,7 +44,7 @@ class BaseInvocationRunner(ABC):
         max_iter: int = 10,
         temperature: float = 0.7,
         **kwargs,
-    ):
+    )->Any:
         pass
 
     @abstractmethod
@@ -105,7 +104,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         query = agent.skill_manager.on_before_invoke(query)
         agent.callback_manager.on_agent_start(agent.name, query)
 
-        messages: list[Any] = []
+        # messages: list[Any] = []
 
         if agent.enable_tool:
             logger.info("使用工具模式调用智能体")
@@ -113,7 +112,6 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 result = agent.tool_loop_engine.invoke(
                     agent,
                     query,
-                    messages,
                     max_iter,
                     temperature,
                     trace_query=original_query,
@@ -130,9 +128,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         logger.info("使用普通模式调用智能体")
         try:
             messages = agent._build_start_messages(query)
+            messages = agent.compact_request_input_if_needed(
+                messages,
+                reasoning=agent.reasoning,
+            )
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
 
-            agent._capture_context_usage(messages, label="invoke_plain")
+            agent._capture_context_usage(messages, label="invoke_plain", reasoning=agent.reasoning)
             agent.callback_manager.on_llm_start(messages)
             response_obj = agent.llm.invoke_raw(
                 messages,
@@ -140,8 +142,9 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 reasoning=agent.reasoning,
                 **kwargs,
             )
-            response = agent.llm.get_response_content(response_obj)
-            agent.callback_manager.on_llm_end(response or "")
+            provider_content = agent.llm.get_response_content(response_obj)
+            response = provider_content
+            agent.callback_manager.on_llm_end(provider_content or "")
 
             if response is None:
                 raise LLMInvokeError("LLM 返回了空响应!")
@@ -151,14 +154,15 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 response = str(response)
 
             response = agent.skill_manager.on_after_invoke(query, response)
-            agent.add_message(UserMessage(query))
-            agent.add_messages(
-                agent._build_assistant_history_entries_from_response(
-                    response_obj,
-                    include_reasoning=True,
-                    fallback_content=response,
+            agent._append_query_history(query)
+            if response == provider_content:
+                agent._append_response_history(response_obj, include_reasoning=True)
+            else:
+                agent._append_assistant_message_history(
+                    content=response,
+                    thinking=agent.llm.get_thinking_content(response_obj),
                 )
-            )
+            agent.compact_persistent_history_if_needed()
             final_event_id = agent._record_assistant_trace(
                 turn_id,
                 response,
@@ -226,13 +230,17 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         query = agent.skill_manager.on_before_invoke(query)
         agent.callback_manager.on_agent_start(agent.name, query)
         messages = agent._build_start_messages(query)
+        messages = agent.compact_request_input_if_needed(
+            messages,
+            reasoning=agent.reasoning,
+        )
         final_results = []
         streamed_thinking = ""
         final_content = ""
         display_state = agent._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
-            agent._capture_context_usage(messages, label="stream_invoke_plain")
+            agent._capture_context_usage(messages, label="stream_invoke_plain", reasoning=agent.reasoning)
             agent.callback_manager.on_llm_start(messages)
             for event in agent.llm.stream_events(
                 messages,
@@ -256,13 +264,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             result = "".join(final_results) or final_content
             agent.callback_manager.on_llm_end(result)
             result = agent.skill_manager.on_after_invoke(query, result)
-            agent.add_message(UserMessage(query))
-            agent.add_messages(
-                agent._build_assistant_history_entries(
-                    content=result,
-                    thinking=streamed_thinking or None,
-                )
+            agent._append_query_history(query)
+            agent._append_assistant_message_history(
+                content=result,
+                thinking=streamed_thinking or None,
             )
+            agent.compact_persistent_history_if_needed()
             if streamed_thinking:
                 agent._set_round_reasoning(
                     streamed_thinking,
@@ -372,7 +379,6 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 result = await agent.tool_loop_engine.ainvoke(
                     agent,
                     query,
-                    [],
                     max_iter,
                     temperature,
                     trace_query=original_query,
@@ -389,9 +395,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         logger.info("使用异步普通模式调用智能体")
         try:
             messages = agent._build_start_messages(query)
+            messages = await agent.acompact_request_input_if_needed(
+                messages,
+                reasoning=agent.reasoning,
+            )
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
 
-            agent._capture_context_usage(messages, label="ainvoke_plain")
+            agent._capture_context_usage(messages, label="ainvoke_plain", reasoning=agent.reasoning)
             agent.callback_manager.on_llm_start(messages)
             response_obj = await agent.llm.ainvoke_raw(
                 messages,
@@ -399,8 +409,9 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 reasoning=agent.reasoning,
                 **kwargs,
             )
-            response = agent.llm.get_response_content(response_obj)
-            agent.callback_manager.on_llm_end(response or "")
+            provider_content = agent.llm.get_response_content(response_obj)
+            response = provider_content
+            agent.callback_manager.on_llm_end(provider_content or "")
 
             if response is None:
                 raise LLMInvokeError("LLM 返回了空响应!")
@@ -410,14 +421,15 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 response = str(response)
 
             response = agent.skill_manager.on_after_invoke(query, response)
-            agent.add_message(UserMessage(query))
-            agent.add_messages(
-                agent._build_assistant_history_entries_from_response(
-                    response_obj,
-                    include_reasoning=True,
-                    fallback_content=response,
+            agent._append_query_history(query)
+            if response == provider_content:
+                agent._append_response_history(response_obj, include_reasoning=True)
+            else:
+                agent._append_assistant_message_history(
+                    content=response,
+                    thinking=agent.llm.get_thinking_content(response_obj),
                 )
-            )
+            await agent.acompact_persistent_history_if_needed()
             final_event_id = agent._record_assistant_trace(
                 turn_id,
                 response,
@@ -481,13 +493,17 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         query = agent.skill_manager.on_before_invoke(query)
         agent.callback_manager.on_agent_start(agent.name, query)
         messages = agent._build_start_messages(query)
+        messages = await agent.acompact_request_input_if_needed(
+            messages,
+            reasoning=agent.reasoning,
+        )
         final_results = []
         streamed_thinking = ""
         final_content = ""
         display_state = agent._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
-            agent._capture_context_usage(messages, label="astream_invoke_plain")
+            agent._capture_context_usage(messages, label="astream_invoke_plain", reasoning=agent.reasoning)
             agent.callback_manager.on_llm_start(messages)
             async for event in agent.llm.astream_events(
                 messages,
@@ -512,13 +528,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             result = "".join(final_results) or final_content
             agent.callback_manager.on_llm_end(result)
             result = agent.skill_manager.on_after_invoke(query, result)
-            agent.add_message(UserMessage(query))
-            agent.add_messages(
-                agent._build_assistant_history_entries(
-                    content=result,
-                    thinking=streamed_thinking or None,
-                )
+            agent._append_query_history(query)
+            agent._append_assistant_message_history(
+                content=result,
+                thinking=streamed_thinking or None,
             )
+            await agent.acompact_persistent_history_if_needed()
             if streamed_thinking:
                 agent._set_round_reasoning(
                     streamed_thinking,

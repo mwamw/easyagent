@@ -112,17 +112,41 @@ def _canonical_from_anthropic(message: Any, provider_name: str) -> list[Canonica
 
 
 class AnthropicNativeCodec(BaseProviderCodec):
+    def build_request_token_payload(
+        self,
+        replay_history: list[Any],
+        *,
+        system_prompt: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        pending_messages: Optional[list[Any]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        messages = [_json_safe(item) for item in replay_history]
+        if pending_messages:
+            messages.extend(_json_safe(item) for item in pending_messages)
+        payload: dict[str, Any] = {"messages": messages}
+        if system_prompt:
+            payload["system"] = system_prompt
+        if tools:
+            payload["tools"] = _json_safe(tools)
+        if reasoning:
+            payload["thinking"] = _json_safe(reasoning)
+        return payload
+
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _canonical_from_anthropic(message, self.provider_name)
 
-    def is_request_ready_message(self, message: Any) -> bool:
-        return isinstance(message, dict) and message.get("role") in {"system", "user", "assistant"} and "content" in message
+    def query_to_replay(self, query: str) -> list[Any]:
+        return [{"role": "user", "content": query}]
 
-    def _append_prepared(self, prepared: list[Any], item: Any) -> None:
+    def append_replay_entry(self, prepared: list[Any], item: Any) -> None:
         if self._is_tool_result_turn(item) and prepared and self._is_tool_result_turn(prepared[-1]):
             prepared[-1]["content"].extend(item["content"])
             return
         prepared.append(item)
+
+    def is_request_ready_message(self, message: Any) -> bool:
+        return isinstance(message, dict) and message.get("role") in {"system", "user", "assistant"} and "content" in message
 
     @staticmethod
     def _is_tool_result_turn(message: Any) -> bool:
@@ -226,6 +250,32 @@ class AnthropicNativeCodec(BaseProviderCodec):
             payload["content"][0]["name"] = tool_name
         return payload
 
+    def tool_result_to_canonical(self, content: str, tool_id: str, tool_name: str) -> list[CanonicalMessage]:
+        payload = {
+            "type": "tool_result",
+            "tool_use_id": tool_id,
+            "content": content,
+        }
+        if tool_name:
+            payload["name"] = tool_name
+        return [
+            CanonicalMessage(
+                role="tool",
+                content=[
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=tool_id,
+                        name=tool_name or None,
+                        output=content,
+                        payload=payload,
+                        metadata={"provider_block_type": "tool_result"},
+                    )
+                ],
+                provider=self.provider_name,
+                provider_message_type="user",
+            )
+        ]
+
     def build_assistant_message(
         self,
         *,
@@ -296,6 +346,161 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 continue
             content.append(serialized)
         return {"role": "assistant", "content": content}
+
+    def response_to_replay(self, response: Any, *, include_reasoning: bool = False) -> list[Any]:
+        if response is None:
+            return []
+        return [self.build_assistant_response(response, include_reasoning=include_reasoning)]
+
+    def response_to_canonical(self, response: Any, *, include_reasoning: bool = False) -> list[CanonicalMessage]:
+        if response is None:
+            return []
+        blocks: list[CanonicalBlock] = []
+        for block in getattr(response, "content", None) or []:
+            serialized = self._serialize_block(block)
+            block_type = serialized.get("type")
+            if block_type in {"thinking", "redacted_thinking"} and not include_reasoning:
+                continue
+            if block_type == "text":
+                blocks.append(
+                    CanonicalBlock(
+                        type="text",
+                        text=serialized.get("text", ""),
+                        payload=_json_safe(serialized),
+                        metadata={"provider_block_type": "text"},
+                    )
+                )
+            elif block_type in {"thinking", "redacted_thinking"}:
+                blocks.append(
+                    CanonicalBlock(
+                        type="reasoning",
+                        text=_reasoning_text(serialized),
+                        summary=_json_safe(serialized.get("summary")),
+                        signature=serialized.get("signature"),
+                        payload=_json_safe(serialized),
+                        metadata={"provider_block_type": block_type},
+                    )
+                )
+            elif block_type == "tool_use":
+                blocks.append(
+                    CanonicalBlock(
+                        type="function_call",
+                        call_id=serialized.get("id"),
+                        name=serialized.get("name"),
+                        arguments=_json_safe(serialized.get("input", {})),
+                        payload=_json_safe(serialized),
+                        metadata={"provider_block_type": "tool_use"},
+                    )
+                )
+            elif block_type == "tool_result":
+                blocks.append(
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=serialized.get("tool_use_id"),
+                        name=serialized.get("name"),
+                        output=_json_safe(serialized.get("content")),
+                        payload=_json_safe(serialized),
+                        metadata={"provider_block_type": "tool_result"},
+                    )
+                )
+        if not blocks:
+            blocks = [CanonicalBlock(type="provider_item", payload=_json_safe(response))]
+        return [
+            CanonicalMessage(
+                role="assistant",
+                content=blocks,
+                provider=self.provider_name,
+                provider_message_type="assistant",
+            )
+        ]
+
+    def canonical_message_to_replay(self, message: Any) -> list[Any]:
+        canonical = coerce_canonical_message(message)
+        if canonical is None:
+            entries: list[Any] = []
+            for entry in self.history_entry_to_canonical(message):
+                entries.extend(self.canonical_message_to_replay(entry))
+            return entries
+
+        blocks: list[dict[str, Any]] = []
+        for block in canonical.content:
+            payload = block.payload if isinstance(block.payload, dict) else None
+            provider_block_type = block.metadata.get("provider_block_type") if isinstance(block.metadata, dict) else None
+            if block.type == "text":
+                if block.text:
+                    blocks.append({"type": "text", "text": block.text})
+                continue
+            if block.type == "reasoning":
+                text = block.text or _reasoning_text(block.summary or block.payload)
+                if isinstance(payload, dict) and payload.get("type") in {"thinking", "redacted_thinking"}:
+                    blocks.append(dict(payload))
+                    continue
+                if provider_block_type == "redacted_thinking" and isinstance(payload, dict):
+                    blocks.append(dict(payload))
+                    continue
+                thinking_block: dict[str, Any] = {"type": "thinking", "thinking": text}
+                if block.signature:
+                    thinking_block["signature"] = block.signature
+                blocks.append(thinking_block)
+                continue
+            if block.type == "function_call":
+                if isinstance(payload, dict) and payload.get("type") == "tool_use":
+                    blocks.append(dict(payload))
+                    continue
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": block.call_id,
+                        "name": block.name or "",
+                        "input": self._dict_arguments(block.arguments),
+                    }
+                )
+                continue
+            if block.type == "function_response":
+                content = block.output
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False, default=str)
+                tool_result = {
+                    "type": "tool_result",
+                    "tool_use_id": block.call_id,
+                    "content": content,
+                }
+                if block.name:
+                    tool_result["name"] = block.name
+                blocks.append(tool_result)
+                continue
+            if block.type == "provider_item" and isinstance(payload, dict):
+                blocks.append(dict(payload))
+
+        if canonical.role == "tool":
+            return [{"role": "user", "content": blocks or [{"type": "tool_result", "tool_use_id": None, "content": ""}]}]
+
+        if canonical.role == "system":
+            text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
+            if not text:
+                text = canonical.text_content()
+            return [{"role": "system", "content": text}]
+
+        content: Any
+        if blocks and all(isinstance(block, dict) and block.get("type") == "text" for block in blocks):
+            content = "".join(block.get("text", "") for block in blocks)
+        else:
+            content = blocks
+        return [{"role": "assistant" if canonical.role == "assistant" else "user", "content": content}]
+
+    @staticmethod
+    def _dict_arguments(arguments: Any) -> dict[str, Any]:
+        if isinstance(arguments, dict):
+            return dict(arguments)
+        if isinstance(arguments, str):
+            try:
+                loaded = json.loads(arguments)
+            except Exception:
+                return {}
+            if isinstance(loaded, dict):
+                return loaded
+            return {}
+        return {}
 
     def _iter_stream_events(self, stream_source: Any) -> Generator[Any, None, None]:
         if hasattr(stream_source, "__iter__"):
@@ -486,7 +691,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                         "tool_calls": self._finalize_stream_tool_calls(state),
                         "content": "".join(state["text_parts"]),
                         "thinking": "".join(state["thinking_parts"]),
-                        "assistant_items": self._build_stream_assistant_message(state),
+                        "assistant_items": [self._build_stream_assistant_message(state)],
                     }
                 )
                 state["terminal_emitted"] = True
@@ -497,7 +702,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                     "type": "final_response",
                     "content": "".join(state["text_parts"]),
                     "thinking": "".join(state["thinking_parts"]),
-                    "assistant_items": self._build_stream_assistant_message(state),
+                    "assistant_items": [self._build_stream_assistant_message(state)],
                 }
             )
             state["terminal_emitted"] = True
@@ -514,13 +719,13 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 "tool_calls": tool_calls,
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
-                "assistant_items": self._build_stream_assistant_message(state),
+                "assistant_items": [self._build_stream_assistant_message(state)],
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
-            "assistant_items": self._build_stream_assistant_message(state),
+            "assistant_items": [self._build_stream_assistant_message(state)],
         }
 
     def stream_events(self, raw_stream: Any, *, tools: bool = False) -> Generator[dict[str, Any], None, None]:

@@ -10,7 +10,6 @@ import logging
 
 from .BasicAgent import BasicAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *
@@ -213,8 +212,8 @@ class PlanningAgent(BasicAgent):
         final_answer = self.skill_manager.on_after_invoke(query, final_answer)
         
         # 保存历史
-        self.add_message(UserMessage(query))
-        self.add_message(AssistantMessage(final_answer))
+        self.add_user_message(query)
+        self.add_assistant_message(final_answer)
         
         return final_answer
     
@@ -241,8 +240,8 @@ class PlanningAgent(BasicAgent):
         )
         
         messages = [
-            SystemMessage(planning_system),
-            UserMessage(plan_prompt)
+            {"role": "system", "content": planning_system},
+            {"role": "user", "content": plan_prompt},
         ]
         
         try:
@@ -262,13 +261,12 @@ class PlanningAgent(BasicAgent):
         """执行单个步骤"""
         if self.enable_tool and self.tool_registry:
             # 使用工具执行
-            messages: list = []
-            return super().invoke_with_tool(step, messages, max_iter=5, temperature=temperature)
+            return super().invoke_with_tool(step, max_iter=5, temperature=temperature)
         else:
             # 直接使用 LLM
             messages = [
-                SystemMessage(self.get_enhanced_prompt()),
-                UserMessage(step)
+                {"role": "system", "content": self.get_enhanced_prompt()},
+                {"role": "user", "content": step},
             ]
             self._capture_context_usage(messages, label="planning_execute_step")
             return self.llm.invoke(messages, temperature=temperature)
@@ -299,12 +297,13 @@ class PlanningAgent(BasicAgent):
 以 JSON 数组格式返回新的步骤列表。"""
         
         messages = [
-            SystemMessage(
-                self._render_planning_prompt(
+            {
+                "role": "system",
+                "content": self._render_planning_prompt(
                     role_prompt="你是一个任务规划专家，需要根据执行情况调整计划。",
-                )
-            ),
-            UserMessage(replan_prompt)
+                ),
+            },
+            {"role": "user", "content": replan_prompt},
         ]
         
         try:
@@ -337,8 +336,8 @@ class PlanningAgent(BasicAgent):
         )
         
         messages = [
-            SystemMessage(summary_system),
-            UserMessage(summary_prompt)
+            {"role": "system", "content": summary_system},
+            {"role": "user", "content": summary_prompt},
         ]
         
         self._capture_context_usage(messages, label="planning_summarize")

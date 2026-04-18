@@ -6,7 +6,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 from agent import BasicAgent
-from core.Message import SystemMessage, UserMessage
+from core.providers import create_codec
 from core.request_input import ReplayRequestInput
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class BaseHistoryMessageAssembler(ABC):
         pass
 
     @abstractmethod
-    def build_start_messages(self, agent:BasicAgent, query: str) -> list[Any]:
+    def build_start_messages(self, agent:BasicAgent, query: str)->Any:
         pass
 
 
@@ -58,37 +58,26 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
         for message in agent.replay_history:
             messages.append(message)
 
-    def build_start_messages(self, agent:BasicAgent, query: str) ->list[Any]:
+    def build_start_messages(self, agent:BasicAgent, query: str) -> ReplayRequestInput:
         system_prompt = agent.get_enhanced_prompt()
         self._ensure_replay_history(agent)
-        request_ready_checker = agent.llm._get_codec().is_request_ready_message
-
+        provider_name = getattr(agent.llm, "provider_name", None)
         if agent.context_manager is not None:
-            try:
-                request_input = agent.context_manager.build_request_input(
-                    query=query,
-                    history=agent.history,
-                    replay_history=agent.replay_history,
-                    history_converter=agent.prepare_replay_history,
-                    message_converter=agent.prepare_replay_history,
-                    request_ready_checker=request_ready_checker,
-                    provider_name=getattr(agent.llm, "provider_name", None),
-                    system_prompt=system_prompt,
-                    include_history=True,
-                    include_query=True,
-                )
-                if agent.context_manager.last_history_was_compacted:
-                    agent.history = list(agent.context_manager.last_compacted_history)
-                return request_input
-            except Exception as exc:
-                logger.warning(f"ContextManager 构建 messages 失败，回退默认拼接: {exc}")
+            request_input = agent.context_manager.build_request_input(
+                query=query,
+                replay_history=agent.replay_history,
+                provider_name=provider_name,
+                system_prompt=system_prompt,
+                include_query=True,
+                tools=agent.tool_registry.get_openai_tools() if agent.tool_registry is not None else None,
+                reasoning=agent.reasoning,
+            )
+            return request_input
 
         request_input = ReplayRequestInput(
-            provider_name=getattr(agent.llm, "provider_name", None),
+            provider_name=provider_name,
             replay_history=list(agent.replay_history),
             system_prompt=system_prompt,
-            message_converter=agent.prepare_replay_history,
-            request_ready_checker=request_ready_checker,
         )
-        request_input.append(UserMessage(query))
+        request_input.extend_replay(agent.llm.query_to_replay(query))
         return request_input

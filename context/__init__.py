@@ -15,8 +15,6 @@ Quick Start:
     manager = ContextManager(max_tokens=8000)
     manager.add_source(RAGContextSource(pipeline))
     manager.set_formatter(XMLFormatter())
-
-    context_str = manager.build_context("什么是RAG？", history=agent.history)
 """
 
 # 核心

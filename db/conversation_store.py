@@ -6,14 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from core.Message import (
-    AssistantMessage,
-    GoogleToolMessage,
-    Message,
-    SystemMessage,
-    ToolMessage,
-    UserMessage,
-)
 from core.history import CanonicalMessage
 
 from .session_store import DEFAULT_SESSION_DB_PATH
@@ -133,29 +125,21 @@ class ConversationStore:
         position: int,
         message: Any,
     ) -> tuple[Any, ...]:
-        if isinstance(message, Message):
-            role = message.role
-            content = message.content
-            time = message.time.isoformat() if message.time else None
-            metadata = _json_dumps(message.metadata or {})
-            tool_call_id = getattr(message, "tool_call_id", None)
-            name = getattr(message, "name", None)
-            raw_message = None
+        payload = message.to_dict() if hasattr(message, "to_dict") else message
+        if not isinstance(payload, dict):
+            payload = {"role": "unknown", "content": str(payload)}
+        role = str(payload.get("role") or payload.get("type") or "__raw__")
+        content_value = payload.get("content", "")
+        if isinstance(content_value, str):
+            content = content_value
         else:
-            payload = message.to_dict() if hasattr(message, "to_dict") else message
-            if not isinstance(payload, dict):
-                payload = {"role": "unknown", "content": str(payload)}
-            role = str(payload.get("role") or payload.get("type") or "__raw__")
-            content_value = payload.get("content", "")
-            if isinstance(content_value, str):
-                content = content_value
-            else:
-                content = _json_dumps(content_value)
-            time = None
-            metadata = _json_dumps({})
-            tool_call_id = payload.get("tool_call_id")
-            name = payload.get("name")
-            raw_message = _json_dumps(payload)
+            content = _json_dumps(content_value)
+        time_value = payload.get("time")
+        time = time_value.isoformat() if hasattr(time_value, "isoformat") else None
+        metadata = _json_dumps(payload.get("metadata") or {})
+        tool_call_id = payload.get("tool_call_id")
+        name = payload.get("name")
+        raw_message = _json_dumps(payload)
 
         return (
             session_id,
@@ -177,29 +161,17 @@ class ConversationStore:
             return payload
 
         role = row["role"]
-        kwargs = {
-            "time": datetime.fromisoformat(row["time"]) if row["time"] else None,
-            "metadata": _json_loads(row["metadata"]) or {},
+        payload: dict[str, Any] = {
+            "role": role,
+            "content": row["content"],
         }
-
-        if role == "user":
-            return UserMessage(row["content"], **kwargs)
-        if role == "assistant":
-            return AssistantMessage(row["content"], **kwargs)
-        if role == "system":
-            return SystemMessage(row["content"], **kwargs)
-        if role == "tool":
-            return ToolMessage(
-                row["content"],
-                tool_call_id=row["tool_call_id"],
-                name=row["name"],
-                **kwargs,
-            )
-        if role == "function":
-            return GoogleToolMessage(
-                row["content"],
-                tool_call_id=row["tool_call_id"],
-                name=row["name"],
-                **kwargs,
-            )
-        return Message(role=role, content=row["content"], **kwargs)
+        metadata = _json_loads(row["metadata"]) or {}
+        if metadata:
+            payload["metadata"] = metadata
+        if row["time"]:
+            payload["time"] = datetime.fromisoformat(row["time"])
+        if row["tool_call_id"]:
+            payload["tool_call_id"] = row["tool_call_id"]
+        if row["name"]:
+            payload["name"] = row["name"]
+        return payload

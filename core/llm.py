@@ -4,6 +4,7 @@ EasyLLM - 统一的 LLM 接口
 提供对不同 LLM 服务的统一访问接口。
 """
 from .Message import Message
+from .history import CanonicalMessage
 from .providers import BaseProvider, BaseProviderCodec, create_codec, create_provider, provider_requires_base_url
 from .request_input import ReplayRequestInput
 from typing import Optional, Any, Generator, AsyncGenerator
@@ -286,7 +287,7 @@ class EasyLLM:
     
     def invoke(
         self,
-        messages: list[dict[str, str] | Message],
+        messages: list[dict[str, str]],
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
@@ -306,25 +307,13 @@ class EasyLLM:
 
     def invoke_raw(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Any:
         """同步调用并返回 provider 原始响应对象。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        provider = getattr(self, "_provider", None)
-        if provider is None:
-            custom_invoke = type(self).invoke
-            if custom_invoke is not EasyLLM.invoke:
-                return custom_invoke(
-                    self,
-                    request_input.as_visible_messages(),
-                    temperature=temperature,
-                    reasoning=reasoning,
-                    **kwargs,
-                )
-            raise RuntimeError("EasyLLM 未配置 provider，且子类未覆写 invoke()。")
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
@@ -337,7 +326,7 @@ class EasyLLM:
     
     def stream(
         self,
-        messages: list[dict[str, str] | Message],
+        messages: list[dict[str, str]]|ReplayRequestInput,
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
@@ -358,44 +347,13 @@ class EasyLLM:
 
     def stream_events(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """流式调用，返回 thinking / text / final 事件。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        provider = getattr(self, "_provider", None)
-        if provider is None:
-            custom_stream = type(self).stream
-            custom_think = type(self).think
-            if custom_stream is not EasyLLM.stream:
-                stream_source = custom_stream(
-                    self,
-                    request_input.as_visible_messages(),
-                    temperature=temperature,
-                    reasoning=reasoning,
-                    **kwargs,
-                )
-            elif custom_think is not EasyLLM.think:
-                stream_source = custom_think(
-                    self,
-                    request_input.as_visible_messages(),
-                    temperature=temperature,
-                    reasoning=reasoning,
-                )
-            else:
-                raise RuntimeError("EasyLLM 未配置 provider，且子类未覆写 stream()/think()。")
-            collected = []
-            for chunk in stream_source:
-                collected.append(chunk)
-                yield {"type": "text_delta", "delta": chunk}
-            yield {
-                "type": "final_response",
-                "content": "".join(collected),
-                "thinking": "",
-            }
-            return
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
@@ -409,7 +367,7 @@ class EasyLLM:
     
     def invoke_with_tools(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         tools: list[dict],
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
@@ -446,7 +404,7 @@ class EasyLLM:
 
     def stream_with_tools(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         tools: list[dict],
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
@@ -466,59 +424,11 @@ class EasyLLM:
         raw_stream = self._provider.stream_raw(request)
         yield from self._get_codec().stream_events(raw_stream, tools=True)
 
-    def format_tool_result(
-        self,
-        content: str,
-        tool_id: str,
-        tool_name: str
-    ) -> dict:
-        """
-        格式化工具结果为当前 Provider 需要的格式
-        
-        Args:
-            content: 工具执行结果
-            tool_id: 工具调用 ID
-            tool_name: 工具名称
-            
-        Returns:
-            格式化后的消息字典
-        """
-        return self._get_codec().build_tool_result(content, tool_id, tool_name)
-    
-    def format_assistant_response(self, response: Any, include_reasoning: bool = False) -> Any:
-        """
-        格式化 assistant 响应为当前 Provider 需要的格式
-        
-        用于处理 tool_calls 消息，不同的 Provider 有不同的格式要求。
-        
-        Args:
-            response: LLM 响应对象
-            
-        Returns:
-            格式化后的消息字典
-        """
-        if isinstance(response, str):
-            return self.format_assistant_message(content=response)
-        return self._get_codec().build_assistant_response(response, include_reasoning=include_reasoning)
-
-    def format_assistant_message(
-        self,
-        content: Optional[str] = None,
-        tool_calls: Optional[list[dict[str, Any]]] = None,
-        thinking: Optional[str] = None,
-    ) -> Any:
-        """基于统一 tool call 结构构造 assistant 消息。"""
-        return self._get_codec().build_assistant_message(
-            content=content,
-            tool_calls=tool_calls,
-            thinking=thinking,
-        )
-    
     # ==================== 异步 API ====================
 
     async def ainvoke(
         self,
-        messages: list[dict[str, str] | Message],
+        messages: list[dict[str, str]],
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
@@ -538,34 +448,13 @@ class EasyLLM:
 
     async def ainvoke_raw(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> Any:
         """异步调用并返回 provider 原始响应对象。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        provider = getattr(self, "_provider", None)
-        if provider is None:
-            custom_ainvoke = type(self).ainvoke
-            custom_invoke = type(self).invoke
-            if custom_ainvoke is not EasyLLM.ainvoke:
-                return await custom_ainvoke(
-                    self,
-                    request_input.as_visible_messages(),
-                    temperature=temperature,
-                    reasoning=reasoning,
-                    **kwargs,
-                )
-            if custom_invoke is not EasyLLM.invoke:
-                return custom_invoke(
-                    self,
-                    request_input.as_visible_messages(),
-                    temperature=temperature,
-                    reasoning=reasoning,
-                    **kwargs,
-                )
-            raise RuntimeError("EasyLLM 未配置 provider，且子类未覆写 ainvoke()/invoke()。")
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
@@ -578,7 +467,7 @@ class EasyLLM:
 
     async def astream(
         self,
-        messages: list[dict[str, str] | Message],
+        messages: list[dict[str, str]],
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
@@ -599,45 +488,13 @@ class EasyLLM:
 
     async def astream_events(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式调用，返回 thinking / text / final 事件。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        provider = getattr(self, "_provider", None)
-        if provider is None:
-            custom_astream = type(self).astream
-            custom_stream = type(self).stream
-            if custom_astream is not EasyLLM.astream:
-                stream_source = custom_astream(
-                    self,
-                    request_input.as_visible_messages(),
-                    reasoning=reasoning,
-                    temperature=temperature,
-                    **kwargs,
-                )
-                collected = []
-                async for chunk in stream_source:
-                    collected.append(chunk)
-                    yield {"type": "text_delta", "delta": chunk}
-                yield {"type": "final_response", "content": "".join(collected), "thinking": ""}
-                return
-            if custom_stream is not EasyLLM.stream:
-                collected = []
-                for chunk in custom_stream(
-                    self,
-                    request_input.as_visible_messages(),
-                    reasoning=reasoning,
-                    temperature=temperature,
-                    **kwargs,
-                ):
-                    collected.append(chunk)
-                    yield {"type": "text_delta", "delta": chunk}
-                yield {"type": "final_response", "content": "".join(collected), "thinking": ""}
-                return
-            raise RuntimeError("EasyLLM 未配置 provider，且子类未覆写 astream()/stream()。")
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
@@ -652,7 +509,7 @@ class EasyLLM:
 
     async def ainvoke_with_tools(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         tools: list[dict],
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
@@ -689,7 +546,7 @@ class EasyLLM:
 
     async def astream_with_tools(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         tools: list[dict],
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
@@ -714,7 +571,7 @@ class EasyLLM:
     
     def think(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
         temperature: Optional[float] = None ,
         reasoning: Optional[dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
@@ -726,7 +583,7 @@ class EasyLLM:
     
     def stream_invoke(
         self,
-        messages: list[dict[str, str] | Message],
+        messages: list[dict[str, str]],
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
@@ -750,6 +607,107 @@ class EasyLLM:
             await provider.aclose()  # type: ignore[misc]
     
     # ==================== 辅助方法 ====================
+
+    def is_request_ready_message(self, message: Any) -> bool:
+        return self._get_codec().is_request_ready_message(message)
+
+    def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
+        return self._get_codec().history_entry_to_canonical(message)
+
+    def query_to_canonical(self, query: str) -> list[CanonicalMessage]:
+        return self._get_codec().query_to_canonical(query)
+
+    def query_to_replay(self, query: str) -> list[Any]:
+        return self._get_codec().query_to_replay(query)
+
+    def response_to_canonical(self, response: Any, *, include_reasoning: bool = False) -> list[CanonicalMessage]:
+        return self._get_codec().response_to_canonical(response, include_reasoning=include_reasoning)
+
+    def response_to_replay(self, response: Any, *, include_reasoning: bool = False) -> list[Any]:
+        return self._get_codec().response_to_replay(response, include_reasoning=include_reasoning)
+
+    def assistant_message_to_canonical(
+        self,
+        *,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
+    ) -> list[CanonicalMessage]:
+        return self._get_codec().assistant_message_to_canonical(
+            content=content,
+            tool_calls=tool_calls,
+            thinking=thinking,
+        )
+
+    def assistant_message_to_replay(
+        self,
+        *,
+        content: Optional[str] = None,
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        thinking: Optional[str] = None,
+    ) -> list[Any]:
+        return self._get_codec().assistant_message_to_replay(
+            content=content,
+            tool_calls=tool_calls,
+            thinking=thinking,
+        )
+
+    def tool_result_to_canonical(self, content: str, tool_id: str, tool_name: str) -> list[CanonicalMessage]:
+        return self._get_codec().tool_result_to_canonical(content, tool_id, tool_name)
+
+    def tool_result_to_replay(self, content: str, tool_id: str, tool_name: str) -> list[Any]:
+        return self._get_codec().tool_result_to_replay(content, tool_id, tool_name)
+
+    def canonical_to_replay_history(
+        self,
+        messages: list[Any],
+        provider_name: Optional[str] = None,
+    ) -> list[Any]:
+        target_provider = provider_name or getattr(self, "provider_name", None)
+        if target_provider == getattr(self, "provider_name", None):
+            return self._get_codec().canonical_to_replay(messages)
+        return create_codec(target_provider).canonical_to_replay(messages)
+
+    def replay_to_canonical_history(
+        self,
+        messages: list[Any],
+        provider_name: Optional[str] = None,
+    ) -> list[CanonicalMessage]:
+        target_provider = provider_name or getattr(self, "provider_name", None)
+        if target_provider == getattr(self, "provider_name", None):
+            return self._get_codec().replay_to_canonical(messages)
+        return create_codec(target_provider).replay_to_canonical(messages)
+
+    def append_replay_entry(
+        self,
+        prepared: list[Any],
+        entry: Any,
+        provider_name: Optional[str] = None,
+    ) -> None:
+        target_provider = provider_name or getattr(self, "provider_name", None)
+        if target_provider == getattr(self, "provider_name", None):
+            self._get_codec().append_replay_entry(prepared, entry)
+            return
+        create_codec(target_provider).append_replay_entry(prepared, entry)
+
+    def count_request_tokens(
+        self,
+        counter: Any,
+        replay_history: list[Any],
+        *,
+        system_prompt: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        pending_messages: Optional[list[Any]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> int:
+        return self._get_codec().count_request_tokens(
+            counter,
+            replay_history,
+            system_prompt=system_prompt,
+            tools=tools,
+            pending_messages=pending_messages,
+            reasoning=reasoning,
+        )
     
     def _convert_messages(self, messages: list[dict[str, str] | Message]) -> list[Any]:
         """转换为当前 provider 的 request-ready replay 消息。"""
@@ -786,7 +744,7 @@ class EasyLLM:
 
     def _prepare_request_input(
         self,
-        messages: list[dict[str, str] | Message] | ReplayRequestInput,
+        messages: list[dict[str, str]] | ReplayRequestInput,
     ) -> ReplayRequestInput:
         if isinstance(messages, ReplayRequestInput):
             provider_name = getattr(self, "provider_name", None)
@@ -812,8 +770,6 @@ class EasyLLM:
             provider_name=getattr(self, "provider_name", None),
             replay_history=replay_history,
             system_prompt=system_prompt,
-            message_converter=lambda batch: self._convert_messages(batch),  # type: ignore[arg-type]
-            request_ready_checker=self._get_codec().is_request_ready_message,
         )
 
     def prepare_messages_for_request(self, messages: list[Any]) -> list[Any]:
@@ -824,7 +780,7 @@ class EasyLLM:
         """提取思考内容"""
         if response is None or isinstance(response, str):
             return None
-        return self._get_codec().get_thinking_content(response)
+        return self._get_codec().response_reasoning(response)
 
     def get_response_content(self, response: Any) -> Optional[str]:
         """提取响应文本内容（兼容 Chat API 和 Responses API）"""
@@ -832,15 +788,15 @@ class EasyLLM:
             return None
         if isinstance(response, str):
             return response
-        return self._get_codec().get_response_content(response)
+        return self._get_codec().response_text(response)
 
     def has_tool_calls(self, response: Any) -> bool:
         """检查是否有工具调用"""
-        return self._get_codec().has_tool_calls(response)
+        return self._get_codec().response_has_tool_calls(response)
     
     def get_tool_calls(self, response: Any) -> list:
         """获取工具调用列表"""
-        return self._get_codec().get_tool_calls(response)
+        return self._get_codec().response_tool_calls(response)
     
     def create_client(self):
         """创建客户端（向后兼容）"""

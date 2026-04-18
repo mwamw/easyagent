@@ -9,7 +9,6 @@ import logging
 
 from .BasicAgent import BasicAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from output.base import BaseOutputParser, OutputParseError
@@ -177,8 +176,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
                 if attempt == 0:
                     # 首次尝试
                     messages = [
-                        SystemMessage(self._build_system_prompt()),
-                        UserMessage(enhanced_query)
+                        {"role": "system", "content": self._build_system_prompt()},
+                        {"role": "user", "content": enhanced_query},
                     ]
                 else:
                     # 重试：告知 LLM 上次的错误
@@ -194,8 +193,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
 
 原始请求: {query}"""
                     messages = [
-                        SystemMessage(self._build_system_prompt()),
-                        UserMessage(fix_prompt)
+                        {"role": "system", "content": self._build_system_prompt()},
+                        {"role": "user", "content": fix_prompt},
                     ]
                 
                 # 调用 LLM
@@ -206,8 +205,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
                 result = self.output_parser.parse(response)
                 
                 # 记录到历史
-                self.add_message(UserMessage(query))
-                self.add_message(AssistantMessage(response))
+                self.add_user_message(query)
+                self.add_assistant_message(response)
                 
                 logger.info(f"结构化输出解析成功 (尝试 {attempt + 1}/{self.max_retries})")
                 return result
@@ -245,8 +244,8 @@ class StructuredOutputAgent(BasicAgent, Generic[T]):
         enhanced_query = f"{query}\n\n{format_instructions}"
         
         messages = [
-            SystemMessage(self._build_system_prompt()),
-            UserMessage(enhanced_query)
+            {"role": "system", "content": self._build_system_prompt()},
+            {"role": "user", "content": enhanced_query},
         ]
         
         return self.llm.invoke(messages, temperature=temperature)

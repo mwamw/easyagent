@@ -112,6 +112,104 @@ class AnthropicCompatCodec(OpenAIChatCodec):
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _canonical_from_anthropic(message, self.provider_name)
 
+    def append_replay_entry(self, prepared: list[Any], item: Any) -> None:
+        if self._is_tool_result_turn(item) and prepared and self._is_tool_result_turn(prepared[-1]):
+            prepared[-1]["content"].extend(item["content"])
+            return
+        prepared.append(item)
+
+    @staticmethod
+    def _is_tool_result_turn(message: Any) -> bool:
+        if not isinstance(message, dict):
+            return False
+        if message.get("role") != "user":
+            return False
+        content = message.get("content")
+        if not isinstance(content, list) or not content:
+            return False
+        return all(isinstance(block, dict) and block.get("type") == "tool_result" for block in content)
+
+    def canonical_message_to_replay(self, message: Any) -> list[Any]:
+        canonical = coerce_canonical_message(message)
+        if canonical is None:
+            entries: list[Any] = []
+            for entry in self.history_entry_to_canonical(message):
+                entries.extend(self.canonical_message_to_replay(entry))
+            return entries
+        blocks: list[dict[str, Any]] = []
+        thinking_parts: list[str] = []
+        for block in canonical.content:
+            payload = block.payload if isinstance(block.payload, dict) else None
+            provider_block_type = block.metadata.get("provider_block_type") if isinstance(block.metadata, dict) else None
+            if block.type == "text":
+                if block.text:
+                    blocks.append({"type": "text", "text": block.text})
+                continue
+            if block.type == "reasoning":
+                text = block.text or _reasoning_text(block.summary or block.payload)
+                if text:
+                    thinking_parts.append(text)
+                if isinstance(payload, dict) and payload.get("type") in {"thinking", "redacted_thinking"}:
+                    blocks.append(dict(payload))
+                    continue
+                if provider_block_type == "redacted_thinking" and isinstance(payload, dict):
+                    blocks.append(dict(payload))
+                    continue
+                continue
+            if block.type == "function_call":
+                if isinstance(payload, dict) and payload.get("type") == "tool_use":
+                    blocks.append(dict(payload))
+                    continue
+                try:
+                    input_data = json.loads(block.arguments) if isinstance(block.arguments, str) else block.arguments or {}
+                except Exception:
+                    input_data = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": block.call_id,
+                        "name": block.name or "",
+                        "input": input_data,
+                    }
+                )
+                continue
+            if block.type == "function_response":
+                content = block.output
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False, default=str)
+                tool_result = {
+                    "type": "tool_result",
+                    "tool_use_id": block.call_id,
+                    "content": content,
+                }
+                if block.name:
+                    tool_result["name"] = block.name
+                blocks.append(tool_result)
+                continue
+            if block.type == "provider_item" and isinstance(payload, dict):
+                blocks.append(dict(payload))
+
+        if canonical.role == "tool":
+            return [{"role": "user", "content": blocks or [{"type": "tool_result", "tool_use_id": None, "content": ""}]}]
+        if canonical.role == "system":
+            text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
+            if not text:
+                text = canonical.text_content()
+            return [{"role": "system", "content": text}]
+
+        content: Any
+        if blocks and all(isinstance(block, dict) and block.get("type") == "text" for block in blocks):
+            content = "".join(block.get("text", "") for block in blocks)
+        else:
+            content = blocks
+        payload: dict[str, Any] = {
+            "role": "assistant" if canonical.role == "assistant" else "user",
+            "content": content,
+        }
+        if thinking_parts:
+            payload["reasoning_content"] = "".join(thinking_parts)
+        return [payload]
+
     def build_tool_result(self, content: str, tool_id: str, tool_name: str) -> dict[str, Any]:
         return {
             "role": "user",

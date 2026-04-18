@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncGenerator, Generator, Optional
 
 from ...history import (
@@ -94,9 +95,208 @@ def _canonical_from_openai_chat_like(message: Any, provider_name: str) -> list[C
     ]
 
 
+def _json_arguments(arguments: Any) -> str:
+    if isinstance(arguments, str):
+        return arguments
+    if arguments is None:
+        return "{}"
+    return json.dumps(arguments, ensure_ascii=False, default=str)
+
+
+def _canonical_to_openai_like_message(
+    canonical: CanonicalMessage,
+    *,
+    tool_role: str = "tool",
+    preserve_reasoning: bool = True,
+) -> list[Any]:
+    text_parts: list[str] = []
+    thinking_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+    tool_results: list[dict[str, Any]] = []
+
+    for block in canonical.content:
+        if block.type == "text" and block.text:
+            text_parts.append(block.text)
+            continue
+        if block.type == "reasoning":
+            text = block.text or _reasoning_text(block.summary or block.payload)
+            if text:
+                thinking_parts.append(text)
+            continue
+        if block.type == "function_call":
+            payload = block.payload if isinstance(block.payload, dict) else None
+            if isinstance(payload, dict) and payload.get("type") == "function":
+                tool_calls.append(dict(payload))
+                continue
+            tool_calls.append(
+                {
+                    "id": block.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name or "",
+                        "arguments": _json_arguments(block.arguments),
+                    },
+                }
+            )
+            continue
+        if block.type == "function_response":
+            tool_results.append(
+                {
+                    "role": tool_role,
+                    "content": _stringify(block.output),
+                    "tool_call_id": block.call_id or "",
+                    "name": block.name,
+                }
+            )
+
+    if canonical.role == "assistant":
+        payload: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(text_parts) if text_parts else None,
+        }
+        if tool_calls:
+            payload["tool_calls"] = tool_calls
+        if preserve_reasoning and thinking_parts:
+            payload["reasoning_content"] = "".join(thinking_parts)
+        return [payload]
+
+    if canonical.role == "tool":
+        if tool_results:
+            return tool_results
+        return [{"role": tool_role, "content": "", "tool_call_id": "", "name": None}]
+
+    payload = {
+        "role": canonical.role,
+        "content": "".join(text_parts),
+    }
+    if preserve_reasoning and thinking_parts:
+        payload["reasoning_content"] = "".join(thinking_parts)
+    return [payload]
+
+
 class OpenAIChatCodec(BaseProviderCodec):
+    def build_request_token_payload(
+        self,
+        replay_history: list[Any],
+        *,
+        system_prompt: Optional[str] = None,
+        tools: Optional[list[dict[str, Any]]] = None,
+        pending_messages: Optional[list[Any]] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        messages: list[Any] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.extend(_json_safe(item) for item in replay_history)
+        if pending_messages:
+            messages.extend(_json_safe(item) for item in pending_messages)
+        payload: dict[str, Any] = {"messages": messages}
+        if tools:
+            payload["tools"] = _json_safe(tools)
+        if reasoning:
+            payload["reasoning"] = _json_safe(reasoning)
+        return payload
+
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _canonical_from_openai_chat_like(message, self.provider_name)
+
+    def query_to_replay(self, query: str) -> list[Any]:
+        return [{"role": "user", "content": query}]
+
+    def response_to_canonical(self, response: Any, *, include_reasoning: bool = False) -> list[CanonicalMessage]:
+        if response is None:
+            return []
+        if isinstance(response, str):
+            return self.assistant_message_to_canonical(content=response)
+
+        blocks: list[CanonicalBlock] = []
+        thinking = self.get_thinking_content(response) if include_reasoning else None
+        if thinking:
+            blocks.append(
+                CanonicalBlock(
+                    type="reasoning",
+                    text=thinking,
+                    payload=_json_safe(thinking),
+                    metadata={"provider_block_type": "reasoning_content"},
+                )
+            )
+        content = getattr(response, "content", None)
+        if content is not None and content != "":
+            blocks.append(CanonicalBlock(type="text", text=_stringify(content)))
+        for index, tool_call in enumerate(getattr(response, "tool_calls", None) or []):
+            function = getattr(tool_call, "function", None)
+            arguments = getattr(function, "arguments", None) if function is not None else None
+            blocks.append(
+                CanonicalBlock(
+                    type="function_call",
+                    call_id=getattr(tool_call, "id", None) or f"tool_call_{index}",
+                    name=getattr(function, "name", None) or "",
+                    arguments=_json_safe(arguments),
+                    payload=_json_safe(
+                        {
+                            "id": getattr(tool_call, "id", None),
+                            "type": getattr(tool_call, "type", None) or "function",
+                            "function": {
+                                "name": getattr(function, "name", None) or "",
+                                "arguments": arguments or "",
+                            },
+                        }
+                    ),
+                    metadata={"provider_block_type": "tool_call"},
+                )
+            )
+        if not blocks:
+            blocks = [CanonicalBlock(type="provider_item", payload=_json_safe(response))]
+        return [
+            CanonicalMessage(
+                role="assistant",
+                content=blocks,
+                provider=self.provider_name,
+                provider_message_type="assistant",
+            )
+        ]
+
+    def response_to_replay(self, response: Any, *, include_reasoning: bool = False) -> list[Any]:
+        if response is None:
+            return []
+        if isinstance(response, str):
+            return self.assistant_message_to_replay(content=response)
+        return [self.build_assistant_response(response, include_reasoning=include_reasoning)]
+
+    def tool_result_to_canonical(self, content: str, tool_id: str, tool_name: str) -> list[CanonicalMessage]:
+        return [
+            CanonicalMessage(
+                role="tool",
+                content=[
+                    CanonicalBlock(
+                        type="function_response",
+                        call_id=tool_id,
+                        name=tool_name,
+                        output=content,
+                        payload=_json_safe(
+                            {
+                                "role": "tool",
+                                "content": content,
+                                "tool_call_id": tool_id,
+                                "name": tool_name,
+                            }
+                        ),
+                        metadata={"provider_block_type": "tool"},
+                    )
+                ],
+                provider=self.provider_name,
+                provider_message_type="tool",
+            )
+        ]
+
+    def canonical_message_to_replay(self, message: Any) -> list[Any]:
+        canonical = coerce_canonical_message(message)
+        if canonical is None:
+            entries: list[Any] = []
+            for entry in self.history_entry_to_canonical(message):
+                entries.extend(self.canonical_message_to_replay(entry))
+            return entries
+        return _canonical_to_openai_like_message(canonical, tool_role="tool", preserve_reasoning=True)
 
     def is_request_ready_message(self, message: Any) -> bool:
         return isinstance(message, dict) and "role" in message and (
