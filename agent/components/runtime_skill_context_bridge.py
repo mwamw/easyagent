@@ -7,7 +7,8 @@ import json
 from typing import Any
 
 from Tool.BaseTool import ToolResult
-
+from logging import getLogger
+logger = getLogger(__name__)
 from agent import BasicAgent
 from core.request_input import ReplayRequestInput
 class BaseRuntimeSkillContextBridge(ABC):
@@ -64,12 +65,14 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
             messages.extend_replay(replay_entries)
             return
         for entry in replay_entries:
-            messages.append(entry)
+            agent.llm.append_replay_entry(messages, entry)
 
     def append_runtime_skill_context_message(self, agent:BasicAgent, messages: list[Any]) -> None:
         runtime_prompt = agent.skill_manager.build_runtime_skill_context_prompt()
         if not runtime_prompt:
+            logger.debug("No runtime skill context available")
             return
+        logger.info("Injecting runtime skill context")
         self._append_runtime_text(agent, messages, runtime_prompt)
 
     def append_tool_ephemeral_context_message(
@@ -90,6 +93,7 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
             context_text = str(context).strip()
         if not context_text:
             return
+        logger.info("Injecting tool ephemeral context")
         self._append_runtime_text(
             agent,
             messages,

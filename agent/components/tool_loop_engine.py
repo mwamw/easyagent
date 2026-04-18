@@ -73,20 +73,6 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         )
 
     @staticmethod
-    def _extend_turn_history(
-        turn_canonical_history: list[Any],
-        turn_replay_history: list[Any],
-        canonical_entries: list[Any],
-        replay_entries: list[Any],
-    ) -> None:
-        turn_canonical_history.extend(canonical_entries)
-        turn_replay_history.extend(replay_entries)
-
-    @staticmethod
-    def _append_request_replay(messages: Any, replay_entries: list[Any]) -> None:
-        messages.extend_replay(replay_entries)
-
-    @staticmethod
     def _normalize_stream_assistant_replay(assistant_items: Any) -> list[Any]:
         if assistant_items is None:
             return []
@@ -96,6 +82,43 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             return [assistant_items]
         raise TypeError(
             f"流式 assistant_items 必须是 dict 或 list[dict]，实际收到: {type(assistant_items).__name__}"
+        )
+
+    @staticmethod
+    def _inject_tool_ephemeral_context(
+        agent: BasicAgent,
+        *,
+        tool_name: str,
+        tool_result: Any,
+        messages: ReplayRequestInput,
+        ephemeral_replay: list[Any],
+    ) -> None:
+        agent._maybe_inject_tool_ephemeral_context(
+            tool_name=tool_name,
+            tool_result=tool_result,
+            messages=messages, # type: ignore
+        )
+        agent._maybe_inject_tool_ephemeral_context(
+            tool_name=tool_name,
+            tool_result=tool_result,
+            messages=ephemeral_replay,
+        )
+
+    @staticmethod
+    def _inject_runtime_skill_context(
+        agent: BasicAgent,
+        *,
+        tool_name: str,
+        messages: ReplayRequestInput,
+        ephemeral_replay: list[Any],
+    ) -> None:
+        agent._maybe_inject_runtime_skill_context(
+            tool_name=tool_name,
+            messages=messages, # type: ignore
+        )
+        agent._maybe_inject_runtime_skill_context(
+            tool_name=tool_name,
+            messages=ephemeral_replay,
         )
 
     def invoke(
@@ -116,12 +139,17 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
 
         raw_query = trace_query if trace_query is not None else query
-        messages = agent._build_start_messages(query)
-
+        agent._append_query_history(query)
+        agent.compact_persistent_history_if_needed()
+        ephemeral_replay: list[Any] = []
+        messages = agent._build_start_messages(
+            query,
+            include_query=False,
+            extra_replay_entries=ephemeral_replay,
+        )
+        needs_rebuild = False
         final_response: Optional[str] = None
         response: Any = None
-        turn_canonical_history = agent.llm.query_to_canonical(query)
-        turn_replay_history = agent.llm.query_to_replay(query)
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
 
@@ -131,17 +159,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 logger.debug(f"工具调用迭代 {iteration_count}")
 
                 try:
-                    messages = agent.compact_request_input_if_needed(
-                        messages,
-                        tools=agent.tool_registry.get_openai_tools(),
-                        reasoning=agent.reasoning,
-                    )
-                    agent._capture_context_usage(
-                        messages,
-                        label="invoke_tool",
-                        tools=agent.tool_registry.get_openai_tools(),
-                        reasoning=agent.reasoning,
-                    )
+                    if needs_rebuild:
+                        messages = agent._build_start_messages(
+                            query,
+                            include_query=False,
+                            extra_replay_entries=ephemeral_replay,
+                        )
+                        needs_rebuild = False
                     agent.callback_manager.on_llm_start(messages)
                     response = agent.llm.invoke_with_tools(
                         messages,
@@ -182,12 +206,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         response,
                         include_reasoning=True,
                     )
-                    self._append_request_replay(messages, response_replay)
-                    self._extend_turn_history(
-                        turn_canonical_history,
-                        turn_replay_history,
-                        response_canonical,
-                        response_replay,
+                    messages.extend_replay(response_replay)
+                    agent._set_pending_step_state(
+                        assistant_canonical=response_canonical,
+                        assistant_replay=response_replay,
+                        tool_calls=agent.llm.get_tool_calls(response),
+                        round_number=iteration_count,
                     )
                     assistant_parent_id = (
                         reasoning_event_id
@@ -250,8 +274,6 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     parent_id=tool_call_event_id,
                                     mode="tool",
                                     stream=False,
-                                    turn_canonical_history=turn_canonical_history,
-                                    turn_replay_history=turn_replay_history,
                                     tool_canonical=tool_canonical,
                                     tool_replay=tool_replay,
                                 )
@@ -268,21 +290,23 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 stream=False,
                                 success=tool_result_obj.status == "success",
                             )
-                            self._append_request_replay(messages, tool_replay)
-                            self._extend_turn_history(
-                                turn_canonical_history,
-                                turn_replay_history,
-                                tool_canonical,
-                                tool_replay,
+                            agent._append_pending_tool_result(
+                                tool_canonical=tool_canonical,
+                                tool_replay=tool_replay,
                             )
-                            agent._maybe_inject_tool_ephemeral_context(
+                            messages.extend_replay(tool_replay)
+                            self._inject_tool_ephemeral_context(
+                                agent=agent,
                                 tool_name=tool_name,
                                 tool_result=tool_result_obj,
                                 messages=messages,
+                                ephemeral_replay=ephemeral_replay,
                             )
-                            agent._maybe_inject_runtime_skill_context(
+                            self._inject_runtime_skill_context(
+                                agent=agent,
                                 tool_name=tool_name,
                                 messages=messages,
+                                ephemeral_replay=ephemeral_replay,
                             )
                         except ToolExecutionError as e:
                             logger.error(f"工具 '{tool_name}' 执行失败: {e}")
@@ -301,13 +325,11 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
                             tool_canonical = agent.llm.tool_result_to_canonical(error_msg, tool_id, tool_name)
                             tool_replay = agent.llm.tool_result_to_replay(error_msg, tool_id, tool_name)
-                            self._append_request_replay(messages, tool_replay)
-                            self._extend_turn_history(
-                                turn_canonical_history,
-                                turn_replay_history,
-                                tool_canonical,
-                                tool_replay,
+                            agent._append_pending_tool_result(
+                                tool_canonical=tool_canonical,
+                                tool_replay=tool_replay,
                             )
+                            messages.extend_replay(tool_replay)
                         except ToolInterruption as e:
                             raise e
                         except Exception as e:
@@ -327,13 +349,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
                             tool_canonical = agent.llm.tool_result_to_canonical(error_msg, tool_id, tool_name)
                             tool_replay = agent.llm.tool_result_to_replay(error_msg, tool_id, tool_name)
-                            self._append_request_replay(messages, tool_replay)
-                            self._extend_turn_history(
-                                turn_canonical_history,
-                                turn_replay_history,
-                                tool_canonical,
-                                tool_replay,
+                            agent._append_pending_tool_result(
+                                tool_canonical=tool_canonical,
+                                tool_replay=tool_replay,
                             )
+                            messages.extend_replay(tool_replay)
+                    agent._commit_pending_step_state()
+                    needs_rebuild = agent.compact_persistent_history_if_needed()
                 else:
                     content = agent.llm.get_response_content(response) or getattr(response, "content", None)
                     if content is not None:
@@ -352,26 +374,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             final_response = agent.skill_manager.on_after_invoke(query, final_response)
             provider_content = agent.llm.get_response_content(response) if response is not None else None
             if response is not None and final_response == provider_content:
-                self._extend_turn_history(
-                    turn_canonical_history,
-                    turn_replay_history,
-                    agent.llm.response_to_canonical(response, include_reasoning=True),
-                    agent.llm.response_to_replay(response, include_reasoning=True),
-                )
+                agent._append_response_history(response, include_reasoning=True)
             else:
-                self._extend_turn_history(
-                    turn_canonical_history,
-                    turn_replay_history,
-                    agent.llm.assistant_message_to_canonical(
-                        content=final_response,
-                        thinking=agent.llm.get_thinking_content(response) if response is not None else None,
-                    ),
-                    agent.llm.assistant_message_to_replay(
-                        content=final_response,
-                        thinking=agent.llm.get_thinking_content(response) if response is not None else None,
-                    ),
+                agent._append_assistant_message_history(
+                    content=final_response,
+                    thinking=agent.llm.get_thinking_content(response) if response is not None else None,
                 )
-            agent._append_dual_history(turn_canonical_history, turn_replay_history)
             agent.compact_persistent_history_if_needed()
             final_event_id = agent._record_assistant_trace(
                 turn_id,
@@ -409,12 +417,17 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
 
         raw_query = trace_query if trace_query is not None else query
-        messages = agent._build_start_messages(query)
-
+        agent._append_query_history(query)
+        await agent.acompact_persistent_history_if_needed()
+        ephemeral_replay: list[Any] = []
+        messages = agent._build_start_messages(
+            query,
+            include_query=False,
+            extra_replay_entries=ephemeral_replay,
+        )
+        needs_rebuild = False
         final_response: Optional[str] = None
         response: Any = None
-        turn_canonical_history = agent.llm.query_to_canonical(query)
-        turn_replay_history = agent.llm.query_to_replay(query)
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
 
@@ -424,17 +437,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 logger.debug(f"异步工具调用迭代 {iteration_count}")
 
                 try:
-                    messages = await agent.acompact_request_input_if_needed(
-                        messages,
-                        tools=agent.tool_registry.get_openai_tools(),
-                        reasoning=agent.reasoning,
-                    )
-                    agent._capture_context_usage(
-                        messages,
-                        label="ainvoke_tool",
-                        tools=agent.tool_registry.get_openai_tools(),
-                        reasoning=agent.reasoning,
-                    )
+                    if needs_rebuild:
+                        messages = agent._build_start_messages(
+                            query,
+                            include_query=False,
+                            extra_replay_entries=ephemeral_replay,
+                        )
+                        needs_rebuild = False
                     agent.callback_manager.on_llm_start(messages)
                     response = await agent.llm.ainvoke_with_tools(
                         messages,
@@ -474,13 +483,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         response,
                         include_reasoning=True,
                     )
+                    messages.extend_replay(response_replay)
                     tool_calls = agent.llm.get_tool_calls(response)
-                    self._append_request_replay(messages, response_replay)
-                    self._extend_turn_history(
-                        turn_canonical_history,
-                        turn_replay_history,
-                        response_canonical,
-                        response_replay,
+                    agent._set_pending_step_state(
+                        assistant_canonical=response_canonical,
+                        assistant_replay=response_replay,
+                        tool_calls=tool_calls,
+                        round_number=iteration_count,
                     )
                     assistant_parent_id = (
                         reasoning_event_id
@@ -546,8 +555,6 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     parent_id=tool_call_event_id,
                                     mode="tool",
                                     stream=False,
-                                    turn_canonical_history=turn_canonical_history,
-                                    turn_replay_history=turn_replay_history,
                                     tool_canonical=tool_canonical,
                                     tool_replay=tool_replay,
                                 )
@@ -618,25 +625,29 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     tasks = [_process_single_tool(tc) for tc in tool_calls]
                     tool_payloads = await asyncio.gather(*tasks)
                     for payload in tool_payloads:
-                        self._append_request_replay(messages, payload["tool_replay"])
-                        self._extend_turn_history(
-                            turn_canonical_history,
-                            turn_replay_history,
-                            payload["tool_canonical"],
-                            payload["tool_replay"],
+                        agent._append_pending_tool_result(
+                            tool_canonical=payload["tool_canonical"],
+                            tool_replay=payload["tool_replay"],
                         )
+                        messages.extend_replay(payload["tool_replay"])
                         result_obj = payload.get("tool_result")
                         if result_obj is not None:
-                            agent._maybe_inject_tool_ephemeral_context(
+                            self._inject_tool_ephemeral_context(
+                                agent=agent,
                                 tool_name=payload["tool_name"],
                                 tool_result=result_obj,
                                 messages=messages,
+                                ephemeral_replay=ephemeral_replay,
                             )
                     if any(agent._safe_get_tool_name(tc) == "skill_tool" for tc in tool_calls):
-                        agent._maybe_inject_runtime_skill_context(
+                        self._inject_runtime_skill_context(
+                            agent=agent,
                             tool_name="skill_tool",
                             messages=messages,
+                            ephemeral_replay=ephemeral_replay,
                         )
+                    agent._commit_pending_step_state()
+                    needs_rebuild = await agent.acompact_persistent_history_if_needed()
                 else:
                     content = agent.llm.get_response_content(response) or getattr(response, "content", None)
                     if content is not None:
@@ -655,21 +666,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             final_response = agent.skill_manager.on_after_invoke(query, final_response)
             provider_content = agent.llm.get_response_content(response) if response is not None else None
             if response is not None and final_response == provider_content:
-                self._extend_turn_history(
-                    turn_canonical_history,
-                    turn_replay_history,
-                    agent.llm.response_to_canonical(response, include_reasoning=True),
-                    agent.llm.response_to_replay(response, include_reasoning=True),
-                )
+                agent._append_response_history(response, include_reasoning=True)
             else:
                 thinking = agent.llm.get_thinking_content(response) if response is not None else None
-                self._extend_turn_history(
-                    turn_canonical_history,
-                    turn_replay_history,
-                    agent.llm.assistant_message_to_canonical(content=final_response, thinking=thinking),
-                    agent.llm.assistant_message_to_replay(content=final_response, thinking=thinking),
+                agent._append_assistant_message_history(
+                    content=final_response,
+                    thinking=thinking,
                 )
-            agent._append_dual_history(turn_canonical_history, turn_replay_history)
             await agent.acompact_persistent_history_if_needed()
             final_event_id = agent._record_assistant_trace(
                 turn_id,
@@ -712,10 +715,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=error)
             raise error
 
-        messages = agent._build_start_messages(query)
+        agent._append_query_history(query)
+        await agent.acompact_persistent_history_if_needed()
+        ephemeral_replay: list[Any] = []
+        messages = agent._build_start_messages(
+            query,
+            include_query=False,
+            extra_replay_entries=ephemeral_replay,
+        )
+        needs_rebuild = False
         final_response = ""
-        turn_canonical_history = agent.llm.query_to_canonical(query)
-        turn_replay_history = agent.llm.query_to_replay(query)
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         round_index = 0
 
@@ -723,17 +732,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             while max_iter > 0:
                 round_index += 1
 
-                messages = await agent.acompact_request_input_if_needed(
-                    messages,
-                    tools=agent.tool_registry.get_openai_tools(),
-                    reasoning=agent.reasoning,
-                )
-                agent._capture_context_usage(
-                    messages,
-                    label="astream_invoke_tool",
-                    tools=agent.tool_registry.get_openai_tools(),
-                    reasoning=agent.reasoning,
-                )
+                if needs_rebuild:
+                    messages = agent._build_start_messages(
+                        query,
+                        include_query=False,
+                        extra_replay_entries=ephemeral_replay,
+                    )
+                    needs_rebuild = False
                 agent.callback_manager.on_llm_start(messages)
                 llm_stream = agent.llm.astream_with_tools(
                     messages,
@@ -821,12 +826,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     tool_calls=event.get("tool_calls"),
                                     thinking=streamed_thinking or None,
                                 )
-                            self._append_request_replay(messages, assistant_replay)
-                            self._extend_turn_history(
-                                turn_canonical_history,
-                                turn_replay_history,
-                                assistant_canonical,
-                                assistant_replay,
+                            messages.extend_replay(assistant_replay)
+                            agent._set_pending_step_state(
+                                assistant_canonical=assistant_canonical,
+                                assistant_replay=assistant_replay,
+                                tool_calls=event.get("tool_calls", []),
+                                round_number=round_index,
                             )
 
                             agent.callback_manager.on_llm_end(event.get("content", "") or "")
@@ -911,8 +916,6 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                         parent_id=tool_call_event_id,
                                         mode="tool",
                                         stream=True,
-                                        turn_canonical_history=turn_canonical_history,
-                                        turn_replay_history=turn_replay_history,
                                         tool_canonical=tool_canonical,
                                         tool_replay=tool_replay,
                                     )
@@ -945,24 +948,28 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     stream=True,
                                     success=tool_success,
                                 )
-                                self._append_request_replay(messages, tool_replay)
-                                self._extend_turn_history(
-                                    turn_canonical_history,
-                                    turn_replay_history,
-                                    tool_canonical,
-                                    tool_replay,
+                                agent._append_pending_tool_result(
+                                    tool_canonical=tool_canonical,
+                                    tool_replay=tool_replay,
                                 )
+                                messages.extend_replay(tool_replay)
                                 if tool_result_obj is not None:
-                                    agent._maybe_inject_tool_ephemeral_context(
+                                    self._inject_tool_ephemeral_context(
+                                        agent=agent,
                                         tool_name=tool_name,
                                         tool_result=tool_result_obj,
                                         messages=messages,
+                                        ephemeral_replay=ephemeral_replay,
                                     )
-                                agent._maybe_inject_runtime_skill_context(
+                                self._inject_runtime_skill_context(
+                                    agent=agent,
                                     tool_name=tool_name,
                                     messages=messages,
+                                    ephemeral_replay=ephemeral_replay,
                                 )
 
+                            agent._commit_pending_step_state()
+                            needs_rebuild = await agent.acompact_persistent_history_if_needed()
                             max_iter -= 1
                             should_continue = True
                             break
@@ -992,13 +999,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     content=final_response,
                                     thinking=event.get("thinking", "") or None,
                                 )
-                            self._extend_turn_history(
-                                turn_canonical_history,
-                                turn_replay_history,
-                                assistant_canonical,
-                                assistant_replay,
-                            )
-                            agent._append_dual_history(turn_canonical_history, turn_replay_history)
+                            agent._append_dual_history(assistant_canonical, assistant_replay)
                             await agent.acompact_persistent_history_if_needed()
                             final_event_id = agent._record_assistant_trace(
                                 turn_id,
@@ -1039,13 +1040,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             if not final_response:
                 final_response = "超过最大迭代次数，智能体调用失败!"
             final_response = agent.skill_manager.on_after_invoke(query, final_response)
-            self._extend_turn_history(
-                turn_canonical_history,
-                turn_replay_history,
-                agent.llm.assistant_message_to_canonical(content=final_response),
-                agent.llm.assistant_message_to_replay(content=final_response),
-            )
-            agent._append_dual_history(turn_canonical_history, turn_replay_history)
+            agent._append_assistant_message_history(content=final_response)
             await agent.acompact_persistent_history_if_needed()
             final_event_id = agent._record_assistant_trace(
                 turn_id,

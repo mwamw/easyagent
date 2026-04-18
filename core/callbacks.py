@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
-
+from .request_input import ReplayRequestInput
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +57,7 @@ class BaseCallback(ABC):
         """
         pass
     
-    def on_llm_start(self, messages: List[Dict], **kwargs) -> None:
+    def on_llm_start(self, messages: List[Dict] | ReplayRequestInput, **kwargs) -> None:
         """
         LLM 调用开始时
         
@@ -66,7 +66,7 @@ class BaseCallback(ABC):
         """
         pass
     
-    def on_llm_end(self, response: str, **kwargs) -> None:
+    def on_llm_end(self, response: str , **kwargs) -> None:
         """
         LLM 调用结束时
         
@@ -296,7 +296,7 @@ class MetricsCallback(BaseCallback):
         if not success:
             self.metrics["errors"] += 1
     
-    def on_llm_start(self, messages: List[Dict], **kwargs) -> None:
+    def on_llm_start(self, messages: List[Dict] | ReplayRequestInput, **kwargs) -> None:
         self.metrics["llm_calls"] += 1
     
     def on_tool_start(self, tool_name: str, tool_input: Dict, **kwargs) -> None:
@@ -394,7 +394,7 @@ class CallbackManager:
             except Exception as e:
                 logger.warning(f"回调执行失败: {e}")
     
-    def on_llm_start(self, messages: List[Dict], **kwargs) -> None:
+    def on_llm_start(self, messages: List[Dict] | ReplayRequestInput, **kwargs) -> None:
         for cb in self.callbacks:
             try:
                 cb.on_llm_start(messages, **kwargs)

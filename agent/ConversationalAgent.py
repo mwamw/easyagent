@@ -9,7 +9,6 @@ import logging
 
 from .BasicAgent import BasicAgent
 from core.llm import EasyLLM
-from core.Message import Message, UserMessage, SystemMessage, AssistantMessage
 from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
 from core.Exception import *

@@ -6,7 +6,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 from agent import BasicAgent
-from core.providers import create_codec
 from core.request_input import ReplayRequestInput
 
 logger = logging.getLogger(__name__)
@@ -28,7 +27,14 @@ class BaseHistoryMessageAssembler(ABC):
         pass
 
     @abstractmethod
-    def build_start_messages(self, agent:BasicAgent, query: str)->Any:
+    def build_start_messages(
+        self,
+        agent:BasicAgent,
+        query: str,
+        *,
+        include_query: bool = True,
+        extra_replay_entries: list[Any] | None = None,
+    )->Any:
         pass
 
 
@@ -58,7 +64,14 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
         for message in agent.replay_history:
             messages.append(message)
 
-    def build_start_messages(self, agent:BasicAgent, query: str) -> ReplayRequestInput:
+    def build_start_messages(
+        self,
+        agent:BasicAgent,
+        query: str,
+        *,
+        include_query: bool = True,
+        extra_replay_entries: list[Any] | None = None,
+    ) -> ReplayRequestInput:
         system_prompt = agent.get_enhanced_prompt()
         self._ensure_replay_history(agent)
         provider_name = getattr(agent.llm, "provider_name", None)
@@ -68,7 +81,8 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
                 replay_history=agent.replay_history,
                 provider_name=provider_name,
                 system_prompt=system_prompt,
-                include_query=True,
+                include_query=include_query,
+                extra_replay_entries=extra_replay_entries,
                 tools=agent.tool_registry.get_openai_tools() if agent.tool_registry is not None else None,
                 reasoning=agent.reasoning,
             )
@@ -79,5 +93,8 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
             replay_history=list(agent.replay_history),
             system_prompt=system_prompt,
         )
-        request_input.extend_replay(agent.llm.query_to_replay(query))
+        if extra_replay_entries:
+            request_input.extend_replay(extra_replay_entries)
+        if include_query and query:
+            request_input.extend_replay(agent.llm.query_to_replay(query))
         return request_input

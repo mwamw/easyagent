@@ -9,7 +9,6 @@ from .history import (
     canonical_text_content,
     coerce_canonical_message,
 )
-from .request_input import ReplayRequestInput
 from typing import Optional, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -36,34 +35,54 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _build_context_usage_payload(
+def _build_history_context_usage_payload(
     *,
-    label: str,
-    request_tokens: int,
     max_tokens: Optional[int],
+    history_budget_tokens: Optional[int],
+    history_tokens: int,
+    system_prompt_tokens: int,
+    tool_schema_tokens: int,
+    stable_context_tokens: int,
+    canonical_history_messages: int,
+    replay_history_messages: int,
     compaction: Optional[dict[str, Any]] = None,
+    pending_step_active: bool = False,
 ) -> dict[str, Any]:
-    budget = max_tokens
-    remaining_tokens = (budget - request_tokens) if budget is not None else None
-    overflow_tokens = max(0, request_tokens - budget) if budget is not None else 0
+    remaining = (max_tokens - stable_context_tokens) if max_tokens is not None else None
+    history_remaining = (history_budget_tokens - stable_context_tokens) if history_budget_tokens is not None else None
     compaction = dict(compaction or {})
-    tokens_before = int(compaction.get("tokens_before", request_tokens) or request_tokens)
-    tokens_after = int(compaction.get("tokens_after", request_tokens) or request_tokens)
-    overflow_before = max(0, tokens_before - budget) if budget is not None else 0
-    overflow_after = max(0, tokens_after - budget) if budget is not None else 0
     return {
-        "label": label,
-        "request_tokens": request_tokens,
-        "used_tokens": request_tokens,
-        "remaining_tokens": remaining_tokens,
-        "overflow_tokens": overflow_tokens,
-        "max_tokens": budget,
-        "request_compacted": bool(compaction.get("was_compacted", False)),
-        "request_compaction_possible": bool(compaction.get("compaction_possible", False)),
-        "request_tokens_before_compaction": tokens_before,
-        "request_tokens_after_compaction": tokens_after,
-        "overflow_tokens_before_compaction": overflow_before,
-        "overflow_tokens_after_compaction": overflow_after,
+        "max_tokens": max_tokens,
+        "history_budget_tokens": history_budget_tokens,
+        "history_tokens": history_tokens,
+        "system_prompt_tokens": system_prompt_tokens,
+        "tool_schema_tokens": tool_schema_tokens,
+        "stable_context_tokens": stable_context_tokens,
+        "remaining_tokens_for_sources_and_query": remaining,
+        "history_budget_remaining_tokens": history_remaining,
+        "history_compacted": bool(compaction.get("was_compacted", False)),
+        "last_history_compaction": compaction or {},
+        "canonical_history_messages": canonical_history_messages,
+        "replay_history_messages": replay_history_messages,
+        "pending_step_active": pending_step_active,
+        "tracked_at": datetime.now().isoformat(),
+    }
+
+
+def _build_history_compaction_state(
+    *,
+    was_compacted: bool,
+    compaction_possible: bool,
+    tokens_before: int,
+    tokens_after: int,
+    max_tokens: Optional[int],
+) -> dict[str, Any]:
+    return {
+        "was_compacted": was_compacted,
+        "compaction_possible": compaction_possible,
+        "tokens_before": tokens_before,
+        "tokens_after": tokens_after,
+        "budget": max_tokens,
         "tracked_at": datetime.now().isoformat(),
     }
 
@@ -142,7 +161,8 @@ class BaseAgent(ABC):
         
         # 上下文工程管理器（可选）
         self.context_manager = context_manager
-        self._last_context_usage: dict[str, Any] = {}
+        self._last_history_compaction: dict[str, Any] = {}
+        self._pending_step_state: Optional[dict[str, Any]] = None
         self._context_usage_counter = TokenCounter()
         
         # Skill 管理器
@@ -335,6 +355,58 @@ class BaseAgent(ABC):
             self.llm.tool_result_to_canonical(content, tool_id, tool_name),
             self.llm.tool_result_to_replay(content, tool_id, tool_name),
         )
+
+    def _set_pending_step_state(
+        self,
+        *,
+        assistant_canonical: list[Any],
+        assistant_replay: list[Any],
+        tool_calls: Optional[list[dict[str, Any]]] = None,
+        round_number: Optional[int] = None,
+    ) -> None:
+        self._pending_step_state = {
+            "assistant_canonical": list(assistant_canonical or []),
+            "assistant_replay": list(assistant_replay or []),
+            "tool_results_canonical": [],
+            "tool_results_replay": [],
+            "tool_calls": _json_safe(tool_calls or []),
+            "round_number": round_number,
+            "provider_name": getattr(self.llm, "provider_name", None),
+        }
+
+    def _append_pending_tool_result(
+        self,
+        *,
+        tool_canonical: list[Any],
+        tool_replay: list[Any],
+    ) -> None:
+        if self._pending_step_state is None:
+            return
+        self._pending_step_state["tool_results_canonical"].extend(list(tool_canonical or []))
+        self._pending_step_state["tool_results_replay"].extend(list(tool_replay or []))
+
+    def _commit_pending_step_state(self) -> bool:
+        if not self._pending_step_state:
+            return False
+        canonical_entries = [
+            *list(self._pending_step_state.get("assistant_canonical") or []),
+            *list(self._pending_step_state.get("tool_results_canonical") or []),
+        ]
+        replay_entries = [
+            *list(self._pending_step_state.get("assistant_replay") or []),
+            *list(self._pending_step_state.get("tool_results_replay") or []),
+        ]
+        self._append_dual_history(canonical_entries, replay_entries)
+        self._pending_step_state = None
+        return True
+
+    def _clear_pending_step_state(self) -> None:
+        self._pending_step_state = None
+
+    def get_pending_step_state(self) -> Optional[dict[str, Any]]:
+        if self._pending_step_state is None:
+            return None
+        return self._make_json_safe(self._pending_step_state)
     
     def _append_history_entries(self, messages: list[Any]) -> None:
         """向 canonical history 与 replay history 批量追加消息。"""
@@ -532,6 +604,8 @@ class BaseAgent(ABC):
         self._history.clear()
         self.replay_history.clear()
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self._clear_pending_step_state()
+        self._last_history_compaction = {}
         self._unextracted_msg_count = 0
         logger.info("对话历史已清空")
 
@@ -542,86 +616,115 @@ class BaseAgent(ABC):
             return self.config.max_tokens
         return getattr(self.llm, "max_tokens", None)
 
-    def compact_request_input_if_needed(
-        self,
-        request_input: Any,
-        *,
-        tools: Optional[list[dict[str, Any]]] = None,
-        reasoning: Optional[dict[str, Any]] = None,
-    ) -> Any:
-        if self.context_manager is None or not isinstance(request_input, ReplayRequestInput):
-            return request_input
-        budget = self._request_budget_max_tokens()
-        if budget is None or budget <= 0:
-            return request_input
-        self.context_manager.compact_request_input(
-            request_input,
-            tools=tools,
-            reasoning=reasoning,
-            max_tokens=budget,
-        )
-        return request_input
+    def _history_budget_max_tokens(self) -> Optional[int]:
+        if self.context_manager is not None:
+            budget = self.context_manager.budget.get_budget("history")
+            if budget > 0:
+                return budget
+        return self._request_budget_max_tokens()
 
-    async def acompact_request_input_if_needed(
-        self,
-        request_input: Any,
-        *,
-        tools: Optional[list[dict[str, Any]]] = None,
-        reasoning: Optional[dict[str, Any]] = None,
-    ) -> Any:
-        if self.context_manager is None or not isinstance(request_input, ReplayRequestInput):
-            return request_input
-        budget = self._request_budget_max_tokens()
-        if budget is None or budget <= 0:
-            return request_input
-        await self.context_manager.acompact_request_input(
-            request_input,
-            tools=tools,
-            reasoning=reasoning,
-            max_tokens=budget,
+    def _stable_system_prompt(self) -> Optional[str]:
+        return self.get_enhanced_prompt()
+
+    def _stable_tools(self) -> Optional[list[dict[str, Any]]]:
+        if self.tool_registry is None:
+            return None
+        return self.tool_registry.get_openai_tools()
+
+    def _apply_history_compaction_result(self, result: Any) -> bool:
+        self._last_history_compaction = _build_history_compaction_state(
+            was_compacted=result.was_compacted,
+            compaction_possible=result.compaction_possible,
+            tokens_before=result.tokens_before,
+            tokens_after=result.tokens_after,
+            max_tokens=result.budget,
         )
-        return request_input
+        if not result.was_compacted:
+            return False
+        self._history = list(result.canonical_history)
+        self.replay_history = list(result.replay_history)
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        return True
 
     def compact_persistent_history_if_needed(self) -> bool:
         if self.context_manager is None or not self._history:
+            return False
+        budget = self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
             return False
         result = self.context_manager.compact_persistent_history(
             self._history,
             self.replay_history,
             provider_name=getattr(self.llm, "provider_name", None),
-            system_prompt=self.get_enhanced_prompt(),
-            tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+            token_counter=self._context_usage_counter,
+            system_prompt=self._stable_system_prompt(),
+            tools=self._stable_tools(),
             reasoning=self.reasoning,
+            max_tokens=budget,
         )
-        if not result.was_compacted:
-            return False
-        self._history = list(result.canonical_history)
-        self.replay_history = list(result.replay_history)
-        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
-        return True
+        return self._apply_history_compaction_result(result)
 
     async def acompact_persistent_history_if_needed(self) -> bool:
         if self.context_manager is None or not self._history:
+            return False
+        budget = self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
             return False
         result = await self.context_manager.acompact_persistent_history(
             self._history,
             self.replay_history,
             provider_name=getattr(self.llm, "provider_name", None),
-            system_prompt=self.get_enhanced_prompt(),
-            tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+            token_counter=self._context_usage_counter,
+            system_prompt=self._stable_system_prompt(),
+            tools=self._stable_tools(),
             reasoning=self.reasoning,
+            max_tokens=budget,
         )
-        if not result.was_compacted:
+        return self._apply_history_compaction_result(result)
+
+    def compact_history(self, max_tokens: Optional[int] = None) -> bool:
+        if self.context_manager is None or not self._history:
             return False
-        self._history = list(result.canonical_history)
-        self.replay_history = list(result.replay_history)
-        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
-        return True
+        budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return False
+        result = self.context_manager.compact_persistent_history(
+            self._history,
+            self.replay_history,
+            provider_name=getattr(self.llm, "provider_name", None),
+            token_counter=self._context_usage_counter,
+            system_prompt=self._stable_system_prompt(),
+            tools=self._stable_tools(),
+            reasoning=self.reasoning,
+            max_tokens=budget,
+            force=True,
+        )
+        return self._apply_history_compaction_result(result)
+
+    async def acompact_history(self, max_tokens: Optional[int] = None) -> bool:
+        if self.context_manager is None or not self._history:
+            return False
+        budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return False
+        result = await self.context_manager.acompact_persistent_history(
+            self._history,
+            self.replay_history,
+            provider_name=getattr(self.llm, "provider_name", None),
+            token_counter=self._context_usage_counter,
+            system_prompt=self._stable_system_prompt(),
+            tools=self._stable_tools(),
+            reasoning=self.reasoning,
+            max_tokens=budget,
+            force=True,
+        )
+        return self._apply_history_compaction_result(result)
 
     def _get_serializable_state(self) -> dict[str, Any]:
         """返回子类需要补充持久化的状态。"""
         return {
-            "last_context_usage": self.get_context_usage(),
+            "last_history_compaction": self._make_json_safe(self._last_history_compaction),
+            "pending_step_state": self._make_json_safe(self._pending_step_state),
             "replay_history_state": ReplayHistoryState(
                 provider_name=self.replay_history_provider_name,
                 messages=[
@@ -634,7 +737,9 @@ class BaseAgent(ABC):
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
         """恢复子类持久化状态。"""
         state = state or {}
-        self._set_last_context_usage(state.get("last_context_usage") or {})
+        self._last_history_compaction = self._make_json_safe(state.get("last_history_compaction") or {})
+        pending_state = state.get("pending_step_state")
+        self._pending_step_state = self._make_json_safe(pending_state) if pending_state is not None else None
         replay_state = state.get("replay_history_state") or {}
         provider_name = replay_state.get("provider_name")
         messages = [
@@ -937,10 +1042,35 @@ class BaseAgent(ABC):
         return self.replay_history
 
     def get_context_usage(self) -> dict[str, Any]:
-        """获取最近一次 invoke 构造出的可见上下文 token 使用快照。"""
-
-        
-        return self._make_json_safe(self._last_context_usage)
+        """获取当前稳定上下文的 token 使用情况。"""
+        max_tokens = self._request_budget_max_tokens()
+        history_budget = self._history_budget_max_tokens()
+        system_prompt = self._stable_system_prompt()
+        tools = self._stable_tools()
+        history_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            self.replay_history,
+        )
+        stable_context_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            self.replay_history,
+            system_prompt=system_prompt,
+            tools=tools,
+            reasoning=self.reasoning,
+        )
+        usage = _build_history_context_usage_payload(
+            max_tokens=max_tokens,
+            history_budget_tokens=history_budget,
+            history_tokens=history_tokens,
+            system_prompt_tokens=self._context_usage_counter.count(system_prompt or ""),
+            tool_schema_tokens=self._context_usage_counter.count(tools or []),
+            stable_context_tokens=stable_context_tokens,
+            canonical_history_messages=len(self._history),
+            replay_history_messages=len(self.replay_history),
+            compaction=self._last_history_compaction,
+            pending_step_active=self._pending_step_state is not None,
+        )
+        return self._make_json_safe(usage)
 
     def get_history_length(self) -> int:
         """
@@ -1016,72 +1146,13 @@ class BaseAgent(ABC):
 
         self.llm = llm
         self.rebuild_replay_history()
+        self._clear_pending_step_state()
 
         if current_llm is not llm:
             close = getattr(current_llm, "close", None)
             if callable(close):
                 close()
         return llm
-
-    def _capture_context_usage(
-        self,
-        messages: list[Any],
-        *,
-        label: str = "messages",
-        tools: Optional[list[dict[str, Any]]] = None,
-        reasoning: Optional[dict[str, Any]] = None,
-    ) -> dict[str, Any]:
-        """记录最近一次发送给 LLM 的可见上下文使用情况。"""
-        if self.context_manager is not None:
-            usage = self.context_manager.update_last_usage(
-                messages,
-                label=label,
-                tools=tools,
-                reasoning=reasoning,
-            )
-            self._set_last_context_usage(usage)
-            return usage
-
-        max_tokens = self._resolve_context_budget_max_tokens()
-        if isinstance(messages, ReplayRequestInput):
-            request_tokens = self.llm.count_request_tokens(
-                self._context_usage_counter,
-                messages.replay_history,
-                system_prompt=messages.system_prompt,
-                tools=tools,
-                reasoning=reasoning,
-            )
-            compaction = {}
-            if self.context_manager is not None:
-                compaction = self.context_manager.last_request_compaction
-            usage = _build_context_usage_payload(
-                label=label,
-                request_tokens=request_tokens,
-                max_tokens=max_tokens,
-                compaction=compaction,
-            )
-        else:
-            used_tokens = self._context_usage_counter.count_messages(messages)
-            compaction = {}
-            if self.context_manager is not None:
-                compaction = self.context_manager.last_request_compaction
-            usage = _build_context_usage_payload(
-                label=label,
-                request_tokens=used_tokens,
-                max_tokens=max_tokens,
-                compaction=compaction,
-            )
-        self._set_last_context_usage(usage)
-        return usage
-
-    def _set_last_context_usage(self, usage: Optional[dict[str, Any]]) -> None:
-        normalized = self._make_json_safe(usage or {})
-        self._last_context_usage = normalized
-        if self.context_manager is not None:
-            try:
-                self.context_manager.set_last_usage(normalized)
-            except Exception:
-                logger.debug("同步 context usage 到 ContextManager 失败", exc_info=True)
 
     def _resolve_context_budget_max_tokens(self) -> Optional[int]:
         if self.context_manager is not None:

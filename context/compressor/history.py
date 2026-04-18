@@ -17,6 +17,7 @@ import logging
 
 from core.history import coerce_canonical_message, is_canonical_message
 from context.token.counter import TokenCounter
+from core.llm import EasyLLM
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +423,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
 
     def __init__(
         self,
-        llm: Any,
+        llm: EasyLLM,
         token_counter: Optional[TokenCounter] = None,
         language: str = "zh",
         recent_turns: int = 4,
@@ -447,26 +448,40 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         if not normalized or max_tokens <= 0:
             return []
 
-        if self._messages_token_count(normalized) <= max_tokens:
-            return normalized
-        logger.info("Compact History")
+        logger.info("Compact History by LLM")
 
         prompt = self._build_prompt(normalized, max_tokens=max_tokens)
+
+        prompt = self._build_prompt(normalized, max_tokens=max_tokens)
+        if self.language == "zh":
+            system_prompt = """你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。\n
+                            要求：\n
+                            1. 输出必须是 JSON 数组。\n
+                            2. 数组元素必须是字符串，每个字符串是一段按时间顺序组织的摘要。\n
+                            3. 保留重要的用户约束、已确认事实、关键工具结果和未完成任务。\n
+                            4. 保持时间顺序，从旧到新。\n
+                            5. 不要输出解释。\n\n"""
+                        
+        else:
+            system_prompt = """you are a history compressor. You only output JSON arrays, do not output explanations, Markdown or code blocks.\n
+                            Requirements:\n
+                            1. Output must be a JSON array.\n
+                            2. Each item must be a string summary.\n
+                            3. Preserve key constraints, facts, important tool results, and unfinished tasks.\n
+                            4. Keep chronological order from old to new.\n
+                            5. Do not add any explanation.\n\n"""
         try:
             response = self.llm.invoke(
                 [
                     {
                         "role": "system",
-                        "content": "你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。",
+                        "content": system_prompt,
                     },
                     {"role": "user", "content": prompt},
                 ]
             )
             messages = self._parse_response(response)
-            if messages and self._messages_token_count(messages) <= max_tokens:
-                return messages
-            if messages:
-                return self.fallback.compact(messages, max_tokens)
+            return messages
         except Exception as exc:
             logger.warning("LLMHistoryCompactor 压缩失败，回退规则压缩: %s", exc)
 
@@ -480,27 +495,37 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         normalized = [self._clone_message(message) for message in history or []]
         if not normalized or max_tokens <= 0:
             return []
-        if self._messages_token_count(normalized) <= max_tokens:
-            return normalized
             
         logger.info("Compact History")
 
         prompt = self._build_prompt(normalized, max_tokens=max_tokens)
+        if self.language == "zh":
+            system_prompt = """你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。\n
+                            要求：\n
+                            1. 输出必须是 JSON 数组。\n
+                            2. 数组元素必须是字符串，每个字符串是一段按时间顺序组织的摘要。\n
+                            3. 保留重要的用户约束、已确认事实、关键工具结果和未完成任务。\n
+                            4. 保持时间顺序，从旧到新。\n
+                            5. 不要输出解释。\n\n"""
+                        
+        else:
+            system_prompt = """you are a history compressor. You only output JSON arrays, do not output explanations, Markdown or code blocks.\n
+                            Requirements:\n
+                            1. Output must be a JSON array.\n
+                            2. Each item must be a string summary.\n
+                            3. Preserve key constraints, facts, important tool results, and unfinished tasks.\n
+                            4. Keep chronological order from old to new.\n
+                            5. Do not add any explanation.\n\n"""
         try:
             response = await self.llm.ainvoke(
                 [
-                    {
-                        "role": "system",
-                        "content": "你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。",
-                    },
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt},
                 ]
             )
             messages = self._parse_response(response)
-            if messages and self._messages_token_count(messages) <= max_tokens:
-                return messages
             if messages:
-                return await self.fallback.acompact(messages, max_tokens)
+                return messages
         except Exception as exc:
             logger.warning("LLMHistoryCompactor 异步压缩失败，回退规则压缩: %s", exc)
 
@@ -516,24 +541,11 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         if self.language == "zh":
             return (
                 f"请把下面 canonical history 摘要压缩成数条摘要，"
-                f"总长度尽量控制在 {max_tokens} 个字符内。\n"
-                "要求：\n"
-                "1. 输出必须是 JSON 数组。\n"
-                "2. 数组元素必须是字符串，每个字符串是一段按时间顺序组织的摘要。\n"
-                "3. 保留重要的用户约束、已确认事实、关键工具结果和未完成任务。\n"
-                "4. 保持时间顺序，从旧到新。\n"
-                "5. 不要输出解释。\n\n"
                 f"history:\n{transcript}"
             )
         return (
             f"Compress the canonical history summary into summaries, "
-            f"keeping the total size around {max_tokens} characters.\n"
-            "Requirements:\n"
-            "1. Output must be a JSON array.\n"
-            "2. Each item must be a string summary.\n"
-            "3. Preserve key constraints, facts, important tool results, and unfinished tasks.\n"
-            "4. Keep chronological order from old to new.\n"
-            "5. Do not add any explanation.\n\n"
+
             f"history:\n{transcript}"
         )
 

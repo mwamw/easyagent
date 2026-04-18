@@ -245,7 +245,6 @@ class PlanningAgent(BasicAgent):
         ]
         
         try:
-            self._capture_context_usage(messages, label="planning_generate_plan")
             response = self.llm.invoke(messages, temperature=temperature)
             # print(response)
             # 解析 JSON
@@ -268,7 +267,6 @@ class PlanningAgent(BasicAgent):
                 {"role": "system", "content": self.get_enhanced_prompt()},
                 {"role": "user", "content": step},
             ]
-            self._capture_context_usage(messages, label="planning_execute_step")
             return self.llm.invoke(messages, temperature=temperature)
     
     def _should_replan(self, result: str) -> bool:
@@ -307,7 +305,6 @@ class PlanningAgent(BasicAgent):
         ]
         
         try:
-            self._capture_context_usage(messages, label="planning_replan")
             response = self.llm.invoke(messages, temperature=temperature)
             new_plan = self.json_parser.parse(response) # type: ignore
             if isinstance(new_plan, list):
@@ -340,7 +337,6 @@ class PlanningAgent(BasicAgent):
             {"role": "user", "content": summary_prompt},
         ]
         
-        self._capture_context_usage(messages, label="planning_summarize")
         return self.llm.invoke(messages, temperature=temperature)
     
     def get_execution_log(self) -> List[Dict[str, Any]]:

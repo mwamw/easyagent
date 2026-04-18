@@ -9,7 +9,6 @@ from context.window import ContextItem, ContextWindow
 from context.source.base import BaseContextSource
 from context.compressor.base import BaseCompressor
 from context.compressor.history import BaseHistoryCompactor, RuleBasedHistoryCompactor
-from context.history_compaction import compact_request_input
 from context.formatter.base import BaseFormatter
 from context.formatter.plain import PlainFormatter
 from context.token.counter import TokenCounter
@@ -206,6 +205,7 @@ class ContextBuilder:
         replay_history: Optional[List[Any]] = None,
         provider_name: Optional[str] = None,
         include_query: bool = True,
+        extra_replay_entries: Optional[List[Any]] = None,
         tools: Optional[list[dict[str, Any]]] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs,
@@ -218,57 +218,36 @@ class ContextBuilder:
             replay_history=normalized_replay_history,
             system_prompt=system_prompt,
         )
-        if include_query and query:
-            request_input.extend_replay(codec.query_to_replay(query))
+        if extra_replay_entries:
+            request_input.extend_replay(extra_replay_entries)
 
+        pending_query = codec.query_to_replay(query) if include_query and query else []
         base_request_tokens = codec.count_request_tokens(
             self._counter,
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
             tools=tools,
+            pending_messages=pending_query,
             reasoning=reasoning,
         )
-        if base_request_tokens >= self._budget.max_tokens:
-            compact_request_input(
-                request_input,
-                token_counter=self._counter,
-                history_compactor=self._history_compactor,
-                max_tokens=self._budget.max_tokens,
-                tools=tools,
-                reasoning=reasoning,
+        if base_request_tokens < self._budget.max_tokens:
+            non_history_window = self.build(
+                query,
+                reserved_tokens=base_request_tokens,
+                exclude_sources={"history"},
+                **kwargs,
             )
-            base_request_tokens = codec.count_request_tokens(
-                self._counter,
-                request_input.replay_history,
-                system_prompt=request_input.system_prompt,
-                tools=tools,
-                reasoning=reasoning,
-            )
-        if base_request_tokens >= self._budget.max_tokens:
-            return request_input
-        non_history_window = self.build(
-            query,
-            reserved_tokens=base_request_tokens,
-            exclude_sources={"history"},
-            **kwargs,
-        )
-        non_history_groups: Dict[str, List[ContextItem]] = {}
-        for item in non_history_window.items:
-            non_history_groups.setdefault(item.source, []).append(item)
-        context_text = self._formatter.format_all(non_history_groups)
+            non_history_groups: Dict[str, List[ContextItem]] = {}
+            for item in non_history_window.items:
+                non_history_groups.setdefault(item.source, []).append(item)
+            for source, items in non_history_groups.items():
+                formatted = self._formatter.format(items, source)
+                if formatted:
+                    request_input.extend_replay(codec.query_to_replay(formatted))
 
-        combined_system = "\n\n".join(part for part in [system_prompt, context_text] if part) or None
-        request_input.system_prompt = combined_system
+        if pending_query:
+            request_input.extend_replay(pending_query)
         return request_input
-
-    def compact_history(
-        self,
-        history: Optional[List[Any]],
-        max_tokens: int,
-        max_turns: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        copied_history = self._copy_history_entries(history)
-        return self._history_compactor.compact(copied_history, max_tokens=max_tokens)
 
     def _copy_history_entries(
         self,
@@ -314,6 +293,10 @@ class ContextBuilder:
     @property
     def counter(self) -> TokenCounter:
         return self._counter
+
+    @property
+    def history_compactor(self) -> BaseHistoryCompactor:
+        return self._history_compactor
 
     @property
     def source_names(self) -> List[str]:

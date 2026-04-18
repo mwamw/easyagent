@@ -203,6 +203,7 @@ class ReactAgent(BasicAgent):
         while iteration < max_iter:
             iteration += 1
             logger.debug(f"ReAct 迭代 {iteration}")
+            self.compact_persistent_history_if_needed()
             
             # 构建当前消息
             round_query = user_message + "\n\n" + self._get_scratchpad()
@@ -224,11 +225,6 @@ class ReactAgent(BasicAgent):
             
             # 调用 LLM
             try:
-                messages = self.compact_request_input_if_needed(
-                    messages,
-                    reasoning=self.reasoning,
-                )
-                self._capture_context_usage(messages, label="react_invoke", reasoning=self.reasoning)
                 response = self.llm.invoke(messages, temperature=temperature, **kwargs) # type: ignore
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
@@ -462,16 +458,12 @@ Final Answer: 对用户问题的完整回答
     
     def _direct_answer(self, query: str, temperature: float, **kwargs) -> str:
         """不使用工具直接回答"""
-        messages = self._build_start_messages(query)
+        self._append_query_history(query)
+        self.compact_persistent_history_if_needed()
+        messages = self._build_start_messages(query, include_query=False)
         
         try:
-            messages = self.compact_request_input_if_needed(
-                messages,
-                reasoning=self.reasoning,
-            )
-            self._capture_context_usage(messages, label="react_direct_answer", reasoning=self.reasoning)
             response = self.llm.invoke(messages, temperature=temperature, **kwargs)
-            self.add_user_message(query)
             self.add_assistant_message(response)
             self.compact_persistent_history_if_needed()
             return response

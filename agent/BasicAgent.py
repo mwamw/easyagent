@@ -310,8 +310,6 @@ class BasicAgent(BaseAgent):
         parent_id: Optional[str],
         mode: str,
         stream: bool,
-        turn_canonical_history: Optional[list[Any]] = None,
-        turn_replay_history: Optional[list[Any]] = None,
         tool_canonical: Optional[list[Any]] = None,
         tool_replay: Optional[list[Any]] = None,
     ) -> ToolInterruption:
@@ -328,12 +326,11 @@ class BasicAgent(BaseAgent):
             stream=stream,
             success=False,
         )
-        if turn_canonical_history is not None and turn_replay_history is not None:
-            if tool_canonical:
-                turn_canonical_history.extend(tool_canonical)
-            if tool_replay:
-                turn_replay_history.extend(tool_replay)
-            self._append_dual_history(turn_canonical_history, turn_replay_history)
+        if tool_canonical and tool_replay:
+            self._append_pending_tool_result(
+                tool_canonical=tool_canonical,
+                tool_replay=tool_replay,
+            )
         self._record_turn_end(
             turn_id,
             final_event_id=result_event_id,
@@ -610,8 +607,19 @@ class BasicAgent(BaseAgent):
     def _append_runtime_history(self, messages: list[dict[str, str]]) -> None:
         self.history_message_assembler.append_runtime_history(self, messages)
 
-    def _build_start_messages(self, query: str) -> ReplayRequestInput|None:
-        return self.history_message_assembler.build_start_messages(self, query)
+    def _build_start_messages(
+        self,
+        query: str,
+        *,
+        include_query: bool = True,
+        extra_replay_entries: Optional[list[Any]] = None,
+    ) -> ReplayRequestInput:
+        return self.history_message_assembler.build_start_messages(
+            self,
+            query,
+            include_query=include_query,
+            extra_replay_entries=extra_replay_entries,
+        )
 
         
 
