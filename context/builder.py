@@ -206,7 +206,7 @@ class ContextBuilder:
         provider_name: Optional[str] = None,
         include_query: bool = True,
         extra_replay_entries: Optional[List[Any]] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs,
     ) -> ReplayRequestInput:

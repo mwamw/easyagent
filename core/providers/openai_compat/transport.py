@@ -40,7 +40,7 @@ class OpenAICompatibleProviderBase(BaseProvider):
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         stream: bool = False,

@@ -39,7 +39,7 @@ enable_logging()
 
 def create_agent(registry: ToolRegistry, name: str) -> BasicAgent:
     """辅助函数，用于创建配置好的 Agent 实例"""
-    llm = EasyLLM() 
+    llm = EasyLLM(provider="openai") 
     return BasicAgent(
         name=name,
         llm=llm,
@@ -245,7 +245,7 @@ async def main():
     # await example_config_tool()
     # await example_worktree_tools()
     # await example_notebook_edit_tool()
-    # await example_agent_tool()
+    await example_agent_tool()
     
     print("请打开 example/example_builtin_tools.py，取消 main() 中需要的注释后即可执行体验。")
 

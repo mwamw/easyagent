@@ -51,6 +51,12 @@ class BasicAgent(BaseAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
+        agent_runtime=None,
+        team_manager=None,
+        execution_context=None,
         verbose_thinking: bool = True,
         trace_recorder: Optional[BaseTraceRecorder] = None,
         stream_renderer: Optional[BaseStreamDisplayRenderer] = None,
@@ -100,6 +106,12 @@ class BasicAgent(BaseAgent):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
+            agent_runtime=agent_runtime,
+            team_manager=team_manager,
+            execution_context=execution_context,
         )
         self.reasoning: Optional[dict[str, Any]] = None
         if reasoning:
@@ -359,6 +371,9 @@ class BasicAgent(BaseAgent):
         context_manager: Optional["ContextManager"] = None,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
     ) -> dict[str, Any]:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
             snapshot,
@@ -368,6 +383,9 @@ class BasicAgent(BaseAgent):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
         state = snapshot.get("state") or {}
         kwargs.update(
@@ -455,7 +473,7 @@ class BasicAgent(BaseAgent):
             **kwargs,
         )
 
-    async def astream_invoke(self, query: str,max_iter:int=10, temperature: float = 0.7, **kwargs) -> str:
+    async def astream_invoke(self, query: str,max_iter:int=20, temperature: float = 0.7, **kwargs) -> str:
         return await self.invocation_runner.astream_invoke(
             self,
             query,

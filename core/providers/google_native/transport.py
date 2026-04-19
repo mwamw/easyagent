@@ -57,29 +57,12 @@ class GoogleNativeProvider(BaseProvider):
         budget_map = {"low": 1024, "medium": 8192, "high": 24576}
         return {"thinking_budget": budget_map.get(str(effort), 8192)}
 
-    @staticmethod
-    def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        declarations: list[dict[str, Any]] = []
-        for tool in tools:
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-                function = tool["function"]
-                declarations.append(
-                    {
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "parameters": function.get("parameters", {}) or {},
-                    }
-                )
-        if not declarations:
-            return []
-        return [{"function_declarations": declarations}]
-
     def build_request(
         self,
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         stream: bool = False,
@@ -92,7 +75,7 @@ class GoogleNativeProvider(BaseProvider):
         if system_prompt:
             config["system_instruction"] = system_prompt
         if tools:
-            config["tools"] = self._convert_tools(tools)
+            config["tools"] = tools
             config["automatic_function_calling"] = {"disable": True}
         thinking_config = self._build_thinking_config(reasoning)
         if thinking_config:

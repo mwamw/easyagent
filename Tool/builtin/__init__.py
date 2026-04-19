@@ -20,12 +20,24 @@ from .task_stop import TaskStopTool, register_task_stop_tool
 from .web_fetch import WebFetchTool, register_web_fetch_tool
 from .todo_write import TodoWriteTool, register_todo_write_tool
 from .agent_tool import AgentTool, register_agent_tool
+from .send_message import SendMessageTool, register_send_message_tool
+from .team_create import TeamCreateTool, register_team_create_tool
+from .team_delete import TeamDeleteTool, register_team_delete_tool
 from .notebook_edit import NotebookEditTool, register_notebook_edit_tool
 from .interaction_tools import (
     AskUserQuestionTool,
+    EnterPlanModeTool,
     ExitPlanModeTool,
     register_ask_user_question_tool,
+    register_enter_plan_mode_tool,
     register_exit_plan_mode_tool,
+)
+from .task_tools import (
+    TaskCreateTool,
+    TaskGetTool,
+    TaskListTool,
+    TaskUpdateTool,
+    register_task_tools,
 )
 from .config_tool import ConfigTool, register_config_tool
 from .worktree_tools import (
@@ -62,9 +74,17 @@ __all__ = [
     "WebFetchTool",
     "TodoWriteTool",
     "AgentTool",
+    "SendMessageTool",
+    "TeamCreateTool",
+    "TeamDeleteTool",
     "NotebookEditTool",
     "AskUserQuestionTool",
+    "EnterPlanModeTool",
     "ExitPlanModeTool",
+    "TaskCreateTool",
+    "TaskGetTool",
+    "TaskUpdateTool",
+    "TaskListTool",
     "ConfigTool",
     "EnterWorktreeTool",
     "ExitWorktreeTool",
@@ -83,9 +103,14 @@ __all__ = [
     "register_web_fetch_tool",
     "register_todo_write_tool",
     "register_agent_tool",
+    "register_send_message_tool",
+    "register_team_create_tool",
+    "register_team_delete_tool",
     "register_notebook_edit_tool",
     "register_ask_user_question_tool",
+    "register_enter_plan_mode_tool",
     "register_exit_plan_mode_tool",
+    "register_task_tools",
     "register_config_tool",
     "register_enter_worktree_tool",
     "register_exit_worktree_tool",

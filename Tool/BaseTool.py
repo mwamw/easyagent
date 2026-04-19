@@ -34,6 +34,7 @@ class ToolSpec:
     demand_skill_tool: bool = False
     demand_skill_name: Optional[str] = None
     tags: list[str] = field(default_factory=list)
+    risk_categories: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def parameter_schema(self) -> dict[str, Any]:
@@ -67,7 +68,8 @@ class ToolSpec:
                         return merged
                     schema_node["anyOf"] = [resolve_schema(item) for item in schema_node["anyOf"]]
 
-                schema_node.pop("title", None)
+                if isinstance(schema_node.get("title"), str):
+                    schema_node.pop("title", None)
                 for key, value in list(schema_node.items()):
                     schema_node[key] = resolve_schema(value)
                 return schema_node
@@ -131,7 +133,22 @@ class ToolSpec:
             "demand_skill_tool": self.demand_skill_tool,
             "demand_skill_name": self.demand_skill_name,
             "tags": list(self.tags),
+            "risk_categories": list(self.risk_categories),
             "parameters": self.parameter_schema(),
+            "metadata": dict(self.metadata),
+        }
+
+    def to_intermediate_schema(self) -> dict[str, Any]:
+        """返回 provider 适配层消费的统一工具描述。"""
+        return {
+            "name": self.name,
+            "description": self.build_schema_description(),
+            "parameters": self.parameter_schema(),
+            "output_mode": self.output_mode,
+            "source": self.source,
+            "ephemeral": self.ephemeral,
+            "tags": list(self.tags),
+            "risk_categories": list(self.risk_categories),
             "metadata": dict(self.metadata),
         }
 
@@ -232,6 +249,7 @@ class Tool(ABC):
         demand_skill_tool: bool = False,
         demand_skill_name: Optional[str] = None,
         tags: Optional[list[str]] = None,
+        risk_categories: Optional[list[str]] = None,
         metadata: Optional[dict[str, Any]] = None,
     ):
         self.spec = ToolSpec(
@@ -251,6 +269,7 @@ class Tool(ABC):
             demand_skill_tool=demand_skill_tool,
             demand_skill_name=demand_skill_name,
             tags=list(tags or []),
+            risk_categories=list(risk_categories or []),
             metadata=dict(metadata or {}),
         )
         self.name = self.spec.name
@@ -298,6 +317,7 @@ class Tool(ABC):
             demand_skill_tool=self.spec.demand_skill_tool,
             demand_skill_name=self.spec.demand_skill_name,
             tags=list(self.spec.tags),
+            risk_categories=list(self.spec.risk_categories),
             metadata=dict(self.spec.metadata),
         )
 
@@ -317,12 +337,12 @@ class Tool(ABC):
         return dict(parameters)
 
     def get_openai_schema(self) -> dict[str, Any]:
-        return self.spec.to_openai_schema()
+        return self.to_provider_schema("openai")
 
-    def to_provider_schema(self, provider: str = "openai") -> dict[str, Any]:
-        if provider == "openai":
-            return self.get_openai_schema()
-        return self.get_openai_schema()
+    def to_provider_schema(self, provider: str = "openai") -> Any:
+        from core.providers.tool_schema import create_tool_schema_adapter
+
+        return create_tool_schema_adapter(provider).export_tool(self)
 
     def __call__(self, parameters: dict):
         validated = self.validate_parameters(parameters)

@@ -12,10 +12,12 @@ from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import (
     AskUserQuestionTool,
     ConfigTool,
+    EnterPlanModeTool,
     ExitPlanModeTool,
     NotebookEditTool,
     register_ask_user_question_tool,
     register_config_tool,
+    register_enter_plan_mode_tool,
     register_exit_plan_mode_tool,
     register_notebook_edit_tool,
 )
@@ -157,6 +159,20 @@ class TestInteractionTools(unittest.TestCase):
         self.assertEqual(result.error_type, "exit_plan_mode_requested")
         self.assertEqual(result.structured_data["allowedPrompts"][0]["tool"], "Bash")
 
+    def test_enter_plan_mode_interrupts(self):
+        tool = EnterPlanModeTool()
+        result = tool.run(
+            {
+                "reason": "先做方案分析",
+                "allowedActions": ["read", "search"],
+            }
+        )
+
+        self.assertEqual(result.status, "needs_confirmation")
+        self.assertEqual(result.error_type, "enter_plan_mode_requested")
+        self.assertEqual(result.structured_data["allowedActions"], ["read", "search"])
+        self.assertEqual(result.structured_data["reason"], "先做方案分析")
+
 
 class TestConfigTool(unittest.TestCase):
     def test_config_tool_reads_and_updates_live_config(self):
@@ -186,15 +202,18 @@ class TestRegistration(unittest.TestCase):
         registry = ToolRegistry()
         notebook_tool = register_notebook_edit_tool(registry, workspace_root=os.getcwd())
         ask_tool = register_ask_user_question_tool(registry)
+        enter_tool = register_enter_plan_mode_tool(registry)
         exit_tool = register_exit_plan_mode_tool(registry)
         config_tool = register_config_tool(registry, config=Config())
 
         self.assertIsInstance(notebook_tool, NotebookEditTool)
         self.assertIsInstance(ask_tool, AskUserQuestionTool)
+        self.assertIsInstance(enter_tool, EnterPlanModeTool)
         self.assertIsInstance(exit_tool, ExitPlanModeTool)
         self.assertIsInstance(config_tool, ConfigTool)
         self.assertIn("NotebookEdit", registry.tools)
         self.assertIn("AskUserQuestion", registry.tools)
+        self.assertIn("EnterPlanMode", registry.tools)
         self.assertIn("ExitPlanMode", registry.tools)
         self.assertIn("Config", registry.tools)
 

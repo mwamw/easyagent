@@ -12,10 +12,12 @@ from .google_native import GoogleNativeCodec, GoogleNativeProvider
 from .openai_compat import OpenAIChatCodec, OpenAICompatibleProviderBase, OpenAIProvider
 from .openai_responses import OpenAIResponsesCodec, OpenAIResponsesProvider
 from .shared import BaseProviderCodec
+from .tool_schema import ToolSchemaAdapter, create_tool_schema_adapter
 
 __all__ = [
     "BaseProvider",
     "BaseProviderCodec",
+    "ToolSchemaAdapter",
     "OpenAICompatibleProviderBase",
     "OpenAIProvider",
     "OpenAIResponsesProvider",
@@ -33,6 +35,7 @@ __all__ = [
     "create_provider",
     "provider_requires_base_url",
     "detect_provider_from_model",
+    "create_tool_schema_adapter",
 ]
 
 
@@ -86,7 +89,7 @@ def create_provider(
     }
     
     provider_class = provider_map.get(provider_name, OpenAIProvider)
-    return provider_class(model=model, api_key=api_key, base_url=base_url, **kwargs)
+    return provider_class(model=model, api_key=api_key, base_url=base_url, _provider_name=provider_name, **kwargs)
 
 
 def create_codec(provider_name: Optional[str]) -> BaseProviderCodec:

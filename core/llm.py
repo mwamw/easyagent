@@ -114,6 +114,22 @@ class EasyLLM:
             codec = create_codec(provider_name)
             self.codec = codec
         return codec
+
+    def export_tools(self, tools: Any) -> Any:
+        if tools is None:
+            return None
+        if hasattr(tools, "get_visible_tools") and callable(getattr(tools, "get_visible_tools")):
+            return self._provider.build_tool_payload(tools.get_visible_tools())
+        if hasattr(tools, "get_spec") and callable(getattr(tools, "get_spec")):
+            return self._provider.build_tool_payload([tools])
+        if isinstance(tools, (list, tuple)):
+            items = list(tools)
+            if not items:
+                return self._provider.build_tool_payload(items)
+            if all(hasattr(item, "get_spec") and callable(getattr(item, "get_spec")) for item in items):
+                return self._provider.build_tool_payload(items)
+            return items
+        return tools
     
     def _auto_detect_provider(self) -> str:
         """自动检测 Provider 类型"""
@@ -368,7 +384,7 @@ class EasyLLM:
     def invoke_with_tools(
         self,
         messages: list[dict[str, str]] | ReplayRequestInput,
-        tools: list[dict],
+        tools: Any,
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
@@ -385,11 +401,12 @@ class EasyLLM:
             LLM 响应对象
         """
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
+        tool_payload = self.export_tools(tools)
         try:
             request = self._provider.build_request(
                 request_input.replay_history,
                 system_prompt=request_input.system_prompt,
-                tools=tools,
+                tools=tool_payload,
                 temperature=temperature,
                 reasoning=reasoning,
                 stream=False,
@@ -405,17 +422,18 @@ class EasyLLM:
     def stream_with_tools(
         self,
         messages: list[dict[str, str]] | ReplayRequestInput,
-        tools: list[dict],
+        tools: Any,
         reasoning: Optional[dict[str, Any]] = None,
         temperature: Optional[float] = None,
         **kwargs
     ) -> Generator[dict[str, Any], None, None]:
         """同步流式带工具调用，返回统一事件流。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
+        tool_payload = self.export_tools(tools)
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
-            tools=tools,
+            tools=tool_payload,
             reasoning=reasoning,
             temperature=temperature,
             stream=True,
@@ -510,7 +528,7 @@ class EasyLLM:
     async def ainvoke_with_tools(
         self,
         messages: list[dict[str, str]] | ReplayRequestInput,
-        tools: list[dict],
+        tools: Any,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
@@ -527,11 +545,12 @@ class EasyLLM:
             LLM 响应对象
         """
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
+        tool_payload = self.export_tools(tools)
         try:
             request = self._provider.build_request(
                 request_input.replay_history,
                 system_prompt=request_input.system_prompt,
-                tools=tools,
+                tools=tool_payload,
                 reasoning=reasoning,
                 temperature=temperature,
                 stream=False,
@@ -547,17 +566,18 @@ class EasyLLM:
     async def astream_with_tools(
         self,
         messages: list[dict[str, str]] | ReplayRequestInput,
-        tools: list[dict],
+        tools: Any,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式带工具调用，返回统一事件流。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
+        tool_payload = self.export_tools(tools)
         request = self._provider.build_request(
             request_input.replay_history,
             system_prompt=request_input.system_prompt,
-            tools=tools,
+            tools=tool_payload,
             reasoning=reasoning,
             temperature=temperature,
             stream=True,
@@ -696,15 +716,16 @@ class EasyLLM:
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         pending_messages: Optional[list[Any]] = None,
         reasoning: Optional[dict[str, Any]] = None,
     ) -> int:
+        tool_payload = self.export_tools(tools)
         return self._get_codec().count_request_tokens(
             counter,
             replay_history,
             system_prompt=system_prompt,
-            tools=tools,
+            tools=tool_payload,
             pending_messages=pending_messages,
             reasoning=reasoning,
         )

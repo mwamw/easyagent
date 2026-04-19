@@ -48,6 +48,11 @@ class ClaudeExitPlanModeInput(BaseModel):
     )
 
 
+class ClaudeEnterPlanModeInput(BaseModel):
+    reason: str = Field(default="", description="进入 plan 模式的原因")
+    allowedActions: list[str] = Field(default_factory=list, description="计划阶段允许的动作类别")
+
+
 class ClaudeFileEditInput(BaseModel):
     file_path: str = Field(description="要修改的绝对路径")
     old_string: str = Field(description="待替换文本")
@@ -99,6 +104,64 @@ class ClaudeGrepInput(BaseModel):
 class ClaudeTaskStopInput(BaseModel):
     task_id: Optional[str] = Field(default=None, description="后台任务 ID")
     shell_id: Optional[str] = Field(default=None, description="旧版 shell ID")
+
+
+class ClaudeTaskCreateInput(BaseModel):
+    title: str = Field(description="任务标题")
+    description: str = Field(default="", description="任务描述")
+    status: Literal["open", "in_progress", "blocked", "completed", "cancelled"] = Field(
+        default="open",
+        description="任务状态",
+    )
+    owner: Optional[str] = Field(default=None, description="任务归属者")
+    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+
+
+class ClaudeTaskGetInput(BaseModel):
+    task_id: str = Field(description="任务 ID")
+
+
+class ClaudeTaskUpdateInput(BaseModel):
+    task_id: str = Field(description="任务 ID")
+    title: Optional[str] = Field(default=None, description="新标题")
+    description: Optional[str] = Field(default=None, description="新描述")
+    status: Optional[Literal["open", "in_progress", "blocked", "completed", "cancelled"]] = Field(
+        default=None,
+        description="新状态",
+    )
+    owner: Optional[str] = Field(default=None, description="新归属者")
+    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID")
+    metadata: Optional[dict[str, Any]] = Field(default=None, description="元数据增量")
+
+
+class ClaudeTaskListInput(BaseModel):
+    status: Optional[Literal["open", "in_progress", "blocked", "completed", "cancelled"]] = Field(
+        default=None,
+        description="状态过滤",
+    )
+    owner: Optional[str] = Field(default=None, description="归属者过滤")
+    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID 过滤")
+    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+
+
+class ClaudeSendMessageInput(BaseModel):
+    recipient_type: Literal["agent", "team"] = Field(description="接收方类型")
+    recipient_id: str = Field(description="接收方 ID 或团队名称")
+    content: str = Field(description="要发送的消息内容")
+    sender_id: Optional[str] = Field(default=None, description="发送方标识")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+
+
+class ClaudeTeamCreateInput(BaseModel):
+    name: str = Field(description="团队名称")
+    description: str = Field(default="", description="团队描述")
+    member_agent_ids: list[str] = Field(default_factory=list, description="初始成员 agent ID 列表")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+
+
+class ClaudeTeamDeleteInput(BaseModel):
+    team_id: str = Field(description="团队 ID，也支持团队名称")
 
 
 class ClaudeListMcpResourcesInput(BaseModel):

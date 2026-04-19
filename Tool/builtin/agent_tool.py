@@ -9,6 +9,8 @@ from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeAgentInput
 from ..runtime import SubagentManager, SubagentRequest, WorktreeManager
+from core.permissions import PermissionContext, PermissionMode
+from runtime import AgentRuntimeManager, ExecutionContext
 from .bash_tool import BashTool, register_shell_tools
 from .file_edit import FileEditTool
 from .file_write import FileWriteTool
@@ -31,6 +33,19 @@ def _can_read_output_file(registry: Optional[ToolRegistry]) -> bool:
     if registry is None:
         return False
     return registry.has_tool("FileRead") or registry.has_tool("Bash")
+
+
+def _normalize_subagent_mode(raw_mode: Optional[str]) -> Optional[PermissionMode]:
+    mapping = {
+        "default": PermissionMode.DEFAULT,
+        "plan": PermissionMode.PLAN,
+        "dontAsk": PermissionMode.DONT_ASK,
+        "acceptEdits": PermissionMode.ACCEPT_EDITS,
+        "bypassPermissions": PermissionMode.BYPASS,
+    }
+    if raw_mode is None:
+        return None
+    return mapping.get(raw_mode, PermissionMode.DEFAULT)
 
 
 def clone_tool_registry_for_workspace(
@@ -117,6 +132,7 @@ class AgentTool(Tool):
         parent_agent: Any | None = None,
         agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
         tool_registry_builder: Optional[Callable[[SubagentRequest], Optional[ToolRegistry]]] = None,
+        agent_runtime: Optional[AgentRuntimeManager] = None,
         subagent_manager: Optional[SubagentManager] = None,
         worktree_manager: Optional[WorktreeManager] = None,
         workspace_root: Optional[str] = None,
@@ -141,11 +157,13 @@ class AgentTool(Tool):
         self.storage_dir = os.path.abspath(storage_dir or os.path.join(self.workspace_root, ".easyagent-agents"))
 
         factory = agent_factory or self._build_default_agent_factory()
-        self.subagent_manager = subagent_manager or SubagentManager(
+        self.agent_runtime = agent_runtime or AgentRuntimeManager(
             agent_factory=factory,
             storage_dir=self.storage_dir,
             max_background_tasks=max_background_tasks,
+            subagent_manager=subagent_manager,
         )
+        self.subagent_manager = self.agent_runtime.subagent_manager
         super().__init__(
             name="Agent",
             description="启动独立子 agent 处理一个明确子任务，支持后台运行和 worktree 隔离。",
@@ -182,30 +200,63 @@ class AgentTool(Tool):
             from agent.BasicAgent import BasicAgent
 
             registry = None
+            workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
+            allowed_roots = tuple(request.allowed_roots or (workspace_root,))
+            parent_registry = getattr(self.parent_agent, "tool_registry", None)
             if self.tool_registry_builder is not None:
                 registry = self.tool_registry_builder(request)
-            elif getattr(self.parent_agent, "tool_registry", None) is not None:
-                parent_registry = self.parent_agent.tool_registry
-                if request.workspace_root and os.path.abspath(request.workspace_root) != self.workspace_root:
-                    registry = clone_tool_registry_for_workspace(
-                        parent_registry,
-                        workspace_root=request.workspace_root,
-                        allowed_roots=request.allowed_roots or (request.workspace_root,),
-                        cwd=request.workspace_root,
-                    )
-                else:
-                    registry = parent_registry
+            elif parent_registry is not None:
+                registry = clone_tool_registry_for_workspace(
+                    parent_registry,
+                    workspace_root=workspace_root,
+                    allowed_roots=allowed_roots,
+                    cwd=workspace_root,
+                )
 
             config = getattr(self.parent_agent, "config", None)
             if hasattr(config, "model_copy"):
                 config_copy = config.model_copy(deep=True)
             else:
                 config_copy = config
-            if config_copy is not None and request.workspace_root:
-                config_copy.workspace_root = request.workspace_root
-                config_copy.allowed_roots = list(request.allowed_roots or (request.workspace_root,))
+            if config_copy is not None:
+                config_copy.workspace_root = workspace_root
+                config_copy.allowed_roots = list(allowed_roots)
 
-            return BasicAgent(
+            parent_permission_context = getattr(self.parent_agent, "permission_context", None)
+            if parent_permission_context is not None and hasattr(parent_permission_context, "model_copy"):
+                permission_context = parent_permission_context.model_copy(deep=True)
+            elif parent_permission_context is not None:
+                permission_context = PermissionContext.model_validate(parent_permission_context.model_dump(mode="python"))
+            else:
+                permission_context = PermissionContext()
+            normalized_mode = _normalize_subagent_mode(request.mode)
+            if normalized_mode is not None:
+                permission_context.set_mode(normalized_mode)
+
+            parent_execution_context = getattr(self.parent_agent, "execution_context", None)
+            if parent_execution_context is not None and hasattr(parent_execution_context, "copy_for_workspace"):
+                child_execution_context = parent_execution_context.copy_for_workspace(
+                    workspace_root=workspace_root,
+                    allowed_roots=allowed_roots,
+                    worktree_path=request.worktree_path,
+                    worktree_branch=request.worktree_branch,
+                    execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                    permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                    metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                )
+            else:
+                child_execution_context = ExecutionContext.from_agent(
+                    self.parent_agent,
+                    workspace_root=workspace_root,
+                    allowed_roots=allowed_roots,
+                    worktree_path=request.worktree_path,
+                    worktree_branch=request.worktree_branch,
+                    execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                    permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                    metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                )
+
+            child_agent = BasicAgent(
                 name=request.name or request.description or "Subagent",
                 llm=self.parent_agent.llm,
                 system_prompt=getattr(self.parent_agent, "system_prompt", None),
@@ -215,9 +266,87 @@ class AgentTool(Tool):
                 config=config_copy,
                 verbose_thinking=bool(getattr(self.parent_agent, "verbose_thinking", False)),
                 callback_manager=getattr(self.parent_agent, "callback_manager", None),
+                permission_engine=getattr(self.parent_agent, "permission_engine", None),
+                permission_context=permission_context,
+                task_service=getattr(self.parent_agent, "task_service", None),
+                agent_runtime=self.agent_runtime,
+                team_manager=getattr(self.parent_agent, "team_manager", None),
+                execution_context=child_execution_context,
             )
+            if registry is not None and parent_registry is not None:
+                if parent_registry.has_tool("Agent"):
+                    register_agent_tool(
+                        registry,
+                        parent_agent=child_agent,
+                        agent_runtime=self.agent_runtime,
+                        worktree_manager=self.worktree_manager,
+                        workspace_root=workspace_root,
+                        allowed_roots=allowed_roots,
+                        storage_dir=self.storage_dir,
+                        max_background_tasks=self.subagent_manager.max_background_tasks,
+                    )
+                if parent_registry.has_tool("SendMessage"):
+                    from .send_message import register_send_message_tool
+
+                    register_send_message_tool(
+                        registry,
+                        agent_runtime=self.agent_runtime,
+                        parent_agent=child_agent,
+                    )
+                if self.agent_runtime.team_manager is not None:
+                    if parent_registry.has_tool("TeamCreate"):
+                        from .team_create import register_team_create_tool
+
+                        register_team_create_tool(
+                            registry,
+                            team_manager=self.agent_runtime.team_manager,
+                        )
+                    if parent_registry.has_tool("TeamDelete"):
+                        from .team_delete import register_team_delete_tool
+
+                        register_team_delete_tool(
+                            registry,
+                            team_manager=self.agent_runtime.team_manager,
+                        )
+            return child_agent
 
         return factory
+
+    def _build_execution_context(self, request: SubagentRequest) -> ExecutionContext:
+        workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
+        allowed_roots = tuple(request.allowed_roots or (workspace_root,))
+        normalized_mode = _normalize_subagent_mode(request.mode)
+        parent_execution_context = getattr(self.parent_agent, "execution_context", None)
+        if parent_execution_context is not None and hasattr(parent_execution_context, "copy_for_workspace"):
+            return parent_execution_context.copy_for_workspace(
+                workspace_root=workspace_root,
+                allowed_roots=allowed_roots,
+                worktree_path=request.worktree_path,
+                worktree_branch=request.worktree_branch,
+                execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+            )
+        if self.parent_agent is not None:
+            return ExecutionContext.from_agent(
+                self.parent_agent,
+                workspace_root=workspace_root,
+                allowed_roots=allowed_roots,
+                worktree_path=request.worktree_path,
+                worktree_branch=request.worktree_branch,
+                execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+            )
+        return ExecutionContext(
+            workspace_root=workspace_root,
+            allowed_roots=allowed_roots,
+            execution_mode="plan" if normalized_mode == PermissionMode.PLAN else "execute",
+            permission_mode=normalized_mode.value if normalized_mode is not None else "default",
+            worktree_path=request.worktree_path,
+            worktree_branch=request.worktree_branch,
+            metadata={},
+        )
 
     def _prepare_request(self, parameters: dict) -> tuple[SubagentRequest, dict[str, Any]]:
         description = str(parameters.get("description", "")).strip()
@@ -261,34 +390,16 @@ class AgentTool(Tool):
         )
         return request, metadata
 
-    def _build_completed_payload(self, snapshot, request: SubagentRequest) -> dict[str, Any]:
-        return {
-            "status": "completed",
-            "agentId": snapshot.agent_id,
-            "agentType": request.agent_type,
-            "content": [{"type": "text", "text": snapshot.content}],
-            "totalToolUseCount": snapshot.total_tool_use_count,
-            "totalDurationMs": snapshot.total_duration_ms,
-            "totalTokens": snapshot.total_tokens,
-            "usage": snapshot.usage,
-            "prompt": request.prompt,
-            "description": request.description,
-            "worktreePath": snapshot.worktree_path,
-            "worktreeBranch": snapshot.worktree_branch,
-            "outputFile": snapshot.output_file,
-        }
+    def _build_completed_payload(self, handle) -> dict[str, Any]:
+        payload = handle.to_tool_payload()
+        payload["status"] = handle.status
+        return payload
 
-    def _build_async_payload(self, snapshot, request: SubagentRequest) -> dict[str, Any]:
-        return {
-            "status": "async_launched",
-            "agentId": snapshot.agent_id,
-            "description": request.description,
-            "prompt": request.prompt,
-            "outputFile": snapshot.output_file,
-            "canReadOutputFile": _can_read_output_file(getattr(self.parent_agent, "tool_registry", None)),
-            "worktreePath": snapshot.worktree_path,
-            "worktreeBranch": snapshot.worktree_branch,
-        }
+    def _build_async_payload(self, handle) -> dict[str, Any]:
+        payload = handle.to_tool_payload()
+        payload["status"] = "async_launched"
+        payload["canReadOutputFile"] = _can_read_output_file(getattr(self.parent_agent, "tool_registry", None))
+        return payload
 
     def run(self, parameters: dict) -> ToolResult:
         try:
@@ -302,30 +413,34 @@ class AgentTool(Tool):
 
         run_in_background = bool(parameters.get("run_in_background", False))
         try:
+            execution_context = self._build_execution_context(request)
+            handle = self.agent_runtime.run(
+                request,
+                execution_context=execution_context,
+                run_in_background=run_in_background,
+            )
             if run_in_background:
-                snapshot = self.subagent_manager.launch_background(request)
-                payload = self._build_async_payload(snapshot, request)
+                payload = self._build_async_payload(handle)
                 return ToolResult.success(
-                    f"子 agent 已后台启动: {snapshot.agent_id}",
+                    f"子 agent 已后台启动: {handle.agent_id}",
                     structured_data=payload,
                     metadata={**payload, **metadata},
                 )
 
-            snapshot = self.subagent_manager.run(request)
-            if snapshot.status == "error":
+            if handle.status == "error":
                 return ToolResult.error(
-                    f"子 agent 执行失败: {snapshot.error}",
+                    f"子 agent 执行失败: {handle.error}",
                     error_type="subagent_failed",
                     metadata={
-                        "agentId": snapshot.agent_id,
-                        "outputFile": snapshot.output_file,
+                        "agentId": handle.agent_id,
+                        "outputFile": handle.output_file,
                         **metadata,
                     },
                 )
 
-            payload = self._build_completed_payload(snapshot, request)
+            payload = self._build_completed_payload(handle)
             return ToolResult.success(
-                snapshot.content,
+                handle.content,
                 structured_data=payload,
                 metadata={**payload, **metadata},
             )
@@ -343,6 +458,7 @@ def register_agent_tool(
     parent_agent: Any | None = None,
     agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
     tool_registry_builder: Optional[Callable[[SubagentRequest], Optional[ToolRegistry]]] = None,
+    agent_runtime: Optional[AgentRuntimeManager] = None,
     subagent_manager: Optional[SubagentManager] = None,
     worktree_manager: Optional[WorktreeManager] = None,
     workspace_root: Optional[str] = None,
@@ -354,6 +470,7 @@ def register_agent_tool(
         parent_agent=parent_agent,
         agent_factory=agent_factory,
         tool_registry_builder=tool_registry_builder,
+        agent_runtime=agent_runtime,
         subagent_manager=subagent_manager,
         worktree_manager=worktree_manager,
         workspace_root=workspace_root,

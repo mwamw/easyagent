@@ -83,7 +83,7 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
                 system_prompt=system_prompt,
                 include_query=include_query,
                 extra_replay_entries=extra_replay_entries,
-                tools=agent.tool_registry.get_openai_tools() if agent.tool_registry is not None else None,
+                tools=agent.get_provider_tools() if agent.tool_registry is not None else None,
                 reasoning=agent.reasoning,
             )
             return request_input

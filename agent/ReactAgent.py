@@ -77,6 +77,9 @@ class ReactAgent(BasicAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
@@ -113,6 +116,9 @@ class ReactAgent(BasicAgent):
             history_via_context_manager=history_via_context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
@@ -151,6 +157,9 @@ class ReactAgent(BasicAgent):
         context_manager: Optional["ContextManager"] = None,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
     ) -> dict[str, Any]:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
             snapshot,
@@ -160,6 +169,9 @@ class ReactAgent(BasicAgent):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
         state = snapshot.get("state") or {}
         kwargs["verbose"] = state.get("verbose", True)
@@ -214,7 +226,7 @@ class ReactAgent(BasicAgent):
                     provider_name=getattr(self.llm, "provider_name", None),
                     system_prompt=system_prompt,
                     include_query=True,
-                    tools=self.tool_registry.get_openai_tools() if self.tool_registry is not None else None,
+                    tools=self.get_provider_tools() if self.tool_registry is not None else None,
                     reasoning=self.reasoning,
                 )
             else:

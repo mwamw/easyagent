@@ -9,7 +9,7 @@ Provider 只负责两件事：
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 
 class BaseProvider(ABC):
@@ -23,6 +23,7 @@ class BaseProvider(ABC):
         timeout: int = 60,
         **kwargs: Any,
     ):
+        self._configured_provider_name = kwargs.pop("_provider_name", None)
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
@@ -46,7 +47,7 @@ class BaseProvider(ABC):
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         stream: bool = False,
@@ -70,6 +71,23 @@ class BaseProvider(ABC):
     async def async_stream_raw(self, request: Any) -> Any:
         raise NotImplementedError
 
+    def get_tool_schema_adapter(self) -> Any:
+        from .tool_schema import create_tool_schema_adapter
+
+        return create_tool_schema_adapter(self.provider_name)
+
+    def build_tool_payload(self, tools: Optional[Iterable[Any]]) -> Any:
+        if tools is None:
+            return None
+        if isinstance(tools, dict):
+            return tools
+        items = list(tools)
+        if not items:
+            return []
+        if all(hasattr(item, "get_spec") and callable(getattr(item, "get_spec")) for item in items):
+            return self.get_tool_schema_adapter().export_tools(items)
+        return items
+
     def close(self) -> None:
         client = getattr(self, "client", None)
         close = getattr(client, "close", None)
@@ -88,4 +106,6 @@ class BaseProvider(ABC):
 
     @property
     def provider_name(self) -> str:
+        if self._configured_provider_name:
+            return str(self._configured_provider_name).lower()
         return self.__class__.__name__.replace("Provider", "").lower()

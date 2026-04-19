@@ -116,7 +116,7 @@ class GoogleNativeCodec(BaseProviderCodec):
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         pending_messages: Optional[list[Any]] = None,
         reasoning: Optional[dict[str, Any]] = None,
     ) -> Any:

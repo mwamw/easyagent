@@ -70,27 +70,12 @@ class AnthropicNativeProvider(BaseProvider):
         budget_map = {"low": 1024, "medium": 4096, "high": 16384}
         return {"type": "enabled", "budget_tokens": budget_map.get(str(effort), 4096)}
 
-    @staticmethod
-    def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        converted: list[dict[str, Any]] = []
-        for tool in tools:
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-                function = tool["function"]
-                converted.append(
-                    {
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "input_schema": function.get("parameters", {}) or {},
-                    }
-                )
-        return converted
-
     def build_request(
         self,
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         stream: bool = False,
@@ -106,7 +91,7 @@ class AnthropicNativeProvider(BaseProvider):
         if temperature is not None:
             params["temperature"] = temperature
         if tools:
-            params["tools"] = self._convert_tools(tools)
+            params["tools"] = tools
         thinking = self._thinking_config(reasoning)
         if thinking:
             params["thinking"] = thinking

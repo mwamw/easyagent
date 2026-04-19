@@ -25,30 +25,12 @@ class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
                 params[key] = value
         return params
 
-    @staticmethod
-    def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        flat: list[dict[str, Any]] = []
-        for tool in tools:
-            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
-                function = tool["function"]
-                flat.append(
-                    {
-                        "type": "function",
-                        "name": function.get("name", ""),
-                        "description": function.get("description", ""),
-                        "parameters": function.get("parameters", {}) or {},
-                    }
-                )
-            else:
-                flat.append(tool)
-        return flat
-
     def build_request(
         self,
         replay_history: list[Any],
         *,
         system_prompt: Optional[str] = None,
-        tools: Optional[list[dict[str, Any]]] = None,
+        tools: Optional[Any] = None,
         temperature: Optional[float] = None,
         reasoning: Optional[dict[str, Any]] = None,
         stream: bool = False,
@@ -68,7 +50,7 @@ class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
                 f"{instructions}\n\n{system_prompt}" if isinstance(instructions, str) and instructions else system_prompt
             )
         if tools:
-            params["tools"] = self._convert_tools(tools)
+            params["tools"] = tools
         return params
 
     def invoke_raw(self, request: Any) -> Any:

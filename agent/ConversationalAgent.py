@@ -3,7 +3,7 @@
 
 集成 V2 记忆系统，支持多轮对话的上下文保持。
 """
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from typing_extensions import override
 import logging
 
@@ -75,6 +75,9 @@ class ConversationalAgent(BasicAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service: Optional[Any] = None,
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
@@ -112,6 +115,9 @@ class ConversationalAgent(BasicAgent):
             history_via_context_manager=history_via_context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
@@ -140,6 +146,9 @@ class ConversationalAgent(BasicAgent):
         context_manager: Optional["ContextManager"] = None,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service: Optional[Any] = None,
     ) -> dict:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
             snapshot,
@@ -149,6 +158,9 @@ class ConversationalAgent(BasicAgent):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
         state = snapshot.get("state") or {}
         kwargs["auto_save_to_working"] = state.get("auto_save_to_working", True)

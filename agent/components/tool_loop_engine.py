@@ -169,7 +169,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     agent.callback_manager.on_llm_start(messages)
                     response = agent.llm.invoke_with_tools(
                         messages,
-                        agent.tool_registry.get_openai_tools(),
+                        agent.get_provider_tools(),
                         temperature=temperature,
                         reasoning=agent.reasoning,
                         **kwargs,
@@ -447,7 +447,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     agent.callback_manager.on_llm_start(messages)
                     response = await agent.llm.ainvoke_with_tools(
                         messages,
-                        agent.tool_registry.get_openai_tools(),
+                        agent.get_provider_tools(),
                         reasoning=agent.reasoning,
                         temperature=temperature,
                         **kwargs,
@@ -742,7 +742,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 agent.callback_manager.on_llm_start(messages)
                 llm_stream = agent.llm.astream_with_tools(
                     messages,
-                    agent.tool_registry.get_openai_tools(),
+                    agent.get_provider_tools(),
                     temperature=temperature,
                     reasoning=agent.reasoning,
                     **kwargs,

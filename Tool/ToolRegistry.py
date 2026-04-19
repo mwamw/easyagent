@@ -6,6 +6,8 @@ from typing import Any, Literal, Type
 from pydantic import BaseModel
 
 from .BaseTool import Tool, ToolResult, ToolSpec
+from core.permissions import PermissionBehavior, PermissionContext, PermissionEngine
+
 
 ToolVisibility = Literal["resident", "runtime", "turn"]
 from core.Exception import ToolNotFoundError
@@ -105,8 +107,45 @@ class ToolRegistry:
         validated = tool.validate_parameters(parameters)
         return tool, validated
 
-    def authorize_tool_call(self, tool: Tool, parameters: dict[str, Any]) -> ToolResult | None:
+    def authorize_tool_call(
+        self,
+        tool: Tool,
+        parameters: dict[str, Any],
+        *,
+        permission_context: PermissionContext | None = None,
+        permission_engine: PermissionEngine | None = None,
+    ) -> ToolResult | None:
         spec = tool.get_spec()
+        effective_engine = permission_engine or (PermissionEngine() if permission_context is not None else None)
+        if effective_engine is not None:
+            decision = effective_engine.authorize(tool, parameters, permission_context)
+            if decision.behavior == PermissionBehavior.DENY:
+                return ToolResult.error(
+                    decision.reason,
+                    error_type="permission_denied",
+                    metadata={
+                        "tool_name": tool.name,
+                        "parameters": parameters,
+                        "permission_behavior": decision.behavior.value,
+                        "permission_reason": decision.reason,
+                        "matched_rule_source": decision.matched_rule_source,
+                        "risk_categories": list(decision.risk_categories),
+                    },
+                )
+            if decision.behavior == PermissionBehavior.ASK:
+                return ToolResult.needs_confirmation(
+                    decision.reason,
+                    metadata={
+                        "tool_name": tool.name,
+                        "parameters": parameters,
+                        "permission_behavior": decision.behavior.value,
+                        "permission_reason": decision.reason,
+                        "matched_rule_source": decision.matched_rule_source,
+                        "risk_categories": list(decision.risk_categories),
+                        "requires_confirmation": True,
+                    },
+                )
+            return None
         if spec.requires_confirmation:
             return ToolResult.needs_confirmation(
                 f"工具 '{tool.name}' 需要用户确认后才能执行。",
@@ -130,10 +169,22 @@ class ToolRegistry:
             )
         return ToolResult.success(str(raw_result), metadata={"tool_name": name})
 
-    def execute_tool_result(self, name: str, parameters: dict[str, Any]) -> ToolResult:
+    def execute_tool_result(
+        self,
+        name: str,
+        parameters: dict[str, Any],
+        *,
+        permission_context: PermissionContext | None = None,
+        permission_engine: PermissionEngine | None = None,
+    ) -> ToolResult:
         try:
             tool, validated = self.validate_tool_call(name, parameters)
-            auth_result = self.authorize_tool_call(tool, validated)
+            auth_result = self.authorize_tool_call(
+                tool,
+                validated,
+                permission_context=permission_context,
+                permission_engine=permission_engine,
+            )
             if auth_result is not None:
                 self._enrich_tool_result(tool, auth_result)
                 return auth_result
@@ -151,6 +202,8 @@ class ToolRegistry:
         metadata.setdefault("tool_name", tool.name)
         metadata.setdefault("tool_visibility", self.get_tool_visibility(tool.name))
         metadata.setdefault("tool_source", spec.source)
+        if spec.risk_categories:
+            metadata.setdefault("risk_categories", list(spec.risk_categories))
         if spec.demand_skill_tool:
             metadata.setdefault("demand_skill_tool", True)
             if spec.demand_skill_name:
@@ -164,8 +217,17 @@ class ToolRegistry:
         result = self.execute_tool_result(name, parameters)
         return result.to_display_string()
 
+    def export_tools(self, provider_name: str = "openai", *, scope: str = "all") -> Any:
+        from core.providers.tool_schema import create_tool_schema_adapter
+
+        adapter = create_tool_schema_adapter(provider_name)
+        return adapter.export_tools(self.get_visible_tools(scope=scope))
+
+    def get_tools_for_provider(self, provider_name: str, *, scope: str = "all") -> Any:
+        return self.export_tools(provider_name, scope=scope)
+
     def get_openai_tools(self) -> list[dict]:
-        return [tool.to_provider_schema("openai") for tool in self.tools.values()]
+        return self.export_tools("openai")
 
     def unregister_tool(self, name: str):
         if name in self.tools:

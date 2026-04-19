@@ -67,6 +67,9 @@ class PlanningAgent(BasicAgent):
         history_via_context_manager: bool = False,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
         stream_renderer: Optional["BaseStreamDisplayRenderer"] = None,
@@ -104,6 +107,9 @@ class PlanningAgent(BasicAgent):
             history_via_context_manager=history_via_context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
             stream_renderer=stream_renderer,
@@ -148,6 +154,9 @@ class PlanningAgent(BasicAgent):
         context_manager: Optional["ContextManager"] = None,
         callback_manager=None,
         skill_manager=None,
+        permission_engine=None,
+        permission_context=None,
+        task_service=None,
     ) -> dict[str, Any]:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
             snapshot,
@@ -157,6 +166,9 @@ class PlanningAgent(BasicAgent):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
         state = snapshot.get("state") or {}
         kwargs.update(

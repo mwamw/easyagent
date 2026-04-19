@@ -159,3 +159,28 @@ class SessionNotFoundError(SessionError):
 class SessionSerializationError(SessionError):
     """会话序列化或反序列化失败"""
     pass
+
+
+class PermissionError(AgentError):
+    """权限相关异常。"""
+    pass
+
+
+class PermissionDeniedError(PermissionError):
+    """操作被权限系统拒绝。"""
+    pass
+
+
+class ExecutionModeError(AgentError):
+    """执行模式相关异常。"""
+    pass
+
+
+class TaskError(AgentError):
+    """任务系统异常。"""
+    pass
+
+
+class TaskNotFoundError(TaskError):
+    """任务不存在。"""
+    pass

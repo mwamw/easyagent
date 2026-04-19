@@ -16,10 +16,15 @@ from agent import BasicAgent, ConversationalAgent, PlanningAgent, ReactAgent
 from core.Config import Config
 from core.Message import AssistantMessage, SystemMessage, ToolMessage, UserMessage
 from core.llm import EasyLLM
+from core.permissions import PermissionBehavior, PermissionMode, PermissionRule
 from core.request_input import ReplayRequestInput
 from context.manager import ContextManager
 from db import ConversationStore, SessionStore
+from skill import BaseSkill, SkillConfig, SkillRegistry
+from task import InMemoryTaskStore, SQLiteTaskStore, TaskService
+from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
+from Tool.builtin import register_file_read_tool
 
 
 class DummyLLM(EasyLLM):
@@ -61,6 +66,40 @@ class FakeMemoryManage:
         self.memory_types = {}
 
 
+class SkillEchoParams(BaseModel):
+    pass
+
+
+class SkillEchoTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="skill_echo",
+            description="Echo from restored skill",
+            parameters=SkillEchoParams,
+            read_only=True,
+        )
+
+    def run(self, parameters: dict):
+        return "skill-echo"
+
+
+class RestorableSkill(BaseSkill):
+    def __init__(self):
+        super().__init__(
+            SkillConfig(
+                name="restorable_skill",
+                description="Can be rebuilt from SkillRegistry",
+                auto_activate=True,
+            )
+        )
+
+    def get_tools(self):
+        return [SkillEchoTool()]
+
+    def get_prompt(self) -> str:
+        return "Restored skill prompt"
+
+
 def build_registry() -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -80,6 +119,7 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.llm = DummyLLM()
 
     def tearDown(self):
+        SkillRegistry.reset()
         self.tempdir.cleanup()
 
     def test_session_store_crud_and_cleanup(self):
@@ -329,6 +369,91 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         self.assertEqual(restored.get_context_usage(), usage)
         self.assertEqual(restored_manager.last_usage, usage)
+
+    def test_basic_agent_restores_mode_permissions_and_current_task(self):
+        registry = build_registry()
+        task_service = TaskService(InMemoryTaskStore())
+        task = task_service.create_task(title="Implement permissions", owner="agent")
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            task_service=task_service,
+        )
+        agent.enter_plan_mode(allowed_actions=["read", "search"])
+        agent.add_permission_rule(
+            PermissionRule(
+                tool_name="echo",
+                behavior=PermissionBehavior.ALLOW,
+                source="session",
+                description="允许 echo 工具直接执行",
+            )
+        )
+        agent.set_current_task(task.task_id)
+        agent.add_message(UserMessage("resume later"))
+        agent.save_session("basic-runtime-state", store=self.session_store)
+        restore_registry = build_registry()
+
+        restored = BasicAgent.load_session(
+            "basic-runtime-state",
+            llm=self.llm,
+            store=self.session_store,
+            tool_registry=restore_registry,
+            task_service=task_service,
+        )
+
+        self.assertEqual(restored.get_execution_mode().value, "plan")
+        self.assertEqual(restored.permission_context.mode, PermissionMode.PLAN)
+        self.assertEqual(restored.permission_context.rules[0].tool_name, "echo")
+        self.assertEqual(restored.mode_controller.state.allowed_actions, ["read", "search"])
+        self.assertEqual(restored.current_task_id, task.task_id)
+        self.assertTrue(restored.tool_registry.has_tool("TaskCreate"))
+        self.assertTrue(restored.tool_registry.has_tool("TaskList"))
+
+    def test_load_session_auto_restores_framework_dependencies(self):
+        registry = ToolRegistry()
+        register_file_read_tool(registry, workspace_root=self.tempdir.name)
+        config = Config(
+            workspace_root=self.tempdir.name,
+            allowed_roots=[self.tempdir.name],
+            command_timeout_ms=4321,
+        )
+        context_manager = ContextManager(max_tokens=80)
+        task_db_path = os.path.join(self.tempdir.name, "tasks.sqlite3")
+        task_service = TaskService(SQLiteTaskStore(task_db_path))
+        skill_registry = SkillRegistry.instance()
+        skill_registry.register_class(RestorableSkill, name="restorable_skill")
+
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            config=config,
+            context_manager=context_manager,
+            task_service=task_service,
+        )
+        agent.with_skill(RestorableSkill())
+        agent.save_session("auto-restore-deps", store=self.session_store)
+
+        restored = BasicAgent.load_session(
+            "auto-restore-deps",
+            llm=self.llm,
+            store=self.session_store,
+        )
+
+        self.assertTrue(restored.enable_tool)
+        self.assertIsNotNone(restored.tool_registry)
+        self.assertTrue(restored.tool_registry.has_tool("FileRead"))
+        self.assertTrue(restored.tool_registry.has_tool("TaskCreate"))
+        self.assertTrue(restored.tool_registry.has_tool("skill_echo"))
+        self.assertIsNotNone(restored.context_manager)
+        self.assertEqual(restored.context_manager.budget.max_tokens, 80)
+        self.assertIsNotNone(restored.task_service)
+        self.assertEqual(restored.task_service.store.db_path, task_db_path)
+        self.assertTrue(restored.skill_manager.has_skill("restorable_skill"))
+        self.assertTrue(restored.skill_manager.is_active("restorable_skill"))
 
     def test_conversational_agent_restore_keeps_auto_save_flag(self):
         memory_manage = FakeMemoryManage()

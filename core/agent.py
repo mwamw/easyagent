@@ -12,13 +12,17 @@ from .history import (
 from typing import Optional, Any, TYPE_CHECKING
 from abc import ABC, abstractmethod
 from datetime import datetime
+from functools import partial
+import os
 from .Config import Config
+from .execution_mode import ExecutionMode, ModeController
 from .llm import EasyLLM
 from Tool.ToolRegistry import ToolRegistry
 from context.manager import ContextManager
 from context.source.base import BaseContextSource
 from context.token.counter import TokenCounter
 from .callbacks import CallbackManager
+from .permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
 from skill.manager import SkillManager
 from prompt import build_memory_prompt_section
 import json
@@ -118,6 +122,12 @@ class BaseAgent(ABC):
         callback_manager: Optional["CallbackManager"] = None,
         skill_manager: Optional["SkillManager"] = None,
         reasoning: Optional[dict[str, Any]] = None,
+        permission_engine: Optional["PermissionEngine"] = None,
+        permission_context: Optional["PermissionContext"] = None,
+        task_service: Optional[Any] = None,
+        agent_runtime: Optional[Any] = None,
+        team_manager: Optional[Any] = None,
+        execution_context: Optional[Any] = None,
     ):
         """
         初始化 Agent
@@ -168,10 +178,26 @@ class BaseAgent(ABC):
         # Skill 管理器
         self.skill_manager = skill_manager or SkillManager()
         self.skill_manager.bind_agent(self)
-        
+        self.mode_controller = ModeController()
+        self.permission_engine = permission_engine or PermissionEngine()
+        self.permission_context = permission_context or PermissionContext()
+        self.current_task_id: Optional[str] = None
+        self.task_service = task_service
+        self.agent_runtime = agent_runtime
+        self.team_manager = team_manager or getattr(agent_runtime, "team_manager", None)
+        self._task_tools_registered = False
+        if self.permission_context.mode == PermissionMode.PLAN:
+            self.mode_controller.enter_plan_mode()
+        else:
+            self.mode_controller.exit_plan_mode()
+        self.execution_context = execution_context
+
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
             self._register_v2_memory_tools()
+        if self.task_service and self.tool_registry:
+            self._register_task_tools()
+        self._refresh_execution_context()
 
     def _register_v2_memory_tools(self) -> None:
         if self.memory_manage and self.tool_registry:
@@ -215,6 +241,63 @@ class BaseAgent(ABC):
 
         return self
 
+    def _register_task_tools(self) -> None:
+        if self.tool_registry is None or self.task_service is None:
+            return
+        if self._task_tools_registered:
+            return
+        required_tools = ("TaskCreate", "TaskGet", "TaskUpdate", "TaskList")
+        if all(self.tool_registry.has_tool(name) for name in required_tools):
+            self._task_tools_registered = True
+            return
+        from Tool.builtin.task_tools import register_task_tools
+
+        register_task_tools(self.tool_registry, service=self.task_service)
+        self._task_tools_registered = True
+        logger.info("已自动注册结构化任务工具")
+
+    def with_task_service(self, task_service: Any) -> "BaseAgent":
+        self.task_service = task_service
+        self._task_tools_registered = False
+        if self.tool_registry is not None:
+            self._register_task_tools()
+        self._refresh_execution_context()
+        return self
+
+    def bind_runtime(
+        self,
+        *,
+        agent_runtime: Optional[Any] = None,
+        team_manager: Optional[Any] = None,
+        execution_context: Optional[Any] = None,
+    ) -> "BaseAgent":
+        if agent_runtime is not None:
+            self.agent_runtime = agent_runtime
+        if team_manager is not None:
+            self.team_manager = team_manager
+        elif self.agent_runtime and getattr(self.agent_runtime, "team_manager", None) is not None:
+            self.team_manager = self.agent_runtime.team_manager
+        if execution_context is not None:
+            self.execution_context = execution_context
+        else:
+            self._refresh_execution_context()
+        return self
+
+    def _refresh_execution_context(self) -> None:
+        try:
+            from runtime import ExecutionContext
+        except Exception:
+            return
+
+        current = getattr(self, "execution_context", None)
+        metadata = dict(getattr(current, "metadata", {}) or {})
+        self.execution_context = ExecutionContext.from_agent(
+            self,
+            metadata=metadata,
+            worktree_path=getattr(current, "worktree_path", None),
+            worktree_branch=getattr(current, "worktree_branch", None),
+        )
+
     def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
         """绑定上下文管理器"""
         self.context_manager = context_manager
@@ -233,9 +316,55 @@ class BaseAgent(ABC):
             logger.warning("工具注册表为空!")
             self.tool_registry=ToolRegistry()
             self.enable_tool = True
+            if self.task_service is not None:
+                self._register_task_tools()
+            self._refresh_execution_context()
             return
         self.tool_registry = tool_registry
         self.enable_tool = tool_registry is not None
+        if self.task_service is not None:
+            self._register_task_tools()
+        self._refresh_execution_context()
+
+    def set_permission_mode(self, mode: PermissionMode | str) -> None:
+        permission_mode = PermissionMode(mode)
+        self.permission_context.set_mode(permission_mode)
+        if permission_mode == PermissionMode.PLAN:
+            self.mode_controller.enter_plan_mode(
+                allowed_actions=self.mode_controller.state.allowed_actions
+            )
+        else:
+            self.mode_controller.exit_plan_mode(
+                allowed_actions=self.mode_controller.state.allowed_actions
+            )
+        self._refresh_execution_context()
+
+    def add_permission_rule(self, rule: PermissionRule) -> None:
+        self.permission_context.add_rule(rule)
+
+    def clear_permission_rules(self) -> None:
+        self.permission_context.clear_rules()
+        self._refresh_execution_context()
+
+    def enter_plan_mode(self, *, allowed_actions: Optional[list[str]] = None) -> None:
+        self.mode_controller.enter_plan_mode(allowed_actions=allowed_actions)
+        self.permission_context.set_mode(PermissionMode.PLAN)
+        self._refresh_execution_context()
+
+    def request_exit_plan_mode(self, *, allowed_actions: Optional[list[str]] = None) -> None:
+        self.mode_controller.request_exit(allowed_actions=allowed_actions)
+
+    def exit_plan_mode(self, *, permission_mode: PermissionMode | str = PermissionMode.DEFAULT) -> None:
+        self.mode_controller.exit_plan_mode()
+        self.permission_context.set_mode(permission_mode)
+        self._refresh_execution_context()
+
+    def get_execution_mode(self) -> ExecutionMode:
+        return self.mode_controller.mode
+
+    def set_current_task(self, task_id: Optional[str]) -> None:
+        self.current_task_id = task_id
+        self._refresh_execution_context()
 
     # ==================== Skill 管理 API ====================
 
@@ -626,10 +755,10 @@ class BaseAgent(ABC):
     def _stable_system_prompt(self) -> Optional[str]:
         return self.get_enhanced_prompt()
 
-    def _stable_tools(self) -> Optional[list[dict[str, Any]]]:
+    def _stable_tools(self) -> Optional[Any]:
         if self.tool_registry is None:
             return None
-        return self.tool_registry.get_openai_tools()
+        return self.get_provider_tools()
 
     def _apply_history_compaction_result(self, result: Any) -> bool:
         self._last_history_compaction = _build_history_compaction_state(
@@ -725,6 +854,9 @@ class BaseAgent(ABC):
         return {
             "last_history_compaction": self._make_json_safe(self._last_history_compaction),
             "pending_step_state": self._make_json_safe(self._pending_step_state),
+            "mode_state": self.mode_controller.export_state(),
+            "permission_context": self.permission_context.export_state(),
+            "current_task_id": self.current_task_id,
             "replay_history_state": ReplayHistoryState(
                 provider_name=self.replay_history_provider_name,
                 messages=[
@@ -740,6 +872,9 @@ class BaseAgent(ABC):
         self._last_history_compaction = self._make_json_safe(state.get("last_history_compaction") or {})
         pending_state = state.get("pending_step_state")
         self._pending_step_state = self._make_json_safe(pending_state) if pending_state is not None else None
+        self.mode_controller.restore_state(state.get("mode_state"))
+        self.permission_context.restore_state(state.get("permission_context"))
+        self.current_task_id = state.get("current_task_id")
         replay_state = state.get("replay_history_state") or {}
         provider_name = replay_state.get("provider_name")
         messages = [
@@ -780,6 +915,32 @@ class BaseAgent(ABC):
             registered_skills = []
             active_skills = []
 
+        context_manager_snapshot = None
+        if self.context_manager is not None:
+            context_manager_snapshot = {
+                "max_tokens": self.context_manager.budget.max_tokens,
+                "source_names": list(getattr(self.context_manager.builder, "source_names", [])),
+                "history_compactor": self.context_manager.history_compactor.__class__.__name__,
+                "formatter": self.context_manager.builder.formatter.__class__.__name__,
+            }
+
+        task_service_snapshot = None
+        if self.task_service is not None:
+            store = getattr(self.task_service, "store", None)
+            task_service_snapshot = {
+                "backend": "custom",
+            }
+            db_path = getattr(store, "db_path", None)
+            if isinstance(db_path, str) and db_path:
+                task_service_snapshot = {
+                    "backend": "sqlite",
+                    "db_path": db_path,
+                }
+            elif store is not None and store.__class__.__name__ == "InMemoryTaskStore":
+                task_service_snapshot = {
+                    "backend": "memory",
+                }
+
         return {
             "schema_version": 1,
             "agent_type": self.__class__.__name__,
@@ -800,8 +961,301 @@ class BaseAgent(ABC):
             "active_skills": active_skills,
             "has_memory_manage": self.memory_manage is not None,
             "has_context_manager": self.context_manager is not None,
+            "has_task_service": self.task_service is not None,
+            "context_manager": self._make_json_safe(context_manager_snapshot),
+            "task_service": self._make_json_safe(task_service_snapshot),
             "state": self._make_json_safe(self._get_serializable_state()),
         }
+
+    @staticmethod
+    def _snapshot_config(snapshot: dict[str, Any]) -> Config:
+        config_data = snapshot.get("config") or {}
+        return Config(**config_data) if config_data else Config.from_env()
+
+    @classmethod
+    def _auto_restore_context_manager(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        context_manager: Optional["ContextManager"] = None,
+        config: Optional[Config] = None,
+    ) -> Optional["ContextManager"]:
+        if context_manager is not None:
+            return context_manager
+        context_snapshot = snapshot.get("context_manager") or {}
+        if not context_snapshot and not snapshot.get("has_context_manager"):
+            return None
+        max_tokens = context_snapshot.get("max_tokens")
+        if max_tokens is None:
+            max_tokens = getattr(config, "max_tokens", None) or 8000
+        return ContextManager(max_tokens=int(max_tokens))
+
+    @classmethod
+    def _auto_restore_task_service(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        task_service: Optional[Any] = None,
+    ) -> Optional[Any]:
+        if task_service is not None:
+            return task_service
+
+        task_snapshot = snapshot.get("task_service") or {}
+        has_task_tools = any(
+            name in {"TaskCreate", "TaskGet", "TaskUpdate", "TaskList"}
+            for name in list(snapshot.get("tool_names") or [])
+        )
+        if not task_snapshot and not snapshot.get("has_task_service") and not has_task_tools:
+            return None
+
+        try:
+            from task import InMemoryTaskStore, SQLiteTaskStore, TaskService
+        except Exception as exc:
+            logger.warning("自动恢复 TaskService 失败: %s", exc)
+            return None
+
+        backend = str(task_snapshot.get("backend") or "sqlite").lower()
+        try:
+            if backend == "memory":
+                return TaskService(InMemoryTaskStore())
+            if backend == "sqlite":
+                db_path = str(task_snapshot.get("db_path") or "db/easyagent_tasks.db")
+                return TaskService(SQLiteTaskStore(db_path))
+        except Exception as exc:
+            logger.warning("自动恢复 TaskService 失败: %s", exc)
+            return None
+
+        logger.warning("TaskService backend '%s' 暂不支持自动恢复，请手动注入。", backend)
+        return None
+
+    @classmethod
+    def _auto_restore_skill_manager(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        skill_manager: Optional["SkillManager"] = None,
+    ) -> tuple[Optional["SkillManager"], list[str]]:
+        if skill_manager is not None:
+            return skill_manager, []
+
+        registered_skills = list(snapshot.get("registered_skills") or [])
+        active_skills = list(snapshot.get("active_skills") or [])
+        if not registered_skills and not active_skills:
+            return None, []
+
+        try:
+            from skill.registry import SkillRegistry
+        except Exception as exc:
+            logger.warning("自动恢复 SkillManager 失败: %s", exc)
+            return None, []
+
+        manager = SkillManager()
+        registry = SkillRegistry.instance()
+        manager.bind_registry(registry)
+
+        missing: list[str] = []
+        for name in registered_skills:
+            if not registry.has(name):
+                missing.append(name)
+                continue
+            try:
+                manager.register(registry.create(name), auto_activate=False)
+            except Exception as exc:
+                logger.warning("自动注册 Skill '%s' 失败: %s", name, exc)
+
+        if missing:
+            logger.warning("以下 Skill 未在 SkillRegistry 中注册，无法自动恢复: %s", missing)
+
+        auto_activate = [name for name in active_skills if manager.has_skill(name)]
+        return manager, auto_activate
+
+    @classmethod
+    def _auto_restore_tool_registry(
+        cls,
+        snapshot: dict[str, Any],
+        *,
+        tool_registry: Optional["ToolRegistry"] = None,
+        config: Optional[Config] = None,
+        task_service: Optional[Any] = None,
+    ) -> Optional["ToolRegistry"]:
+        if tool_registry is not None:
+            return tool_registry
+
+        expected_tools = list(snapshot.get("tool_names") or [])
+        if not expected_tools and not snapshot.get("enable_tool"):
+            return None
+
+        from Tool.ToolRegistry import ToolRegistry
+
+        registry = ToolRegistry()
+        config = config or cls._snapshot_config(snapshot)
+        workspace_root = os.path.abspath(config.workspace_root or os.getcwd())
+        allowed_roots = config.get_allowed_roots()
+        cwd = workspace_root
+
+        shell_tools = {"Bash", "TaskOutput", "TaskStop"}
+        process_manager = None
+        if any(name in shell_tools for name in expected_tools):
+            try:
+                from Tool.runtime import ProcessManager
+
+                process_manager = ProcessManager(
+                    shell=config.shell,
+                    max_background_tasks=config.max_background_tasks,
+                )
+            except Exception as exc:
+                logger.warning("创建 ProcessManager 失败，相关 shell 工具可能无法自动恢复: %s", exc)
+
+        worktree_manager = None
+        if any(name in {"EnterWorktree", "ExitWorktree"} for name in expected_tools):
+            try:
+                from Tool.runtime import WorktreeManager
+
+                repo_root = WorktreeManager.detect_repo_root(
+                    workspace_root,
+                    git_binary=config.git_binary,
+                )
+                worktree_manager = WorktreeManager(
+                    repo_root,
+                    git_binary=config.git_binary,
+                    original_cwd=workspace_root,
+                )
+            except Exception as exc:
+                logger.warning("自动恢复 WorktreeManager 失败: %s", exc)
+
+        try:
+            from Tool.builtin import (
+                register_ask_user_question_tool,
+                register_bash_tool,
+                register_calculator_tool,
+                register_config_tool,
+                register_enter_plan_mode_tool,
+                register_enter_worktree_tool,
+                register_exit_plan_mode_tool,
+                register_exit_worktree_tool,
+                register_file_edit_tool,
+                register_file_read_tool,
+                register_file_write_tool,
+                register_glob_tool,
+                register_grep_tool,
+                register_notebook_edit_tool,
+                register_search_tool,
+                register_task_output_tool,
+                register_task_stop_tool,
+                register_todo_write_tool,
+                register_web_fetch_tool,
+            )
+        except Exception as exc:
+            logger.warning("导入 builtin tool 注册器失败，无法自动恢复 ToolRegistry: %s", exc)
+            return registry
+
+        for tool_name in expected_tools:
+            if registry.has_tool(tool_name):
+                continue
+            try:
+                if tool_name == "WebSearch":
+                    register_search_tool(registry)
+                elif tool_name == "Calculator":
+                    register_calculator_tool(registry)
+                elif tool_name == "FileRead":
+                    register_file_read_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "Glob":
+                    register_glob_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "Grep":
+                    register_grep_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "FileWrite":
+                    register_file_write_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "FileEdit":
+                    register_file_edit_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "Bash":
+                    register_bash_tool(
+                        registry,
+                        workspace_root,
+                        allowed_roots=allowed_roots,
+                        cwd=cwd,
+                        shell=config.shell,
+                        command_timeout_ms=config.command_timeout_ms,
+                        max_background_tasks=config.max_background_tasks,
+                        process_manager=process_manager,
+                    )
+                elif tool_name == "TaskOutput":
+                    register_task_output_tool(
+                        registry,
+                        workspace_root,
+                        allowed_roots=allowed_roots,
+                        cwd=cwd,
+                        shell=config.shell,
+                        command_timeout_ms=config.command_timeout_ms,
+                        max_background_tasks=config.max_background_tasks,
+                        process_manager=process_manager,
+                    )
+                elif tool_name == "TaskStop":
+                    register_task_stop_tool(
+                        registry,
+                        workspace_root,
+                        allowed_roots=allowed_roots,
+                        cwd=cwd,
+                        shell=config.shell,
+                        command_timeout_ms=config.command_timeout_ms,
+                        max_background_tasks=config.max_background_tasks,
+                        process_manager=process_manager,
+                    )
+                elif tool_name == "WebFetch":
+                    register_web_fetch_tool(registry)
+                elif tool_name == "TodoWrite":
+                    register_todo_write_tool(registry)
+                elif tool_name == "NotebookEdit":
+                    register_notebook_edit_tool(registry, workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+                elif tool_name == "AskUserQuestion":
+                    register_ask_user_question_tool(registry)
+                elif tool_name == "EnterPlanMode":
+                    register_enter_plan_mode_tool(registry)
+                elif tool_name == "ExitPlanMode":
+                    register_exit_plan_mode_tool(registry)
+                elif tool_name == "Config":
+                    register_config_tool(registry, config=config)
+                elif tool_name == "EnterWorktree" and worktree_manager is not None:
+                    register_enter_worktree_tool(registry, worktree_manager=worktree_manager)
+                elif tool_name == "ExitWorktree" and worktree_manager is not None:
+                    register_exit_worktree_tool(registry, worktree_manager=worktree_manager)
+            except Exception as exc:
+                logger.warning("自动恢复工具 '%s' 失败: %s", tool_name, exc)
+
+        return registry
+
+    @classmethod
+    def _restore_post_init_dependencies(
+        cls,
+        agent: "BaseAgent",
+        snapshot: dict[str, Any],
+        *,
+        auto_activate_skill_names: Optional[list[str]] = None,
+    ) -> None:
+        for skill_name in list(auto_activate_skill_names or []):
+            if not agent.skill_manager.has_skill(skill_name):
+                continue
+            try:
+                agent.skill_manager.activate(skill_name)
+            except Exception as exc:
+                logger.warning("恢复会话时激活 Skill '%s' 失败: %s", skill_name, exc)
+
+        expected_tools = list(snapshot.get("tool_names") or [])
+        if (
+            "Agent" in expected_tools
+            and agent.tool_registry is not None
+            and not agent.tool_registry.has_tool("Agent")
+        ):
+            try:
+                from Tool.builtin import register_agent_tool
+
+                register_agent_tool(
+                    agent.tool_registry,
+                    parent_agent=agent,
+                    workspace_root=getattr(agent.config, "workspace_root", None),
+                    allowed_roots=agent.config.get_allowed_roots(),
+                )
+            except Exception as exc:
+                logger.warning("自动恢复 Agent 工具失败: %s", exc)
 
     @classmethod
     def _build_base_constructor_kwargs(
@@ -813,6 +1267,9 @@ class BaseAgent(ABC):
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
         skill_manager: Optional["SkillManager"] = None,
+        permission_engine: Optional["PermissionEngine"] = None,
+        permission_context: Optional["PermissionContext"] = None,
+        task_service: Optional[Any] = None,
     ) -> dict[str, Any]:
         config_data = snapshot.get("config") or {}
         config = Config(**config_data) if config_data else None
@@ -831,6 +1288,9 @@ class BaseAgent(ABC):
             "context_manager": context_manager,
             "callback_manager": callback_manager,
             "skill_manager": skill_manager,
+            "permission_engine": permission_engine,
+            "permission_context": permission_context,
+            "task_service": task_service,
         }
 
     @classmethod
@@ -843,6 +1303,9 @@ class BaseAgent(ABC):
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
         skill_manager: Optional["SkillManager"] = None,
+        permission_engine: Optional["PermissionEngine"] = None,
+        permission_context: Optional["PermissionContext"] = None,
+        task_service: Optional[Any] = None,
     ) -> dict[str, Any]:
         return cls._build_base_constructor_kwargs(
             snapshot,
@@ -852,6 +1315,9 @@ class BaseAgent(ABC):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
 
     @classmethod
@@ -959,6 +1425,9 @@ class BaseAgent(ABC):
         context_manager: Optional["ContextManager"] = None,
         callback_manager: Optional["CallbackManager"] = None,
         skill_manager: Optional["SkillManager"] = None,
+        permission_engine: Optional["PermissionEngine"] = None,
+        permission_context: Optional["PermissionContext"] = None,
+        task_service: Optional[Any] = None,
     ) -> "BaseAgent":
         if not session_id or not isinstance(session_id, str):
             raise SessionSerializationError("session_id 必须是非空字符串")
@@ -972,6 +1441,26 @@ class BaseAgent(ABC):
 
         snapshot = record["snapshot"]
         target_cls = cls._resolve_agent_class(snapshot["agent_type"])
+        snapshot_config = cls._snapshot_config(snapshot)
+        task_service = cls._auto_restore_task_service(
+            snapshot,
+            task_service=task_service,
+        )
+        context_manager = cls._auto_restore_context_manager(
+            snapshot,
+            context_manager=context_manager,
+            config=snapshot_config,
+        )
+        skill_manager, auto_activate_skill_names = cls._auto_restore_skill_manager(
+            snapshot,
+            skill_manager=skill_manager,
+        )
+        tool_registry = cls._auto_restore_tool_registry(
+            snapshot,
+            tool_registry=tool_registry,
+            config=snapshot_config,
+            task_service=task_service,
+        )
 
         if cls is not BaseAgent and target_cls is not cls:
             raise SessionSerializationError(
@@ -990,8 +1479,16 @@ class BaseAgent(ABC):
             context_manager=context_manager,
             callback_manager=callback_manager,
             skill_manager=skill_manager,
+            permission_engine=permission_engine,
+            permission_context=permission_context,
+            task_service=task_service,
         )
         agent = target_cls(**init_kwargs)
+        target_cls._restore_post_init_dependencies(
+            agent,
+            snapshot,
+            auto_activate_skill_names=auto_activate_skill_names,
+        )
         agent._restore_serializable_state(snapshot.get("state") or {})
 
         conversation_store = ConversationStore(db_path=session_store.db_path)
@@ -1287,7 +1784,12 @@ class BaseAgent(ABC):
         self.callback_manager.on_tool_start(tool_name, tool_args)
         
         try:
-            result = self.tool_registry.execute_tool_result(tool_name, tool_args)
+            result = self.tool_registry.execute_tool_result(
+                tool_name,
+                tool_args,
+                permission_context=self.permission_context,
+                permission_engine=self.permission_engine,
+            )
             display_result = result.to_display_string()
             success = result.status == "success"
             self.callback_manager.on_tool_end(
@@ -1322,9 +1824,13 @@ class BaseAgent(ABC):
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 result = await loop.run_in_executor(
                     executor,
-                    self.tool_registry.execute_tool_result,
-                    tool_name,
-                    tool_args,
+                    partial(
+                        self.tool_registry.execute_tool_result,
+                        tool_name,
+                        tool_args,
+                        permission_context=self.permission_context,
+                        permission_engine=self.permission_engine,
+                    ),
                 )
             display_result = result.to_display_string()
             success = result.status == "success"
@@ -1438,6 +1944,18 @@ class BaseAgent(ABC):
         except Exception as e:
             raise ToolRegistryError(f"获取工具描述失败: {e}") from e
 
+    def get_provider_tools(self, provider_name: Optional[str] = None) -> Any:
+        if self.tool_registry is None:
+            raise ToolRegistryError("工具注册表未配置!")
+
+        target_provider = provider_name or getattr(self.llm, "provider_name", None)
+        try:
+            if target_provider == getattr(self.llm, "provider_name", None):
+                return self.llm.export_tools(self.tool_registry)
+            return self.tool_registry.export_tools(target_provider or "openai")
+        except Exception as e:
+            raise ToolRegistryError(f"获取 provider 工具列表失败: {e}") from e
+
     def get_openai_tools(self) -> list:
         """
         获取 OpenAI 格式的工具列表
@@ -1452,7 +1970,7 @@ class BaseAgent(ABC):
             raise ToolRegistryError("工具注册表未配置!")
         
         try:
-            return self.tool_registry.get_openai_tools()
+            return self.tool_registry.export_tools("openai")
         except Exception as e:
             raise ToolRegistryError(f"获取 OpenAI 工具列表失败: {e}") from e
     @abstractmethod

@@ -1,0 +1,202 @@
+import asyncio
+import os
+import sys
+import unittest
+
+from pydantic import BaseModel
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from agent import BasicAgent
+from core.permissions import (
+    PermissionBehavior,
+    PermissionContext,
+    PermissionEngine,
+    PermissionRule,
+)
+from core.llm import EasyLLM
+from task import InMemoryTaskStore, TaskService, TaskStatus
+from Tool import Tool, ToolRegistry
+from Tool.builtin import register_task_tools
+
+
+class DummyLLM(EasyLLM):
+    def __init__(self):
+        self.provider_name = "mock"
+        self.model = "mock-model"
+        self.base_url = "http://mock.local/v1"
+        self.api_key = "mock-key"
+        self.max_tokens = 256
+
+    def invoke(self, messages, temperature=None, **kwargs):
+        return "mock-response"
+
+    def prepare_messages_for_request(self, messages):
+        return list(messages)
+
+
+class NoopParams(BaseModel):
+    pass
+
+
+class ConfirmingTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="ConfirmingTool",
+            description="需要确认的测试工具",
+            parameters=NoopParams,
+            requires_confirmation=True,
+        )
+
+    def run(self, parameters: dict):
+        return "ok"
+
+
+class MutatingTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="MutatingTool",
+            description="高风险写操作工具",
+            parameters=NoopParams,
+            destructive=True,
+            risk_categories=["side_effect"],
+        )
+
+    def run(self, parameters: dict):
+        return "mutated"
+
+
+class PermissionAndTaskTests(unittest.TestCase):
+    def setUp(self):
+        self.llm = DummyLLM()
+
+    def test_permission_allow_rule_overrides_confirmation_requirement(self):
+        registry = ToolRegistry()
+        registry.register_tool(ConfirmingTool())
+        context = PermissionContext(
+            rules=[
+                PermissionRule(
+                    tool_name="ConfirmingTool",
+                    behavior=PermissionBehavior.ALLOW,
+                    source="test",
+                    description="测试规则允许直接执行",
+                )
+            ]
+        )
+
+        result = registry.execute_tool_result(
+            "ConfirmingTool",
+            {},
+            permission_context=context,
+            permission_engine=PermissionEngine(),
+        )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.content, "ok")
+
+    def test_plan_mode_blocks_high_risk_tool(self):
+        registry = ToolRegistry()
+        registry.register_tool(MutatingTool())
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+        )
+        agent.enter_plan_mode(allowed_actions=["read"])
+
+        result = agent.execute_tool_result("MutatingTool", {})
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_type, "permission_denied")
+        self.assertIn("plan 模式", result.content)
+        self.assertIn("side_effect", result.metadata["risk_categories"])
+
+    def test_async_tool_execution_respects_permission_engine(self):
+        registry = ToolRegistry()
+        registry.register_tool(MutatingTool())
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+        )
+        agent.enter_plan_mode(allowed_actions=["read"])
+
+        result = asyncio.run(agent._async_safe_execute_tool_result("MutatingTool", {}))
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_type, "permission_denied")
+
+    def test_task_tools_crud_flow(self):
+        registry = ToolRegistry()
+        service = TaskService(InMemoryTaskStore())
+        register_task_tools(registry, service=service)
+
+        create_result = registry.execute_tool_result(
+            "TaskCreate",
+            {
+                "title": "Refactor runtime",
+                "description": "拆出统一 runtime 内核",
+                "owner": "alice",
+                "metadata": {"phase": 1},
+            },
+        )
+        task_id = create_result.metadata["task_id"]
+
+        get_result = registry.execute_tool_result("TaskGet", {"task_id": task_id})
+        update_result = registry.execute_tool_result(
+            "TaskUpdate",
+            {
+                "task_id": task_id,
+                "status": TaskStatus.IN_PROGRESS,
+                "metadata": {"module": "runtime"},
+            },
+        )
+        list_result = registry.execute_tool_result(
+            "TaskList",
+            {"status": TaskStatus.IN_PROGRESS, "owner": "alice"},
+        )
+
+        self.assertEqual(create_result.status, "success")
+        self.assertEqual(get_result.structured_data["title"], "Refactor runtime")
+        self.assertEqual(update_result.structured_data["status"], TaskStatus.IN_PROGRESS)
+        self.assertEqual(update_result.structured_data["metadata"]["phase"], 1)
+        self.assertEqual(update_result.structured_data["metadata"]["module"], "runtime")
+        self.assertEqual(list_result.status, "success")
+        self.assertEqual(len(list_result.structured_data), 1)
+        self.assertEqual(list_result.structured_data[0]["task_id"], task_id)
+
+    def test_task_tools_return_structured_not_found_error(self):
+        registry = ToolRegistry()
+        service = TaskService(InMemoryTaskStore())
+        register_task_tools(registry, service=service)
+
+        result = registry.execute_tool_result("TaskGet", {"task_id": "task_missing"})
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_type, "task_not_found")
+        self.assertEqual(result.metadata["task_id"], "task_missing")
+
+    def test_agent_auto_registers_task_tools(self):
+        registry = ToolRegistry()
+        service = TaskService(InMemoryTaskStore())
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            task_service=service,
+        )
+
+        self.assertTrue(agent.tool_registry.has_tool("TaskCreate"))
+        self.assertTrue(agent.tool_registry.has_tool("TaskGet"))
+        self.assertTrue(agent.tool_registry.has_tool("TaskUpdate"))
+        self.assertTrue(agent.tool_registry.has_tool("TaskList"))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
