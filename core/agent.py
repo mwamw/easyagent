@@ -54,6 +54,7 @@ def _build_history_context_usage_payload(
 ) -> dict[str, Any]:
     remaining = (max_tokens - stable_context_tokens) if max_tokens is not None else None
     history_remaining = (history_budget_tokens - stable_context_tokens) if history_budget_tokens is not None else None
+    remaining_legacy = max(remaining, 0) if remaining is not None else None
     compaction = dict(compaction or {})
     return {
         "max_tokens": max_tokens,
@@ -62,7 +63,9 @@ def _build_history_context_usage_payload(
         "system_prompt_tokens": system_prompt_tokens,
         "tool_schema_tokens": tool_schema_tokens,
         "stable_context_tokens": stable_context_tokens,
+        "used_tokens": stable_context_tokens,
         "remaining_tokens_for_sources_and_query": remaining,
+        "remaining_tokens": remaining_legacy,
         "history_budget_remaining_tokens": history_remaining,
         "history_compacted": bool(compaction.get("was_compacted", False)),
         "last_history_compaction": compaction or {},
@@ -245,16 +248,33 @@ class BaseAgent(ABC):
         if self.tool_registry is None or self.task_service is None:
             return
         if self._task_tools_registered:
+            self._rebind_todo_write_tool()
             return
         required_tools = ("TaskCreate", "TaskGet", "TaskUpdate", "TaskList")
         if all(self.tool_registry.has_tool(name) for name in required_tools):
             self._task_tools_registered = True
+            self._rebind_todo_write_tool()
             return
         from Tool.builtin.task_tools import register_task_tools
 
         register_task_tools(self.tool_registry, service=self.task_service)
         self._task_tools_registered = True
+        self._rebind_todo_write_tool()
         logger.info("已自动注册结构化任务工具")
+
+    def _rebind_todo_write_tool(self) -> None:
+        if self.tool_registry is None or self.task_service is None:
+            return
+        if not self.tool_registry.has_tool("TodoWrite"):
+            return
+        from Tool.builtin import register_todo_write_tool
+
+        register_todo_write_tool(
+            self.tool_registry,
+            service=self.task_service,
+            scope_key=f"agent:{self.name}",
+            owner=self.name,
+        )
 
     def with_task_service(self, task_service: Any) -> "BaseAgent":
         self.task_service = task_service
@@ -324,6 +344,7 @@ class BaseAgent(ABC):
         self.enable_tool = tool_registry is not None
         if self.task_service is not None:
             self._register_task_tools()
+            self._rebind_todo_write_tool()
         self._refresh_execution_context()
 
     def set_permission_mode(self, mode: PermissionMode | str) -> None:
@@ -339,11 +360,28 @@ class BaseAgent(ABC):
             )
         self._refresh_execution_context()
 
-    def add_permission_rule(self, rule: PermissionRule) -> None:
-        self.permission_context.add_rule(rule)
+    def add_permission_rule(
+        self,
+        rule: PermissionRule,
+        *,
+        source: str | None = None,
+        priority: int | None = None,
+    ) -> None:
+        self.permission_context.add_rule(rule, source=source, priority=priority)
+        self._refresh_execution_context()
 
-    def clear_permission_rules(self) -> None:
-        self.permission_context.clear_rules()
+    def set_permission_rules(
+        self,
+        source: str,
+        rules: list[PermissionRule],
+        *,
+        priority: int | None = None,
+    ) -> None:
+        self.permission_context.set_source_rules(source, rules, priority=priority)
+        self._refresh_execution_context()
+
+    def clear_permission_rules(self, *, source: str | None = None) -> None:
+        self.permission_context.clear_rules(source=source)
         self._refresh_execution_context()
 
     def enter_plan_mode(self, *, allowed_actions: Optional[list[str]] = None) -> None:
@@ -1140,6 +1178,7 @@ class BaseAgent(ABC):
                 register_grep_tool,
                 register_notebook_edit_tool,
                 register_search_tool,
+                register_task_tools,
                 register_task_output_tool,
                 register_task_stop_tool,
                 register_todo_write_tool,
@@ -1153,6 +1192,12 @@ class BaseAgent(ABC):
             if registry.has_tool(tool_name):
                 continue
             try:
+                if (
+                    tool_name in {"TaskCreate", "TaskGet", "TaskUpdate", "TaskList"}
+                    and task_service is not None
+                ):
+                    register_task_tools(registry, service=task_service)
+                    continue
                 if tool_name == "WebSearch":
                     register_search_tool(registry)
                 elif tool_name == "Calculator":
@@ -1203,7 +1248,10 @@ class BaseAgent(ABC):
                 elif tool_name == "WebFetch":
                     register_web_fetch_tool(registry)
                 elif tool_name == "TodoWrite":
-                    register_todo_write_tool(registry)
+                    register_todo_write_tool(
+                        registry,
+                        service=task_service,
+                    )
                 elif tool_name == "NotebookEdit":
                     register_notebook_edit_tool(registry, workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
                 elif tool_name == "AskUserQuestion":
@@ -1221,6 +1269,8 @@ class BaseAgent(ABC):
             except Exception as exc:
                 logger.warning("自动恢复工具 '%s' 失败: %s", tool_name, exc)
 
+        if not registry.get_tool_names():
+            return None
         return registry
 
     @classmethod

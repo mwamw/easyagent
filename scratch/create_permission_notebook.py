@@ -1,0 +1,150 @@
+import json
+import os
+
+notebook = {
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "# EasyAgent 权限系统与中断机制 (Permission Engine & Interruption)\n",
+    "\n",
+    "这个示例展示了如何在 EasyAgent 中定义权限系统规则，以及如何在使用大模型调用高风险工具时触发和捕获 `ToolConfirmationRequired` 中断 (Interruption)。\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 环境与基础初始化\n",
+    "import os, sys\n",
+    "from pathlib import Path\n",
+    "\n",
+    "project_root = os.path.abspath(os.path.join(os.getcwd(), \"..\"))\n",
+    "if project_root not in sys.path:\n",
+    "    sys.path.insert(0, project_root)\n",
+    "\n",
+    "from core.llm import EasyLLM\n",
+    "from agent.BasicAgent import BasicAgent\n",
+    "from Tool.ToolRegistry import ToolRegistry\n",
+    "from Tool.builtin import register_shell_tools, register_file_write_tool\n",
+    "from core.permissions import PermissionMode, PermissionRule, PermissionBehavior\n",
+    "from core.Exception import ToolConfirmationRequired\n",
+    "\n",
+    "llm = EasyLLM(provider=\"openai\") # 可换用真实有效的大模型(如qwen3.5-9b)\n",
+    "registry = ToolRegistry()\n",
+    "register_shell_tools(registry, workspace_root=project_root)\n",
+    "register_file_write_tool(registry, workspace_root=project_root)\n",
+    "\n",
+    "print(\"✅ 基础环境, 工具 (Bash, FileWrite) 注册完成。\")\n"
+   ],
+   "execution_count": None
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 1. 定义与初始化带权限配置的 Agent\n",
+    "agent = BasicAgent(\n",
+    "    name=\"SecurityAwareAgent\",\n",
+    "    llm=llm,\n",
+    "    tool_registry=registry,\n",
+    "    enable_tool=True,\n",
+    ")\n",
+    "\n",
+    "# 我们通过设定一个权限规则：任何对 Bash 工具的调用都必须经过用户(User)确认 (ASK)\n",
+    "# 优先级数字越大优先级越高\n",
+    "agent.set_permission_rules(\n",
+    "    source=\"demo_guard\",\n",
+    "    rules=[\n",
+    "        PermissionRule(\n",
+    "            tool_name=\"Bash\",\n",
+    "            behavior=PermissionBehavior.ASK,\n",
+    "            description=\"所有的终端系统命令必须经过人工确认防范风险。\"\n",
+    "        )\n",
+    "    ],\n",
+    "    priority=100\n",
+    ")\n",
+    "\n",
+    "print(f\"✅ Agent 的当前权限模式为: {agent.permission_context.mode.value}\")\n",
+    "print(f\"✅ 已挂载针对 Bash 的 ASK 规则。\")\n"
+   ],
+   "execution_count": None
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 2. 展示中断机制 (Interruption Catching)\n",
+    "\n",
+    "query = \"请帮我用 Bash 命令行查看一下当前目录下有哪些文件。\"\n",
+    "\n",
+    "print(\"=== 开始调用模型执行任务 ===\")\n",
+    "try:\n",
+    "    # 当 agent 企图调用 Bash 时，由于被命中 ASK 规则\n",
+    "    # 调用链底层的 PermissionEngine 会返回 Ask 裁决，从而向外抛出 ToolConfirmationRequired\n",
+    "    res = agent.invoke(query, max_iter=3)\n",
+    "    print(\"模型正常结束:\", res)\n",
+    "\n",
+    "except ToolConfirmationRequired as e:\n",
+    "    print(\"\\n==========================\")\n",
+    "    print(\"🚨 [捕获到权限中断] 🚨\")\n",
+    "    print(f\"拦截原因: {e.args[0]}\")\n",
+    "    print(f\"模型企图调用的工具: {e.tool_name}\")\n",
+    "    print(f\"模型使用的参数: {e.tool_args}\")\n",
+    "    print(\"==========================\\n\")\n",
+    "    print(\"在真实的控制台或者 GUI UI 中，这会产生一个类似 [YES / NO] 的弹窗，将执行流挂起。\")\n"
+   ],
+   "execution_count": None
+  },
+  {
+   "cell_type": "code",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# 3. 如果放宽权限 (Accept Edits / Bypass)\n",
+    "# 可以利用 set_permission_mode 直接允许某些类型的风险操作\n",
+    "agent.set_permission_mode(PermissionMode.BYPASS)\n",
+    "print(f\"\\n✅ 已经切换模式为: {agent.permission_context.mode.value}\")\n",
+    "\n",
+    "print(\"=== 在 BYPASS 下重新运行命令 ===\")\n",
+    "try:\n",
+    "    res = agent.invoke(query, max_iter=3)\n",
+    "    print(\"\\n✅ 模型成功执行并在 BYPASS 模式下绕过了安全询问：\\n\", res)\n",
+    "except Exception as e:\n",
+    "    print(\"发生异常:\", e)\n"
+   ],
+   "execution_count": None
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.10.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
+
+out_path = os.path.join("..", "example", "example_permission_system.ipynb")
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(notebook, f, ensure_ascii=False, indent=1)
+
+print("Created example/example_permission_system.ipynb")

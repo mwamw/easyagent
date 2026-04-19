@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from Tool.runtime import SubagentManager, SubagentRequest
 from runtime.context import ExecutionContext
+from runtime.teams.manager import TeamManager
 
 from .models import AgentHandle, MailboxMessage
 
@@ -40,6 +41,8 @@ class AgentRuntimeManager:
             self.bind_team_manager(team_manager)
 
     def bind_team_manager(self, team_manager: Any) -> None:
+        if not team_manager:
+            self.team_manager = TeamManager(agent_runtime=self)
         self.team_manager = team_manager
         bind = getattr(team_manager, "bind_agent_runtime", None)
         if callable(bind):

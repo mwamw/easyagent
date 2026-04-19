@@ -36,9 +36,28 @@ class BaseTaskStore(ABC):
         status: TaskStatus | None = None,
         owner: str | None = None,
         parent_task_id: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> list[TaskRecord]:
         raise NotImplementedError
+
+
+def _metadata_value(metadata: dict[str, Any], dotted_key: str) -> Any:
+    current: Any = metadata
+    for part in str(dotted_key).split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _matches_metadata_filters(metadata: dict[str, Any], filters: dict[str, Any] | None) -> bool:
+    if not filters:
+        return True
+    for key, expected in filters.items():
+        if _metadata_value(metadata, key) != expected:
+            return False
+    return True
 
 
 class InMemoryTaskStore(BaseTaskStore):
@@ -66,6 +85,7 @@ class InMemoryTaskStore(BaseTaskStore):
         status: TaskStatus | None = None,
         owner: str | None = None,
         parent_task_id: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> list[TaskRecord]:
         with self._lock:
@@ -76,6 +96,8 @@ class InMemoryTaskStore(BaseTaskStore):
             tasks = [task for task in tasks if task.owner == owner]
         if parent_task_id is not None:
             tasks = [task for task in tasks if task.parent_task_id == parent_task_id]
+        if metadata_filters:
+            tasks = [task for task in tasks if _matches_metadata_filters(task.metadata, metadata_filters)]
         tasks.sort(key=lambda item: item.updated_at, reverse=True)
         return tasks[:limit]
 
@@ -149,6 +171,7 @@ class SQLiteTaskStore(BaseTaskStore):
         status: TaskStatus | None = None,
         owner: str | None = None,
         parent_task_id: str | None = None,
+        metadata_filters: dict[str, Any] | None = None,
         limit: int = 100,
     ) -> list[TaskRecord]:
         query = "SELECT * FROM tasks"
@@ -156,7 +179,7 @@ class SQLiteTaskStore(BaseTaskStore):
         params: list[Any] = []
         if status is not None:
             conditions.append("status = ?")
-            params.append(status.value)
+            params.append(TaskStatus(status).value)
         if owner is not None:
             conditions.append("owner = ?")
             params.append(owner)
@@ -165,11 +188,16 @@ class SQLiteTaskStore(BaseTaskStore):
             params.append(parent_task_id)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY updated_at DESC"
+        if not metadata_filters:
+            query += " LIMIT ?"
+            params.append(limit)
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        return [self._row_to_record(row) for row in rows]
+        records = [self._row_to_record(row) for row in rows]
+        if metadata_filters:
+            records = [record for record in records if _matches_metadata_filters(record.metadata, metadata_filters)]
+        return records[:limit]
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> TaskRecord:
@@ -184,4 +212,3 @@ class SQLiteTaskStore(BaseTaskStore):
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
-

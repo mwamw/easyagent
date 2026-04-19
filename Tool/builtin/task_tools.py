@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -154,9 +155,11 @@ class TaskListTool(_TaskToolBase):
 
     def run(self, parameters: dict) -> ToolResult:
         tasks = self.service.list_tasks(**parameters)
+        structured = [task.model_dump(mode="python") for task in tasks]
         return ToolResult.success(
             content=f"共 {len(tasks)} 个任务",
-            structured_data=[task.model_dump(mode="python") for task in tasks],
+            display_text=f"共 {len(tasks)} 个任务\n{json.dumps(structured, ensure_ascii=False, indent=2)}",
+            structured_data=structured,
             metadata={"task_count": len(tasks)},
         )
 

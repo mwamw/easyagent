@@ -15,6 +15,7 @@ from core.permissions import (
     PermissionBehavior,
     PermissionContext,
     PermissionEngine,
+    PermissionMode,
     PermissionRule,
 )
 from core.llm import EasyLLM
@@ -67,6 +68,21 @@ class MutatingTool(Tool):
 
     def run(self, parameters: dict):
         return "mutated"
+
+
+class EditableFileTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="EditableFileTool",
+            description="模拟需要确认的文件写入工具",
+            parameters=NoopParams,
+            requires_confirmation=True,
+            destructive=True,
+            risk_categories=["filesystem_write"],
+        )
+
+    def run(self, parameters: dict):
+        return "edited"
 
 
 class PermissionAndTaskTests(unittest.TestCase):
@@ -130,6 +146,59 @@ class PermissionAndTaskTests(unittest.TestCase):
 
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_type, "permission_denied")
+
+    def test_permission_store_respects_source_priority(self):
+        registry = ToolRegistry()
+        registry.register_tool(ConfirmingTool())
+        context = PermissionContext()
+        context.set_source_rules(
+            "session",
+            [
+                PermissionRule(
+                    tool_name="ConfirmingTool",
+                    behavior=PermissionBehavior.ALLOW,
+                    description="会话层允许执行",
+                )
+            ],
+            priority=50,
+        )
+        context.set_source_rules(
+            "workspace",
+            [
+                PermissionRule(
+                    tool_name="ConfirmingTool",
+                    behavior=PermissionBehavior.DENY,
+                    description="工作区策略禁止执行",
+                )
+            ],
+            priority=10,
+        )
+
+        result = registry.execute_tool_result(
+            "ConfirmingTool",
+            {},
+            permission_context=context,
+            permission_engine=PermissionEngine(),
+        )
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error_type, "permission_denied")
+        self.assertEqual(context.rules[0].source, "workspace")
+
+    def test_accept_edits_mode_allows_file_write_tools(self):
+        registry = ToolRegistry()
+        registry.register_tool(EditableFileTool())
+        context = PermissionContext(mode=PermissionMode.ACCEPT_EDITS)
+
+        result = registry.execute_tool_result(
+            "EditableFileTool",
+            {},
+            permission_context=context,
+            permission_engine=PermissionEngine(),
+        )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.content, "edited")
 
     def test_task_tools_crud_flow(self):
         registry = ToolRegistry()

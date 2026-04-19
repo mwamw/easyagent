@@ -66,7 +66,7 @@ class TaskService:
             update={
                 "title": title if title is not None else current.title,
                 "description": description if description is not None else current.description,
-                "status": status if status is not None else current.status,
+                "status": TaskStatus(status) if status is not None else current.status,
                 "owner": owner if owner is not None else current.owner,
                 "parent_task_id": parent_task_id if parent_task_id is not None else current.parent_task_id,
                 "metadata": next_metadata,
@@ -81,12 +81,13 @@ class TaskService:
         status: TaskStatus | None = None,
         owner: str | None = None,
         parent_task_id: str | None = None,
+        metadata_filters: dict | None = None,
         limit: int = 100,
     ) -> list[TaskRecord]:
         return self.store.list_tasks(
             status=status,
             owner=owner,
             parent_task_id=parent_task_id,
+            metadata_filters=metadata_filters,
             limit=limit,
         )
-

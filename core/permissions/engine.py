@@ -17,6 +17,19 @@ _PLAN_BLOCKED_RISKS = {
     RiskCategory.SIDE_EFFECT.value,
 }
 
+_EDIT_RISKS = {
+    RiskCategory.FILESYSTEM_READ.value,
+    RiskCategory.FILESYSTEM_WRITE.value,
+}
+
+_HIGH_RISK_CATEGORIES = {
+    RiskCategory.SHELL.value,
+    RiskCategory.NETWORK.value,
+    RiskCategory.PROCESS.value,
+    RiskCategory.MCP.value,
+    RiskCategory.SIDE_EFFECT.value,
+}
+
 
 class PermissionEngine:
     def authorize(
@@ -73,10 +86,27 @@ class PermissionEngine:
                 risk_categories=risk_categories,
             )
 
+        if context.mode == PermissionMode.ACCEPT_EDITS:
+            if risk_categories and set(risk_categories).issubset(_EDIT_RISKS):
+                return PermissionDecision.allow(
+                    tool_name=tool.name,
+                    reason="当前权限模式为 accept_edits，文件读写类工具允许直接执行。",
+                    risk_categories=risk_categories,
+                )
+
         if context.mode == PermissionMode.DONT_ASK and spec.requires_confirmation:
             return PermissionDecision.deny(
                 tool_name=tool.name,
                 reason="当前权限模式为 dont_ask，需确认工具被自动拒绝。",
+                risk_categories=risk_categories,
+            )
+
+        if context.mode == PermissionMode.DONT_ASK and (
+            spec.destructive or bool(set(risk_categories) & _HIGH_RISK_CATEGORIES)
+        ):
+            return PermissionDecision.deny(
+                tool_name=tool.name,
+                reason="当前权限模式为 dont_ask，高风险工具被自动拒绝。",
                 risk_categories=risk_categories,
             )
 
@@ -92,4 +122,3 @@ class PermissionEngine:
             reason="未命中特殊权限规则，默认允许执行。",
             risk_categories=risk_categories,
         )
-

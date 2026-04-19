@@ -9,6 +9,7 @@ if ROOT not in sys.path:
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import TodoWriteTool, register_todo_write_tool
 from Tool.runtime import clear_todo_items, get_todo_items
+from task import InMemoryTaskStore, TaskService
 
 
 class TestTodoWriteTool(unittest.TestCase):
@@ -129,6 +130,57 @@ class TestTodoWriteTool(unittest.TestCase):
         self.assertEqual(result.status, "success")
         self.assertTrue(result.structured_data["verificationNudgeNeeded"])
         self.assertIn("验证/测试步骤", result.to_display_string())
+
+    def test_todo_write_can_sync_to_task_service(self):
+        service = TaskService(InMemoryTaskStore())
+        tool = TodoWriteTool(service=service, scope_key="test-scope", owner="assistant")
+
+        first = tool.run(
+            {
+                "todos": [
+                    {
+                        "content": "实现权限存储",
+                        "status": "in_progress",
+                        "activeForm": "正在实现权限存储",
+                    },
+                    {
+                        "content": "补测试",
+                        "status": "pending",
+                        "activeForm": "正在补测试",
+                    },
+                ]
+            }
+        )
+        second = tool.run(
+            {
+                "todos": [
+                    {
+                        "content": "实现权限存储",
+                        "status": "completed",
+                        "activeForm": "正在实现权限存储",
+                    }
+                ]
+            }
+        )
+
+        scoped_tasks = service.list_tasks(metadata_filters={"_todo_write.scope_key": "test-scope"}, limit=10)
+        visible_tasks = [
+            task for task in scoped_tasks
+            if (task.metadata.get("_todo_write") or {}).get("visible", True)
+        ]
+        hidden_tasks = [
+            task for task in scoped_tasks
+            if not (task.metadata.get("_todo_write") or {}).get("visible", True)
+        ]
+
+        self.assertTrue(first.structured_data["taskBacked"])
+        self.assertEqual(len(first.structured_data["taskIds"]), 2)
+        self.assertEqual(second.structured_data["newTodos"][0]["status"], "completed")
+        self.assertEqual(len(visible_tasks), 1)
+        self.assertEqual(len(hidden_tasks), 1)
+        self.assertEqual(visible_tasks[0].title, "实现权限存储")
+        self.assertEqual(visible_tasks[0].owner, "assistant")
+        self.assertEqual(get_todo_items()[0].status, "completed")
 
     def test_register_todo_write_tool(self):
         registry = ToolRegistry()

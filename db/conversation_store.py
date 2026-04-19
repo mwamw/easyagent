@@ -128,6 +128,15 @@ class ConversationStore:
         payload = message.to_dict() if hasattr(message, "to_dict") else message
         if not isinstance(payload, dict):
             payload = {"role": "unknown", "content": str(payload)}
+        if hasattr(message, "metadata") and payload.get("metadata") is None:
+            payload["metadata"] = getattr(message, "metadata", None)
+        if hasattr(message, "time") and payload.get("time") is None:
+            time_value = getattr(message, "time", None)
+            payload["time"] = time_value.isoformat() if hasattr(time_value, "isoformat") else time_value
+        if hasattr(message, "tool_call_id") and payload.get("tool_call_id") is None:
+            payload["tool_call_id"] = getattr(message, "tool_call_id", None)
+        if hasattr(message, "name") and payload.get("name") is None:
+            payload["name"] = getattr(message, "name", None)
         role = str(payload.get("role") or payload.get("type") or "__raw__")
         content_value = payload.get("content", "")
         if isinstance(content_value, str):
@@ -154,10 +163,22 @@ class ConversationStore:
         )
 
     def _row_to_message(self, row: sqlite3.Row) -> Any:
+        metadata = _json_loads(row["metadata"]) or {}
+        time_value = datetime.fromisoformat(row["time"]) if row["time"] else None
         if row["raw_message"]:
             payload = _json_loads(row["raw_message"])
             if isinstance(payload, dict) and payload.get("record_type", payload.get("schema")) == "canonical_message":
                 return CanonicalMessage.model_validate(payload)
+            if isinstance(payload, dict):
+                if metadata and not payload.get("metadata"):
+                    payload["metadata"] = metadata
+                if time_value is not None and not payload.get("time"):
+                    payload["time"] = time_value.isoformat()
+                if row["tool_call_id"] and not payload.get("tool_call_id"):
+                    payload["tool_call_id"] = row["tool_call_id"]
+                if row["name"] and not payload.get("name"):
+                    payload["name"] = row["name"]
+                return payload
             return payload
 
         role = row["role"]
@@ -165,11 +186,10 @@ class ConversationStore:
             "role": role,
             "content": row["content"],
         }
-        metadata = _json_loads(row["metadata"]) or {}
         if metadata:
             payload["metadata"] = metadata
-        if row["time"]:
-            payload["time"] = datetime.fromisoformat(row["time"])
+        if time_value is not None:
+            payload["time"] = time_value
         if row["tool_call_id"]:
             payload["tool_call_id"] = row["tool_call_id"]
         if row["name"]:

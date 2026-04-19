@@ -144,7 +144,8 @@ def find_matching_rule(
     *,
     risk_categories: list[str],
 ) -> PermissionRule | None:
-    for rule in list(context.rules or []):
+    rules = context.iter_rules() if hasattr(context, "iter_rules") else list(context.rules or [])
+    for rule in rules:
         if not _rule_tool_matches(rule, tool):
             continue
         if not _rule_matches_risk(rule, risk_categories):
@@ -159,4 +160,3 @@ def find_matching_rule(
             continue
         return rule
     return None
-

@@ -2,6 +2,7 @@
 
 from .context import PermissionContext
 from .engine import PermissionEngine
+from .store import PermissionStore
 from .types import (
     PermissionBehavior,
     PermissionDecision,
@@ -17,6 +18,6 @@ __all__ = [
     "PermissionEngine",
     "PermissionMode",
     "PermissionRule",
+    "PermissionStore",
     "RiskCategory",
 ]
-

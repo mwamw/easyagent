@@ -166,10 +166,10 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.conversation_store.replace_messages("conv-1", messages)
         loaded = self.conversation_store.load_messages("conv-1")
 
-        self.assertEqual([msg.role for msg in loaded], ["system", "user", "assistant", "tool"])
-        self.assertEqual(loaded[0].metadata["source"], "test")
-        self.assertEqual(loaded[-1].tool_call_id, "call-1")
-        self.assertEqual(loaded[-1].name, "echo")
+        self.assertEqual([msg["role"] for msg in loaded], ["system", "user", "assistant", "tool"])
+        self.assertEqual(loaded[0]["metadata"]["source"], "test")
+        self.assertEqual(loaded[-1]["tool_call_id"], "call-1")
+        self.assertEqual(loaded[-1]["name"], "echo")
 
     def test_conversation_store_round_trip_raw_provider_messages(self):
         self.session_store.create_or_update_session(
@@ -256,7 +256,9 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(restored.system_prompt, "test prompt")
         self.assertTrue(restored.enable_tool)
         self.assertEqual(restored.get_history_length(), 2)
-        self.assertEqual(restored.get_history()[0].content, "hello")
+        self.assertEqual(restored.get_history()[0]["role"], "user")
+        self.assertEqual(restored.get_history()[0]["content"], "hello")
+        self.assertEqual(restored.get_canonical_history()[0].text_content(), "hello")
         self.assertEqual(
             [event["content"] for event in restored.get_trace_history() if event["type"] == "reasoning"],
             ["thought 1", "thought 2"],
@@ -349,13 +351,12 @@ class SessionPersistenceTestCase(unittest.TestCase):
         agent.add_message(UserMessage("hello"))
         agent.add_message(AssistantMessage("world"))
 
-        agent.invoke("continue")
         usage = agent.get_context_usage()
 
         self.assertEqual(usage["max_tokens"], 80)
         self.assertGreater(usage["used_tokens"], 0)
         self.assertGreaterEqual(usage["remaining_tokens"], 0)
-        self.assertEqual(manager.last_usage, usage)
+        self.assertFalse(hasattr(manager, "last_usage"))
 
         agent.save_session("basic-context-usage", store=self.session_store)
 
@@ -367,8 +368,28 @@ class SessionPersistenceTestCase(unittest.TestCase):
             context_manager=restored_manager,
         )
 
-        self.assertEqual(restored.get_context_usage(), usage)
-        self.assertEqual(restored_manager.last_usage, usage)
+        restored_usage = restored.get_context_usage()
+        self.assertEqual(restored_usage["max_tokens"], usage["max_tokens"])
+        self.assertEqual(restored_usage["history_tokens"], usage["history_tokens"])
+        self.assertEqual(restored_usage["stable_context_tokens"], usage["stable_context_tokens"])
+        self.assertEqual(restored_usage["canonical_history_messages"], usage["canonical_history_messages"])
+        self.assertEqual(restored_usage["replay_history_messages"], usage["replay_history_messages"])
+        self.assertFalse(hasattr(restored_manager, "last_usage"))
+
+    def test_get_context_usage_does_not_mutate_context_manager(self):
+        manager = ContextManager(max_tokens=128, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            system_prompt="test prompt",
+            context_manager=manager,
+        )
+        agent.add_message(UserMessage("hello"))
+
+        usage = agent.get_context_usage()
+
+        self.assertIn("used_tokens", usage)
+        self.assertFalse(hasattr(manager, "last_usage"))
 
     def test_basic_agent_restores_mode_permissions_and_current_task(self):
         registry = build_registry()
