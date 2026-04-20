@@ -184,3 +184,10 @@ class TaskError(AgentError):
 class TaskNotFoundError(TaskError):
     """任务不存在。"""
     pass
+
+
+class AgentStopRequested(AgentError):
+    """Agent 收到外部停止请求后触发的协作停止异常。"""
+
+    def __init__(self, message: str = "Agent 已收到停止请求。"):
+        super().__init__(message)

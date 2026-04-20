@@ -5,10 +5,17 @@ from __future__ import annotations
 import os
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import (
+    CancelledError as FutureCancelledError,
+    Future,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeoutError,
+)
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 from uuid import uuid4
+
+from core.Exception import AgentStopRequested
 
 
 @dataclass(slots=True)
@@ -26,6 +33,42 @@ class SubagentRequest:
     worktree_path: Optional[str] = None
     worktree_branch: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "description": self.description,
+            "prompt": self.prompt,
+            "agentType": self.agent_type,
+            "model": self.model,
+            "name": self.name,
+            "teamName": self.team_name,
+            "mode": self.mode,
+            "isolation": self.isolation,
+            "workspaceRoot": self.workspace_root,
+            "allowedRoots": list(self.allowed_roots),
+            "worktreePath": self.worktree_path,
+            "worktreeBranch": self.worktree_branch,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "SubagentRequest":
+        data = dict(payload or {})
+        return cls(
+            description=str(data.get("description") or ""),
+            prompt=str(data.get("prompt") or ""),
+            agent_type=data.get("agentType"),
+            model=data.get("model"),
+            name=data.get("name"),
+            team_name=data.get("teamName"),
+            mode=data.get("mode"),
+            isolation=data.get("isolation"),
+            workspace_root=data.get("workspaceRoot"),
+            allowed_roots=tuple(str(item) for item in list(data.get("allowedRoots") or [])),
+            worktree_path=data.get("worktreePath"),
+            worktree_branch=data.get("worktreeBranch"),
+            metadata=dict(data.get("metadata") or {}),
+        )
 
 
 @dataclass(slots=True)
@@ -46,6 +89,7 @@ class SubagentSnapshot:
     finished_at: Optional[float] = None
     content: str = ""
     error: Optional[str] = None
+    stop_reason: Optional[str] = None
     total_duration_ms: int = 0
     total_tool_use_count: int = 0
     total_tokens: int = 0
@@ -69,11 +113,39 @@ class SubagentSnapshot:
             "finishedAt": self.finished_at,
             "content": self.content,
             "error": self.error,
+            "stopReason": self.stop_reason,
             "totalDurationMs": self.total_duration_ms,
             "totalToolUseCount": self.total_tool_use_count,
             "totalTokens": self.total_tokens,
             "usage": dict(self.usage),
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "SubagentSnapshot":
+        data = dict(payload or {})
+        return cls(
+            agent_id=str(data.get("agentId") or ""),
+            status=str(data.get("status") or "completed"),
+            description=str(data.get("description") or ""),
+            prompt=str(data.get("prompt") or ""),
+            output_file=str(data.get("outputFile") or ""),
+            agent_type=data.get("agentType"),
+            name=data.get("name"),
+            team_name=data.get("teamName"),
+            mode=data.get("mode"),
+            isolation=data.get("isolation"),
+            worktree_path=data.get("worktreePath"),
+            worktree_branch=data.get("worktreeBranch"),
+            started_at=float(data.get("startedAt") or 0.0),
+            finished_at=float(data["finishedAt"]) if data.get("finishedAt") is not None else None,
+            content=str(data.get("content") or ""),
+            error=data.get("error"),
+            stop_reason=data.get("stopReason"),
+            total_duration_ms=int(data.get("totalDurationMs") or 0),
+            total_tool_use_count=int(data.get("totalToolUseCount") or 0),
+            total_tokens=int(data.get("totalTokens") or 0),
+            usage=dict(data.get("usage") or {}),
+        )
 
 
 class SubagentManager:
@@ -91,6 +163,7 @@ class SubagentManager:
         self._lock = threading.RLock()
         self._snapshots: dict[str, SubagentSnapshot] = {}
         self._futures: dict[str, Future[Any]] = {}
+        self._agents: dict[str, Any] = {}
         os.makedirs(self.storage_dir, exist_ok=True)
 
     def _build_output_file(self, agent_id: str) -> str:
@@ -99,6 +172,28 @@ class SubagentManager:
     def _write_output_file(self, path: str, content: str) -> None:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
+
+    def _write_snapshot_output(
+        self,
+        snapshot: SubagentSnapshot,
+        request: SubagentRequest,
+        *,
+        status: str,
+        section_title: str,
+        body: str,
+        finished_at: float,
+    ) -> None:
+        self._write_output_file(
+            snapshot.output_file,
+            (
+                f"# {request.description or snapshot.agent_id}\n\n"
+                f"状态: {status}\n"
+                f"开始时间: {snapshot.started_at}\n"
+                f"结束时间: {finished_at}\n\n"
+                f"## Prompt\n{request.prompt}\n\n"
+                f"## {section_title}\n{body}\n"
+            ),
+        )
 
     def _create_snapshot(self, request: SubagentRequest, *, status: str) -> SubagentSnapshot:
         agent_id = f"agent_{uuid4().hex[:12]}"
@@ -174,57 +269,114 @@ class SubagentManager:
         total_tokens = int(usage["input_tokens"] or 0) + int(usage["output_tokens"] or 0)
         return usage, total_tokens
 
+    @staticmethod
+    def _mark_terminal_snapshot(
+        snapshot: SubagentSnapshot,
+        *,
+        status: str,
+        finished_at: float,
+        content: str = "",
+        error: Optional[str] = None,
+        stop_reason: Optional[str] = None,
+        total_tool_use_count: int = 0,
+        total_tokens: int = 0,
+        usage: Optional[dict[str, Any]] = None,
+    ) -> None:
+        snapshot.status = status
+        snapshot.content = content
+        snapshot.error = error
+        snapshot.stop_reason = stop_reason
+        snapshot.finished_at = finished_at
+        snapshot.total_duration_ms = int((finished_at - snapshot.started_at) * 1000)
+        snapshot.total_tool_use_count = total_tool_use_count
+        snapshot.total_tokens = total_tokens
+        snapshot.usage = dict(usage or {})
+
     def _execute(self, snapshot: SubagentSnapshot, request: SubagentRequest) -> SubagentSnapshot:
         try:
             agent = self.agent_factory(request)
+            with self._lock:
+                self._agents[snapshot.agent_id] = agent
             result = agent.invoke(request.prompt)
             usage, total_tokens = self._build_usage(agent)
             total_tool_use_count = self._count_tool_calls(agent)
             content = str(result)
             finished_at = time.time()
-            output_lines = [
-                f"# {request.description or snapshot.agent_id}",
-                "",
-                f"状态: completed",
-                f"开始时间: {snapshot.started_at}",
-                f"结束时间: {finished_at}",
-                "",
-                "## Prompt",
-                request.prompt,
-                "",
-                "## Result",
-                content,
-            ]
-            self._write_output_file(snapshot.output_file, "\n".join(output_lines).strip() + "\n")
+            self._write_snapshot_output(
+                snapshot,
+                request,
+                status="completed",
+                section_title="Result",
+                body=content,
+                finished_at=finished_at,
+            )
             with self._lock:
-                snapshot.status = "completed"
-                snapshot.content = content
-                snapshot.finished_at = finished_at
-                snapshot.total_duration_ms = int((finished_at - snapshot.started_at) * 1000)
-                snapshot.total_tool_use_count = total_tool_use_count
-                snapshot.total_tokens = total_tokens
-                snapshot.usage = usage
+                self._mark_terminal_snapshot(
+                    snapshot,
+                    status="completed",
+                    content=content,
+                    finished_at=finished_at,
+                    total_tool_use_count=total_tool_use_count,
+                    total_tokens=total_tokens,
+                    usage=usage,
+                )
+            return snapshot
+        except AgentStopRequested as exc:
+            finished_at = time.time()
+            stop_reason = str(exc)
+            usage = {}
+            total_tokens = 0
+            total_tool_use_count = 0
+            try:
+                agent = self._agents.get(snapshot.agent_id)
+                if agent is not None:
+                    usage, total_tokens = self._build_usage(agent)
+                    total_tool_use_count = self._count_tool_calls(agent)
+            except Exception:
+                usage = {}
+                total_tokens = 0
+                total_tool_use_count = 0
+            self._write_snapshot_output(
+                snapshot,
+                request,
+                status="stopped",
+                section_title="Stop",
+                body=stop_reason,
+                finished_at=finished_at,
+            )
+            with self._lock:
+                self._mark_terminal_snapshot(
+                    snapshot,
+                    status="stopped",
+                    finished_at=finished_at,
+                    stop_reason=stop_reason,
+                    total_tool_use_count=total_tool_use_count,
+                    total_tokens=total_tokens,
+                    usage=usage,
+                )
             return snapshot
         except Exception as exc:
             finished_at = time.time()
             error_text = str(exc)
-            self._write_output_file(
-                snapshot.output_file,
-                (
-                    f"# {request.description or snapshot.agent_id}\n\n"
-                    f"状态: error\n"
-                    f"开始时间: {snapshot.started_at}\n"
-                    f"结束时间: {finished_at}\n\n"
-                    f"## Prompt\n{request.prompt}\n\n"
-                    f"## Error\n{error_text}\n"
-                ),
+            self._write_snapshot_output(
+                snapshot,
+                request,
+                status="error",
+                section_title="Error",
+                body=error_text,
+                finished_at=finished_at,
             )
             with self._lock:
-                snapshot.status = "error"
-                snapshot.error = error_text
-                snapshot.finished_at = finished_at
-                snapshot.total_duration_ms = int((finished_at - snapshot.started_at) * 1000)
+                self._mark_terminal_snapshot(
+                    snapshot,
+                    status="error",
+                    finished_at=finished_at,
+                    error=error_text,
+                )
             return snapshot
+        finally:
+            with self._lock:
+                self._agents.pop(snapshot.agent_id, None)
 
     def run(self, request: SubagentRequest) -> SubagentSnapshot:
         snapshot = self._create_snapshot(request, status="running")
@@ -259,13 +411,134 @@ class SubagentManager:
 
         future = self._futures.get(agent_id)
         if future is not None and future.done():
-            future.result()
+            try:
+                future.result()
+            except FutureCancelledError:
+                pass
         return snapshot
 
     def list_snapshots(self) -> list[SubagentSnapshot]:
         with self._lock:
             agent_ids = list(self._snapshots.keys())
         return [self.get_snapshot(agent_id) for agent_id in agent_ids]
+
+    def wait(self, agent_id: str, *, timeout_ms: Optional[int] = None) -> SubagentSnapshot:
+        snapshot = self.get_snapshot(agent_id)
+        with self._lock:
+            future = self._futures.get(agent_id)
+        if future is None:
+            return snapshot
+        try:
+            timeout_s = None if timeout_ms is None else max(float(timeout_ms) / 1000.0, 0.0)
+            future.result(timeout=timeout_s)
+        except FutureTimeoutError as exc:
+            raise TimeoutError(f"等待子 agent 超时: {agent_id}") from exc
+        except FutureCancelledError:
+            return self.get_snapshot(agent_id)
+        return self.get_snapshot(agent_id)
+
+    def stop(
+        self,
+        agent_id: str,
+        *,
+        reason: str = "",
+        wait: bool = False,
+        timeout_ms: Optional[int] = None,
+    ) -> SubagentSnapshot:
+        snapshot = self.get_snapshot(agent_id)
+        if snapshot.status in {"completed", "error", "stopped", "cancelled", "interrupted"}:
+            return snapshot
+
+        stop_reason = str(reason or "").strip() or "外部请求停止该子 agent。"
+
+        with self._lock:
+            future = self._futures.get(agent_id)
+            agent = self._agents.get(agent_id)
+
+        if future is not None and future.cancel():
+            finished_at = time.time()
+            self._write_snapshot_output(
+                snapshot,
+                SubagentRequest(
+                    description=snapshot.description,
+                    prompt=snapshot.prompt,
+                    agent_type=snapshot.agent_type,
+                    name=snapshot.name,
+                    team_name=snapshot.team_name,
+                    mode=snapshot.mode,
+                    isolation=snapshot.isolation,
+                    worktree_path=snapshot.worktree_path,
+                    worktree_branch=snapshot.worktree_branch,
+                ),
+                status="stopped",
+                section_title="Stop",
+                body=stop_reason,
+                finished_at=finished_at,
+            )
+            with self._lock:
+                self._mark_terminal_snapshot(
+                    snapshot,
+                    status="stopped",
+                    finished_at=finished_at,
+                    stop_reason=stop_reason,
+                )
+                self._futures.pop(agent_id, None)
+            return snapshot
+
+        request_stop = getattr(agent, "request_stop", None)
+        if not callable(request_stop):
+            raise RuntimeError(f"子 agent 当前不支持协作停止: {agent_id}")
+
+        request_stop(stop_reason)
+        with self._lock:
+            snapshot.status = "stop_requested"
+            snapshot.stop_reason = stop_reason
+
+        if wait:
+            return self.wait(agent_id, timeout_ms=timeout_ms)
+        return snapshot
+
+    def delete(self, agent_id: str, *, remove_output_file: bool = False) -> SubagentSnapshot:
+        snapshot = self.get_snapshot(agent_id)
+        with self._lock:
+            self._snapshots.pop(agent_id, None)
+            self._futures.pop(agent_id, None)
+            self._agents.pop(agent_id, None)
+        if remove_output_file:
+            try:
+                os.remove(snapshot.output_file)
+            except FileNotFoundError:
+                pass
+        return snapshot
+
+    def export_state(self) -> dict[str, Any]:
+        snapshots: list[dict[str, Any]] = []
+        for snapshot in self.list_snapshots():
+            payload = snapshot.to_dict()
+            if payload["status"] in {"running", "async_launched", "stop_requested"}:
+                finished_at = time.time()
+                payload["status"] = "interrupted"
+                payload["finishedAt"] = finished_at
+                payload["totalDurationMs"] = int((finished_at - snapshot.started_at) * 1000)
+                if not payload.get("error"):
+                    payload["error"] = "会话恢复后原后台执行上下文不可继续附着，请手动重新启动或续跑。"
+            snapshots.append(payload)
+        return {
+            "version": 1,
+            "snapshots": snapshots,
+        }
+
+    def restore_state(self, state: dict[str, Any] | None) -> None:
+        data = dict(state or {})
+        snapshots = [
+            SubagentSnapshot.from_dict(item)
+            for item in list(data.get("snapshots") or [])
+            if item
+        ]
+        with self._lock:
+            self._snapshots = {snapshot.agent_id: snapshot for snapshot in snapshots if snapshot.agent_id}
+            self._futures = {}
+            self._agents = {}
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)

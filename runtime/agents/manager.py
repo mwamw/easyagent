@@ -12,7 +12,7 @@ from Tool.runtime import SubagentManager, SubagentRequest
 from runtime.context import ExecutionContext
 from runtime.teams.manager import TeamManager
 
-from .models import AgentHandle, MailboxMessage
+from .models import AgentHandle, BackgroundAgentHandle, MailboxMessage
 
 
 class AgentRuntimeManager:
@@ -36,6 +36,7 @@ class AgentRuntimeManager:
         self._contexts: dict[str, ExecutionContext] = {}
         self._mailboxes: dict[str, list[MailboxMessage]] = {}
         self._team_assignments: dict[str, str] = {}
+        self._background_agent_ids: set[str] = set()
         self.team_manager = None
         if team_manager is not None:
             self.bind_team_manager(team_manager)
@@ -43,8 +44,9 @@ class AgentRuntimeManager:
     def bind_team_manager(self, team_manager: Any) -> None:
         if not team_manager:
             self.team_manager = TeamManager(agent_runtime=self)
-        self.team_manager = team_manager
-        bind = getattr(team_manager, "bind_agent_runtime", None)
+        else:
+            self.team_manager = team_manager
+        bind = getattr(self.team_manager, "bind_agent_runtime", None)
         if callable(bind):
             bind(self)
 
@@ -71,11 +73,17 @@ class AgentRuntimeManager:
         agent_id: str,
         request: SubagentRequest,
         execution_context: ExecutionContext,
+        *,
+        background: bool = False,
     ) -> None:
         with self._lock:
             self._requests[agent_id] = request
             self._contexts[agent_id] = execution_context
             self._mailboxes.setdefault(agent_id, [])
+            if background:
+                self._background_agent_ids.add(agent_id)
+            else:
+                self._background_agent_ids.discard(agent_id)
 
     def _attach_team_membership(self, agent_id: str, request: SubagentRequest) -> None:
         if self.team_manager is None or not request.team_name:
@@ -101,7 +109,12 @@ class AgentRuntimeManager:
             if run_in_background
             else self.subagent_manager.run(request)
         )
-        self._remember_registration(snapshot.agent_id, request, context)
+        self._remember_registration(
+            snapshot.agent_id,
+            request,
+            context,
+            background=run_in_background,
+        )
         self._attach_team_membership(snapshot.agent_id, request)
         return self.get_handle(snapshot.agent_id)
 
@@ -112,9 +125,11 @@ class AgentRuntimeManager:
             context = self._contexts.get(agent_id)
             mailbox = list(self._mailboxes.get(agent_id, ()))
             team_id = self._team_assignments.get(agent_id)
+            is_background = agent_id in self._background_agent_ids
         if request is None or context is None:
             raise KeyError(f"子 agent 运行时上下文不存在: {agent_id}")
-        return AgentHandle(
+        handle_cls = BackgroundAgentHandle if is_background else AgentHandle
+        base_kwargs = dict(
             agent_id=snapshot.agent_id,
             status=snapshot.status,
             description=snapshot.description,
@@ -135,6 +150,7 @@ class AgentRuntimeManager:
             finished_at=snapshot.finished_at,
             content=snapshot.content,
             error=snapshot.error,
+            stop_reason=snapshot.stop_reason,
             total_duration_ms=snapshot.total_duration_ms,
             total_tool_use_count=snapshot.total_tool_use_count,
             total_tokens=snapshot.total_tokens,
@@ -142,10 +158,83 @@ class AgentRuntimeManager:
             mailbox=mailbox,
             metadata=dict(request.metadata or {}),
         )
+        if handle_cls is BackgroundAgentHandle:
+            return handle_cls(
+                **base_kwargs,
+                stop_requested=snapshot.status == "stop_requested",
+                can_wait=True,
+                can_stop=snapshot.status not in {"completed", "error", "stopped", "cancelled", "interrupted"},
+            )
+        return handle_cls(**base_kwargs)
 
-    def list_handles(self) -> list[AgentHandle]:
+    def list_handles(
+        self,
+        *,
+        status: Optional[str] = None,
+        team_id: Optional[str] = None,
+        team_name: Optional[str] = None,
+        current_task_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[AgentHandle]:
         snapshots = self.subagent_manager.list_snapshots()
-        return [self.get_handle(snapshot.agent_id) for snapshot in snapshots]
+        handles = [self.get_handle(snapshot.agent_id) for snapshot in snapshots]
+        if status is not None:
+            handles = [handle for handle in handles if handle.status == status]
+        if team_id is not None:
+            handles = [handle for handle in handles if handle.team_id == team_id]
+        if team_name is not None:
+            handles = [handle for handle in handles if handle.team_name == team_name]
+        if current_task_id is not None:
+            handles = [
+                handle for handle in handles
+                if handle.execution_context.current_task_id == current_task_id
+            ]
+        if limit is not None:
+            handles = handles[: max(int(limit), 0)]
+        return handles
+
+    def wait(self, agent_id: str, *, timeout_ms: Optional[int] = None) -> AgentHandle:
+        self.subagent_manager.wait(agent_id, timeout_ms=timeout_ms)
+        return self.get_handle(agent_id)
+
+    def stop(
+        self,
+        agent_id: str,
+        *,
+        reason: str = "",
+        wait: bool = False,
+        timeout_ms: Optional[int] = None,
+    ) -> AgentHandle:
+        self.subagent_manager.stop(
+            agent_id,
+            reason=reason,
+            wait=wait,
+            timeout_ms=timeout_ms,
+        )
+        return self.get_handle(agent_id)
+
+    def delete_handle(
+        self,
+        agent_id: str,
+        *,
+        remove_output_file: bool = False,
+        remove_mailbox: bool = True,
+    ) -> AgentHandle:
+        handle = self.get_handle(agent_id)
+        self.subagent_manager.delete(agent_id, remove_output_file=remove_output_file)
+        with self._lock:
+            self._requests.pop(agent_id, None)
+            self._contexts.pop(agent_id, None)
+            self._background_agent_ids.discard(agent_id)
+            team_id = self._team_assignments.pop(agent_id, None)
+            if remove_mailbox:
+                self._mailboxes.pop(agent_id, None)
+        if team_id and self.team_manager is not None:
+            try:
+                self.team_manager.remove_member(team_id, agent_id)
+            except Exception:
+                pass
+        return handle
 
     def list_mailbox(self, agent_id: str) -> list[MailboxMessage]:
         self.get_handle(agent_id)
@@ -175,6 +264,13 @@ class AgentRuntimeManager:
             target_ids = list(team.member_agent_ids)
             if not target_ids:
                 raise ValueError(f"团队没有成员: {team.name}")
+        elif recipient_type == "task":
+            target_ids = [
+                handle.agent_id
+                for handle in self.list_handles(current_task_id=recipient_id)
+            ]
+            if not target_ids:
+                raise ValueError(f"没有 agent 绑定到任务: {recipient_id}")
         else:
             raise ValueError(f"不支持的 recipient_type: {recipient_type}")
 
@@ -203,6 +299,61 @@ class AgentRuntimeManager:
 
     def close(self) -> None:
         self.subagent_manager.close()
+
+    def export_state(self) -> dict[str, Any]:
+        with self._lock:
+            requests = {agent_id: request.to_dict() for agent_id, request in self._requests.items()}
+            contexts = {
+                agent_id: context.to_dict()
+                for agent_id, context in self._contexts.items()
+            }
+            mailboxes = {
+                agent_id: [message.to_dict() for message in messages]
+                for agent_id, messages in self._mailboxes.items()
+            }
+            team_assignments = dict(self._team_assignments)
+            background_agent_ids = sorted(self._background_agent_ids)
+        return {
+            "version": 1,
+            "storageDir": self.storage_dir,
+            "subagents": self.subagent_manager.export_state(),
+            "requests": requests,
+            "contexts": contexts,
+            "mailboxes": mailboxes,
+            "teamAssignments": team_assignments,
+            "backgroundAgentIds": background_agent_ids,
+        }
+
+    def restore_state(self, state: dict[str, Any] | None) -> None:
+        data = dict(state or {})
+        self.subagent_manager.restore_state(data.get("subagents"))
+        with self._lock:
+            self._requests = {
+                agent_id: SubagentRequest.from_dict(payload)
+                for agent_id, payload in dict(data.get("requests") or {}).items()
+            }
+            self._contexts = {
+                agent_id: context
+                for agent_id, payload in dict(data.get("contexts") or {}).items()
+                if (context := ExecutionContext.from_dict(payload)) is not None
+            }
+            self._mailboxes = {
+                agent_id: [
+                    MailboxMessage.from_dict(message)
+                    for message in list(messages or [])
+                ]
+                for agent_id, messages in dict(data.get("mailboxes") or {}).items()
+            }
+            self._team_assignments = {
+                str(agent_id): str(team_id)
+                for agent_id, team_id in dict(data.get("teamAssignments") or {}).items()
+                if agent_id and team_id
+            }
+            self._background_agent_ids = {
+                str(agent_id)
+                for agent_id in list(data.get("backgroundAgentIds") or [])
+                if agent_id
+            }
 
 
 __all__ = ["AgentRuntimeManager"]

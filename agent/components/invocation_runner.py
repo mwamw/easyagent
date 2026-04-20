@@ -96,6 +96,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         **kwargs,
     ) -> str:
         agent._validate_invoke_params(query, max_iter, temperature)
+        agent._raise_if_stop_requested()
         original_query = query
         agent._current_query = query
         agent._clear_last_tool_interrupt()
@@ -127,6 +128,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
         logger.info("使用普通模式调用智能体")
         try:
+            agent._raise_if_stop_requested()
             agent._append_query_history(query)
             agent.compact_persistent_history_if_needed()
             messages = agent._build_start_messages(query, include_query=False)
@@ -142,6 +144,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
             agent.callback_manager.on_llm_end(provider_content or "")
+            agent._raise_if_stop_requested()
 
             if response is None:
                 raise LLMInvokeError("LLM 返回了空响应!")
@@ -357,6 +360,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         **kwargs,
     ) -> str:
         agent._validate_invoke_params(query, max_iter, temperature)
+        agent._raise_if_stop_requested()
         original_query = query
         agent._current_query = query
         agent._clear_last_tool_interrupt()
@@ -386,6 +390,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
 
         logger.info("使用异步普通模式调用智能体")
         try:
+            agent._raise_if_stop_requested()
             agent._append_query_history(query)
             await agent.acompact_persistent_history_if_needed()
             messages = agent._build_start_messages(query, include_query=False)
@@ -401,6 +406,7 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
             agent.callback_manager.on_llm_end(provider_content or "")
+            agent._raise_if_stop_requested()
 
             if response is None:
                 raise LLMInvokeError("LLM 返回了空响应!")

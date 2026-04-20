@@ -20,11 +20,19 @@ from core.permissions import PermissionBehavior, PermissionMode, PermissionRule
 from core.request_input import ReplayRequestInput
 from context.manager import ContextManager
 from db import ConversationStore, SessionStore
+from runtime import TeamManager
 from skill import BaseSkill, SkillConfig, SkillRegistry
 from task import InMemoryTaskStore, SQLiteTaskStore, TaskService
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin import register_file_read_tool
+from Tool.builtin import (
+    register_agent_tool,
+    register_agent_runtime_tools,
+    register_file_read_tool,
+    register_send_message_tool,
+    register_team_create_tool,
+    register_team_delete_tool,
+)
 
 
 class DummyLLM(EasyLLM):
@@ -98,6 +106,20 @@ class RestorableSkill(BaseSkill):
 
     def get_prompt(self) -> str:
         return "Restored skill prompt"
+
+
+class RuntimeSubagent:
+    def __init__(self):
+        self.trace_history = [{"type": "tool_call", "tool_name": "WebSearch"}]
+
+    def invoke(self, prompt: str) -> str:
+        return f"runtime:{prompt}"
+
+    def get_context_usage(self) -> dict:
+        return {"used_tokens": 9}
+
+    def get_trace_history(self):
+        return list(self.trace_history)
 
 
 def build_registry() -> ToolRegistry:
@@ -475,6 +497,97 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(restored.task_service.store.db_path, task_db_path)
         self.assertTrue(restored.skill_manager.has_skill("restorable_skill"))
         self.assertTrue(restored.skill_manager.is_active("restorable_skill"))
+
+    def test_basic_agent_session_restore_rebuilds_collaboration_runtime(self):
+        registry = ToolRegistry()
+        task_service = TaskService(InMemoryTaskStore())
+        task = task_service.create_task(title="Restore collaboration runtime", owner="manager")
+        agent = BasicAgent(
+            name="manager",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            task_service=task_service,
+            config=Config(
+                workspace_root=self.tempdir.name,
+                allowed_roots=[self.tempdir.name],
+            ),
+        )
+
+        agent_tool = register_agent_tool(
+            registry,
+            parent_agent=agent,
+            agent_factory=lambda request: RuntimeSubagent(),
+            workspace_root=self.tempdir.name,
+            allowed_roots=(self.tempdir.name,),
+            storage_dir=os.path.join(self.tempdir.name, ".agents"),
+        )
+        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
+        agent_tool.agent_runtime.bind_team_manager(team_manager)
+        register_send_message_tool(
+            registry,
+            agent_runtime=agent_tool.agent_runtime,
+            parent_agent=agent,
+        )
+        register_agent_runtime_tools(
+            registry,
+            agent_runtime=agent_tool.agent_runtime,
+            parent_agent=agent,
+        )
+        register_team_create_tool(registry, team_manager=team_manager)
+        register_team_delete_tool(registry, team_manager=team_manager)
+        agent.bind_runtime(
+            agent_runtime=agent_tool.agent_runtime,
+            team_manager=team_manager,
+        )
+        agent.set_current_task(task.task_id)
+
+        team = team_manager.create_team(name="session-team")
+        delegation = registry.execute_tool_result(
+            "Agent",
+            {
+                "description": "恢复 runtime",
+                "prompt": "只读整理当前协作状态",
+                "team_name": "session-team",
+            },
+        )
+        agent_id = delegation.structured_data["agentId"]
+        delegated_task = task_service.list_tasks(parent_task_id=task.task_id)[0]
+        message_result = registry.execute_tool_result(
+            "SendMessage",
+            {
+                "recipient_type": "team",
+                "recipient_id": team.team_id,
+                "content": "恢复后 mailbox 仍应保留这条消息",
+            },
+        )
+        self.assertEqual(message_result.status, "success")
+
+        agent.save_session("basic-collaboration-runtime", store=self.session_store)
+        restored = BasicAgent.load_session(
+            "basic-collaboration-runtime",
+            llm=self.llm,
+            store=self.session_store,
+            task_service=task_service,
+        )
+
+        self.assertIsNotNone(restored.agent_runtime)
+        self.assertIsNotNone(restored.team_manager)
+        self.assertEqual(restored.current_task_id, task.task_id)
+        self.assertTrue(restored.tool_registry.has_tool("Agent"))
+        self.assertTrue(restored.tool_registry.has_tool("AgentGet"))
+        self.assertTrue(restored.tool_registry.has_tool("AgentList"))
+        self.assertTrue(restored.tool_registry.has_tool("AgentWait"))
+        self.assertTrue(restored.tool_registry.has_tool("AgentStop"))
+        self.assertTrue(restored.tool_registry.has_tool("SendMessage"))
+        self.assertTrue(restored.tool_registry.has_tool("TeamCreate"))
+        self.assertTrue(restored.tool_registry.has_tool("TeamDelete"))
+
+        restored_team = restored.team_manager.get_team("session-team")
+        restored_handle = restored.agent_runtime.get_handle(agent_id)
+        self.assertEqual(restored_handle.team_id, restored_team.team_id)
+        self.assertEqual(restored_handle.execution_context.current_task_id, delegated_task.task_id)
+        self.assertEqual(restored_handle.mailbox[0].content, "恢复后 mailbox 仍应保留这条消息")
 
     def test_conversational_agent_restore_keeps_auto_save_flag(self):
         memory_manage = FakeMemoryManage()

@@ -188,6 +188,8 @@ class BaseAgent(ABC):
         self.task_service = task_service
         self.agent_runtime = agent_runtime
         self.team_manager = team_manager or getattr(agent_runtime, "team_manager", None)
+        self._stop_requested = False
+        self._stop_reason: Optional[str] = None
         self._task_tools_registered = False
         if self.permission_context.mode == PermissionMode.PLAN:
             self.mode_controller.enter_plan_mode()
@@ -403,6 +405,25 @@ class BaseAgent(ABC):
     def set_current_task(self, task_id: Optional[str]) -> None:
         self.current_task_id = task_id
         self._refresh_execution_context()
+
+    def request_stop(self, reason: str = "") -> None:
+        self._stop_requested = True
+        clean_reason = str(reason or "").strip()
+        self._stop_reason = clean_reason or "Agent 已收到停止请求。"
+
+    def clear_stop_request(self) -> None:
+        self._stop_requested = False
+        self._stop_reason = None
+
+    def is_stop_requested(self) -> bool:
+        return bool(self._stop_requested)
+
+    def get_stop_reason(self) -> Optional[str]:
+        return self._stop_reason
+
+    def _raise_if_stop_requested(self) -> None:
+        if self._stop_requested:
+            raise AgentStopRequested(self._stop_reason or "Agent 已收到停止请求。")
 
     # ==================== Skill 管理 API ====================
 
@@ -979,6 +1000,26 @@ class BaseAgent(ABC):
                     "backend": "memory",
                 }
 
+        execution_context_snapshot = None
+        execution_context = getattr(self, "execution_context", None)
+        if execution_context is not None and hasattr(execution_context, "to_dict"):
+            execution_context_snapshot = execution_context.to_dict()
+
+        collaboration_runtime_snapshot = None
+        if self.agent_runtime is not None or self.team_manager is not None:
+            collaboration_runtime_snapshot = {
+                "agent_runtime": (
+                    self._make_json_safe(self.agent_runtime.export_state())
+                    if self.agent_runtime is not None and hasattr(self.agent_runtime, "export_state")
+                    else None
+                ),
+                "teams": (
+                    self._make_json_safe(self.team_manager.export_state())
+                    if self.team_manager is not None and hasattr(self.team_manager, "export_state")
+                    else None
+                ),
+            }
+
         return {
             "schema_version": 1,
             "agent_type": self.__class__.__name__,
@@ -1002,6 +1043,8 @@ class BaseAgent(ABC):
             "has_task_service": self.task_service is not None,
             "context_manager": self._make_json_safe(context_manager_snapshot),
             "task_service": self._make_json_safe(task_service_snapshot),
+            "execution_context": self._make_json_safe(execution_context_snapshot),
+            "collaboration_runtime": self._make_json_safe(collaboration_runtime_snapshot),
             "state": self._make_json_safe(self._get_serializable_state()),
         }
 
@@ -1270,6 +1313,8 @@ class BaseAgent(ABC):
                 logger.warning("自动恢复工具 '%s' 失败: %s", tool_name, exc)
 
         if not registry.get_tool_names():
+            if expected_tools:
+                return registry
             return None
         return registry
 
@@ -1290,22 +1335,138 @@ class BaseAgent(ABC):
                 logger.warning("恢复会话时激活 Skill '%s' 失败: %s", skill_name, exc)
 
         expected_tools = list(snapshot.get("tool_names") or [])
-        if (
-            "Agent" in expected_tools
-            and agent.tool_registry is not None
-            and not agent.tool_registry.has_tool("Agent")
-        ):
-            try:
-                from Tool.builtin import register_agent_tool
+        runtime_snapshot = snapshot.get("collaboration_runtime") or {}
+        execution_context_snapshot = snapshot.get("execution_context") or {}
+        collaboration_tools = {
+            "Agent",
+            "AgentGet",
+            "AgentList",
+            "AgentWait",
+            "AgentStop",
+            "SendMessage",
+            "TeamCreate",
+            "TeamDelete",
+        }
+        wants_collaboration_runtime = bool(runtime_snapshot) or any(
+            name in collaboration_tools for name in expected_tools
+        )
 
-                register_agent_tool(
-                    agent.tool_registry,
-                    parent_agent=agent,
-                    workspace_root=getattr(agent.config, "workspace_root", None),
-                    allowed_roots=agent.config.get_allowed_roots(),
-                )
+        restored_execution_context = None
+        try:
+            from runtime import ExecutionContext
+
+            restored_execution_context = ExecutionContext.from_dict(execution_context_snapshot)
+        except Exception:
+            restored_execution_context = None
+
+        if wants_collaboration_runtime:
+            runtime = None
+            team_manager = None
+            helper_tool = None
+            workspace_root = getattr(agent.config, "workspace_root", None)
+            allowed_roots = agent.config.get_allowed_roots() if agent.config is not None else None
+
+            try:
+                from Tool.builtin.agent_tool import AgentTool
+
+                existing_tool = None
+                if agent.tool_registry is not None and agent.tool_registry.has_tool("Agent"):
+                    existing_tool = agent.tool_registry.get_tool("Agent")
+                if isinstance(existing_tool, AgentTool):
+                    helper_tool = existing_tool
+                else:
+                    helper_tool = AgentTool(
+                        parent_agent=agent,
+                        workspace_root=workspace_root,
+                        allowed_roots=allowed_roots,
+                    )
+                runtime = helper_tool.agent_runtime
             except Exception as exc:
-                logger.warning("自动恢复 Agent 工具失败: %s", exc)
+                logger.warning("创建协作运行时失败: %s", exc)
+                runtime = None
+
+            if runtime is not None:
+                try:
+                    from runtime import TeamManager
+
+                    team_manager = getattr(runtime, "team_manager", None) or TeamManager(agent_runtime=runtime)
+                    runtime.bind_team_manager(team_manager)
+                except Exception as exc:
+                    logger.warning("创建 TeamManager 失败: %s", exc)
+                    team_manager = None
+
+                try:
+                    if team_manager is not None and runtime_snapshot.get("teams"):
+                        team_manager.restore_state(runtime_snapshot.get("teams"))
+                except Exception as exc:
+                    logger.warning("恢复 team 状态失败: %s", exc)
+
+                try:
+                    if runtime_snapshot.get("agent_runtime"):
+                        runtime.restore_state(runtime_snapshot.get("agent_runtime"))
+                except Exception as exc:
+                    logger.warning("恢复 agent runtime 状态失败: %s", exc)
+
+                try:
+                    agent.bind_runtime(
+                        agent_runtime=runtime,
+                        team_manager=team_manager,
+                        execution_context=restored_execution_context,
+                    )
+                except Exception as exc:
+                    logger.warning("绑定协作运行时失败: %s", exc)
+
+                if agent.tool_registry is not None:
+                    try:
+                        from Tool.builtin import (
+                            register_agent_tool,
+                            register_agent_runtime_tools,
+                            register_send_message_tool,
+                            register_team_create_tool,
+                            register_team_delete_tool,
+                        )
+
+                        if "Agent" in expected_tools:
+                            register_agent_tool(
+                                agent.tool_registry,
+                                parent_agent=agent,
+                                agent_runtime=runtime,
+                                worktree_manager=getattr(helper_tool, "worktree_manager", None),
+                                workspace_root=workspace_root,
+                                allowed_roots=allowed_roots,
+                                storage_dir=getattr(runtime, "storage_dir", None),
+                                max_background_tasks=getattr(getattr(runtime, "subagent_manager", None), "max_background_tasks", 4),
+                            )
+                        if any(name in expected_tools for name in {"AgentGet", "AgentList", "AgentWait", "AgentStop"}):
+                            register_agent_runtime_tools(
+                                agent.tool_registry,
+                                agent_runtime=runtime,
+                                parent_agent=agent,
+                            )
+                        if "SendMessage" in expected_tools:
+                            register_send_message_tool(
+                                agent.tool_registry,
+                                agent_runtime=runtime,
+                                parent_agent=agent,
+                            )
+                        if "TeamCreate" in expected_tools and team_manager is not None:
+                            register_team_create_tool(
+                                agent.tool_registry,
+                                team_manager=team_manager,
+                                parent_agent=agent,
+                            )
+                        if "TeamDelete" in expected_tools and team_manager is not None:
+                            register_team_delete_tool(
+                                agent.tool_registry,
+                                team_manager=team_manager,
+                            )
+                    except Exception as exc:
+                        logger.warning("恢复协作工具失败: %s", exc)
+        elif restored_execution_context is not None:
+            try:
+                agent.bind_runtime(execution_context=restored_execution_context)
+            except Exception as exc:
+                logger.warning("恢复 execution_context 失败: %s", exc)
 
     @classmethod
     def _build_base_constructor_kwargs(

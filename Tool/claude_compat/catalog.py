@@ -9,6 +9,10 @@ from pydantic import BaseModel
 
 from .models import (
     ClaudeAgentInput,
+    ClaudeAgentGetInput,
+    ClaudeAgentListInput,
+    ClaudeAgentStopInput,
+    ClaudeAgentWaitInput,
     ClaudeAskUserQuestionInput,
     ClaudeBashInput,
     ClaudeConfigInput,
@@ -51,6 +55,10 @@ class ClaudeToolDefinition:
 
 _CLAUDE_TOOL_DEFINITIONS = [
     ClaudeToolDefinition("Agent", ClaudeAgentInput, "Claude Code 子 agent 委派工具", tags=("agent", "orchestration")),
+    ClaudeToolDefinition("AgentGet", ClaudeAgentGetInput, "查询单个子 agent 运行时状态", read_only=True, tags=("agent", "runtime")),
+    ClaudeToolDefinition("AgentList", ClaudeAgentListInput, "列出当前 runtime 中的子 agent", read_only=True, tags=("agent", "runtime")),
+    ClaudeToolDefinition("AgentWait", ClaudeAgentWaitInput, "等待子 agent 进入当前可观察状态", read_only=True, tags=("agent", "runtime")),
+    ClaudeToolDefinition("AgentStop", ClaudeAgentStopInput, "请求停止子 agent", destructive=True, tags=("agent", "runtime")),
     ClaudeToolDefinition("Bash", ClaudeBashInput, "Claude Code shell 命令执行工具", destructive=True, tags=("shell", "local")),
     ClaudeToolDefinition("TaskOutput", ClaudeTaskOutputInput, "读取后台任务输出", read_only=True, tags=("shell", "background")),
     ClaudeToolDefinition("TaskCreate", ClaudeTaskCreateInput, "创建结构化任务", tags=("planning", "task")),

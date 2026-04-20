@@ -231,10 +231,13 @@ class PermissionAndTaskTests(unittest.TestCase):
         )
 
         self.assertEqual(create_result.status, "success")
+        self.assertIn('"title": "Refactor runtime"', create_result.to_display_string())
         self.assertEqual(get_result.structured_data["title"], "Refactor runtime")
+        self.assertIn(f'"task_id": "{task_id}"', get_result.to_display_string())
         self.assertEqual(update_result.structured_data["status"], TaskStatus.IN_PROGRESS)
         self.assertEqual(update_result.structured_data["metadata"]["phase"], 1)
         self.assertEqual(update_result.structured_data["metadata"]["module"], "runtime")
+        self.assertIn('"status": "in_progress"', update_result.to_display_string())
         self.assertEqual(list_result.status, "success")
         self.assertEqual(len(list_result.structured_data), 1)
         self.assertEqual(list_result.structured_data[0]["task_id"], task_id)

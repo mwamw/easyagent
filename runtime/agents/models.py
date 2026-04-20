@@ -29,6 +29,19 @@ class MailboxMessage:
             "metadata": dict(self.metadata),
         }
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "MailboxMessage":
+        data = dict(payload or {})
+        return cls(
+            message_id=str(data.get("messageId") or ""),
+            sender_id=data.get("senderId"),
+            recipient_type=str(data.get("recipientType") or "agent"),
+            recipient_id=str(data.get("recipientId") or ""),
+            content=str(data.get("content") or ""),
+            created_at=float(data.get("createdAt") or 0.0),
+            metadata=dict(data.get("metadata") or {}),
+        )
+
 
 @dataclass(slots=True)
 class AgentHandle:
@@ -52,6 +65,7 @@ class AgentHandle:
     finished_at: Optional[float] = None
     content: str = ""
     error: Optional[str] = None
+    stop_reason: Optional[str] = None
     total_duration_ms: int = 0
     total_tool_use_count: int = 0
     total_tokens: int = 0
@@ -81,6 +95,7 @@ class AgentHandle:
             "finishedAt": self.finished_at,
             "content": self.content,
             "error": self.error,
+            "stopReason": self.stop_reason,
             "totalDurationMs": self.total_duration_ms,
             "totalToolUseCount": self.total_tool_use_count,
             "totalTokens": self.total_tokens,
@@ -96,5 +111,25 @@ class AgentHandle:
             [{"type": "text", "text": self.content}]
             if self.content
             else []
+        )
+        return payload
+
+
+@dataclass(slots=True)
+class BackgroundAgentHandle(AgentHandle):
+    is_background: bool = True
+    can_wait: bool = True
+    can_stop: bool = True
+    stop_requested: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = AgentHandle.to_dict(self)
+        payload.update(
+            {
+                "isBackground": self.is_background,
+                "canWait": self.can_wait,
+                "canStop": self.can_stop,
+                "stopRequested": self.stop_requested,
+            }
         )
         return payload

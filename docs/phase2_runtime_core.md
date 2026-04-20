@@ -1,5 +1,7 @@
 # Phase 2 Runtime Core
 
+> 这是中间阶段文档。`Phase 2 / Phase 3` 的最终收口结果请看 `docs/phase23_runtime_collaboration_final.md`。
+
 本文档记录 EasyAgent 在 Phase 2 当前阶段完成的运行时协作能力，以及这一步对框架形态带来的变化。
 
 ## 这一步完成了什么

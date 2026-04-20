@@ -11,7 +11,9 @@ from ..claude_compat.models import ClaudeAgentInput
 from ..runtime import SubagentManager, SubagentRequest, WorktreeManager
 from core.permissions import PermissionContext, PermissionMode
 from runtime import AgentRuntimeManager, ExecutionContext
+from task import TaskStatus
 from .bash_tool import BashTool, register_shell_tools
+from .display_utils import format_error_display, format_structured_display
 from .file_edit import FileEditTool
 from .file_write import FileWriteTool
 from .filesystem import FileReadTool, GlobTool, GrepTool
@@ -300,6 +302,7 @@ class AgentTool(Tool):
                         register_team_create_tool(
                             registry,
                             team_manager=self.agent_runtime.team_manager,
+                            parent_agent=child_agent,
                         )
                     if parent_registry.has_tool("TeamDelete"):
                         from .team_delete import register_team_delete_tool
@@ -308,6 +311,14 @@ class AgentTool(Tool):
                             registry,
                             team_manager=self.agent_runtime.team_manager,
                         )
+                if any(parent_registry.has_tool(name) for name in ("AgentGet", "AgentList", "AgentWait", "AgentStop")):
+                    from .agent_runtime_tools import register_agent_runtime_tools
+
+                    register_agent_runtime_tools(
+                        registry,
+                        agent_runtime=self.agent_runtime,
+                        parent_agent=child_agent,
+                    )
             return child_agent
 
         return factory
@@ -316,6 +327,7 @@ class AgentTool(Tool):
         workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
         allowed_roots = tuple(request.allowed_roots or (workspace_root,))
         normalized_mode = _normalize_subagent_mode(request.mode)
+        delegated_task_id = request.metadata.get("task_id") if isinstance(request.metadata, dict) else None
         parent_execution_context = getattr(self.parent_agent, "execution_context", None)
         if parent_execution_context is not None and hasattr(parent_execution_context, "copy_for_workspace"):
             return parent_execution_context.copy_for_workspace(
@@ -325,6 +337,7 @@ class AgentTool(Tool):
                 worktree_branch=request.worktree_branch,
                 execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                current_task_id=delegated_task_id,
                 metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
             )
         if self.parent_agent is not None:
@@ -336,6 +349,7 @@ class AgentTool(Tool):
                 worktree_branch=request.worktree_branch,
                 execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                current_task_id=delegated_task_id,
                 metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
             )
         return ExecutionContext(
@@ -343,10 +357,72 @@ class AgentTool(Tool):
             allowed_roots=allowed_roots,
             execution_mode="plan" if normalized_mode == PermissionMode.PLAN else "execute",
             permission_mode=normalized_mode.value if normalized_mode is not None else "default",
+            current_task_id=delegated_task_id,
             worktree_path=request.worktree_path,
             worktree_branch=request.worktree_branch,
             metadata={},
         )
+
+    def _maybe_create_delegation_task(self, request: SubagentRequest) -> Optional[str]:
+        task_service = getattr(self.parent_agent, "task_service", None)
+        if task_service is None:
+            return None
+        metadata = dict(request.metadata or {})
+        runtime_metadata = dict(metadata.get("runtime") or {})
+        runtime_metadata.update(
+            {
+                "kind": "subagent",
+                "delegatedBy": getattr(self.parent_agent, "name", None),
+                "teamName": request.team_name,
+                "workspaceRoot": request.workspace_root or self.workspace_root,
+            }
+        )
+        metadata["runtime"] = runtime_metadata
+        parent_task_id = getattr(self.parent_agent, "current_task_id", None)
+        task = task_service.create_task(
+            title=request.description,
+            description=request.prompt,
+            status=TaskStatus.IN_PROGRESS,
+            owner=request.name,
+            parent_task_id=parent_task_id,
+            metadata=metadata,
+        )
+        request.metadata = {**metadata, "task_id": task.task_id}
+        return task.task_id
+
+    def _sync_delegation_task(self, request: SubagentRequest, handle: Any) -> None:
+        task_service = getattr(self.parent_agent, "task_service", None)
+        task_id = request.metadata.get("task_id") if isinstance(request.metadata, dict) else None
+        if task_service is None or not task_id:
+            return
+        status_map = {
+            "completed": TaskStatus.COMPLETED,
+            "error": TaskStatus.BLOCKED,
+            "stopped": TaskStatus.CANCELLED,
+            "interrupted": TaskStatus.BLOCKED,
+            "stop_requested": TaskStatus.BLOCKED,
+            "async_launched": TaskStatus.IN_PROGRESS,
+            "running": TaskStatus.IN_PROGRESS,
+        }
+        runtime_metadata = dict((request.metadata or {}).get("runtime") or {})
+        runtime_metadata.update(
+            {
+                "agentId": handle.agent_id,
+                "teamId": getattr(handle, "team_id", None),
+                "teamName": getattr(handle, "team_name", None),
+                "outputFile": handle.output_file,
+                "status": handle.status,
+            }
+        )
+        try:
+            task_service.update_task(
+                task_id,
+                owner=handle.agent_id,
+                status=status_map.get(handle.status, TaskStatus.IN_PROGRESS),
+                metadata={"runtime": runtime_metadata},
+            )
+        except Exception:
+            return
 
     def _prepare_request(self, parameters: dict) -> tuple[SubagentRequest, dict[str, Any]]:
         description = str(parameters.get("description", "")).strip()
@@ -388,6 +464,9 @@ class AgentTool(Tool):
             worktree_branch=worktree_branch,
             metadata=metadata,
         )
+        task_id = self._maybe_create_delegation_task(request)
+        if task_id is not None:
+            metadata["taskId"] = task_id
         return request, metadata
 
     def _build_completed_payload(self, handle) -> dict[str, Any]:
@@ -419,28 +498,43 @@ class AgentTool(Tool):
                 execution_context=execution_context,
                 run_in_background=run_in_background,
             )
+            self._sync_delegation_task(request, handle)
             if run_in_background:
                 payload = self._build_async_payload(handle)
                 return ToolResult.success(
                     f"子 agent 已后台启动: {handle.agent_id}",
+                    display_text=format_structured_display(
+                        f"子 agent 已后台启动: {handle.agent_id}",
+                        payload,
+                    ),
                     structured_data=payload,
                     metadata={**payload, **metadata},
                 )
 
             if handle.status == "error":
+                error_metadata = {
+                    "agentId": handle.agent_id,
+                    "outputFile": handle.output_file,
+                    **metadata,
+                }
                 return ToolResult.error(
                     f"子 agent 执行失败: {handle.error}",
                     error_type="subagent_failed",
-                    metadata={
-                        "agentId": handle.agent_id,
-                        "outputFile": handle.output_file,
-                        **metadata,
-                    },
+                    display_text=format_error_display(
+                        f"子 agent 执行失败: {handle.error}",
+                        error_metadata,
+                    ),
+                    metadata=error_metadata,
                 )
 
             payload = self._build_completed_payload(handle)
             return ToolResult.success(
                 handle.content,
+                display_text=format_structured_display(
+                    f"子 agent 已完成: {handle.agent_id}",
+                    payload,
+                    result_text=handle.content,
+                ),
                 structured_data=payload,
                 metadata={**payload, **metadata},
             )

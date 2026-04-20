@@ -215,6 +215,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：落地统一 runtime 主骨架，替代当前分散的 subagent、worktree、runtime 状态。
 
+当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_runtime_collaboration_final.md`。
+
 - 建立 `runtime/agents/`，引入 `AgentHandle`、`BackgroundAgentHandle`、`MailboxMessage`、新版 `SubagentManager`
 - 建立 `ExecutionContext`，统一表达工作目录、权限上下文、任务上下文、工具池、mode、worktree、MCP 可见性
 - 把 `AgentTool` 从“单次委派工具”升级成“创建、查询、恢复 subagent handle 的 runtime 入口”
@@ -237,6 +239,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 ### Phase 3: Collaboration Layer
 
 目标：完成多 agent 协作层，而不只是 subagent 启动。
+
+当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_runtime_collaboration_final.md`。
 
 - 落地 `runtime/teams/`，提供 `TeamHandle`、`TeamManager`
 - 新增 `SendMessage`、`TeamCreate`、`TeamDelete`，让 agent 间能传结构化消息、编组、解组

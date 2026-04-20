@@ -12,6 +12,7 @@ from core.Exception import (
     ToolExecutionError,
     ToolInterruption,
     ToolRegistryError,
+    AgentStopRequested,
 )
 from core.request_input import ReplayRequestInput
 
@@ -134,6 +135,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         agent.enable_tool = True
         agent._clear_last_tool_interrupt()
         agent._clear_ephemeral_skill_state()
+        agent._raise_if_stop_requested()
 
         if agent.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
@@ -155,6 +157,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
         try:
             while max_iter > 0:
+                agent._raise_if_stop_requested()
                 iteration_count += 1
                 logger.debug(f"工具调用迭代 {iteration_count}")
 
@@ -175,15 +178,17 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         **kwargs,
                     )
                     agent.callback_manager.on_llm_end(getattr(response, "content", "") or "")
+                    agent._raise_if_stop_requested()
 
                     if response is None:
                         raise LLMInvokeError("LLM 返回了空响应!")
                 except LLMInvokeError:
                     raise
+                except AgentStopRequested:
+                    raise
                 except Exception as e:
                     logger.error(f"智能体调用失败: {str(e)[:500]}")
-                    final_response = f"智能体调用失败: {str(e)[:500]}"
-                    break
+                    raise ToolExecutionError(f"智能体调用失败: {str(e)[:500]}") from e
 
                 thinking_content = agent.llm.get_thinking_content(response)
                 logger.info(f"思考内容: {thinking_content}")
@@ -230,6 +235,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     )
 
                     for tool_call in agent.llm.get_tool_calls(response):
+                        agent._raise_if_stop_requested()
                         tool_name = "unknown_tool"
                         tool_args: dict[str, Any] = {}
                         tool_id = self._extract_tool_id(tool_call)
@@ -412,6 +418,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         agent.enable_tool = True
         agent._clear_last_tool_interrupt()
         agent._clear_ephemeral_skill_state()
+        agent._raise_if_stop_requested()
 
         if agent.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
@@ -433,6 +440,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
         try:
             while max_iter > 0:
+                agent._raise_if_stop_requested()
                 iteration_count += 1
                 logger.debug(f"异步工具调用迭代 {iteration_count}")
 
@@ -453,15 +461,17 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         **kwargs,
                     )
                     agent.callback_manager.on_llm_end(getattr(response, "content", "") or "")
+                    agent._raise_if_stop_requested()
 
                     if response is None:
                         raise LLMInvokeError("LLM 返回了空响应!")
                 except LLMInvokeError:
                     raise
+                except AgentStopRequested:
+                    raise
                 except Exception as e:
                     logger.error(f"异步智能体调用失败: {str(e)[:500]}")
-                    final_response = f"智能体调用失败: {str(e)[:500]}"
-                    break
+                    raise ToolExecutionError(f"智能体调用失败: {str(e)[:500]}") from e
 
                 thinking_content = agent.llm.get_thinking_content(response)
                 reasoning_event_id: Optional[str] = None
@@ -703,6 +713,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         **kwargs,
     ) -> AsyncGenerator[dict[str, Any], None]:
         agent._validate_invoke_params(query, max_iter, temperature)
+        agent._raise_if_stop_requested()
         raw_query = trace_query if trace_query is not None else query
         agent._current_query = query
         agent._clear_last_tool_interrupt()
@@ -730,6 +741,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
 
         try:
             while max_iter > 0:
+                agent._raise_if_stop_requested()
                 round_index += 1
 
                 if needs_rebuild:
@@ -835,6 +847,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
 
                             agent.callback_manager.on_llm_end(event.get("content", "") or "")
+                            agent._raise_if_stop_requested()
                             reasoning_event_id = None
                             if streamed_thinking:
                                 reasoning_event_id = agent._set_round_reasoning(
@@ -861,6 +874,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
 
                             for tool_call in event.get("tool_calls", []):
+                                agent._raise_if_stop_requested()
                                 tool_name = agent._safe_get_tool_name(tool_call)
                                 tool_args = agent._safe_parse_tool_args(tool_call)
                                 tool_id = self._extract_tool_id(tool_call)

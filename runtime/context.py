@@ -111,3 +111,23 @@ class ExecutionContext:
             "worktreeBranch": self.worktree_branch,
             "metadata": dict(self.metadata),
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "ExecutionContext" | None:
+        data = dict(payload or {})
+        workspace_root = data.get("workspaceRoot")
+        if not workspace_root:
+            return None
+        return cls(
+            workspace_root=os.path.abspath(str(workspace_root)),
+            allowed_roots=_normalize_roots(
+                data.get("allowedRoots"),
+                str(workspace_root),
+            ),
+            execution_mode=str(data.get("executionMode") or "execute"),
+            permission_mode=str(data.get("permissionMode") or "default"),
+            current_task_id=data.get("currentTaskId"),
+            worktree_path=data.get("worktreePath"),
+            worktree_branch=data.get("worktreeBranch"),
+            metadata=dict(data.get("metadata") or {}),
+        )

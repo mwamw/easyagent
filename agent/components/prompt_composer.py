@@ -94,7 +94,7 @@ class DefaultPromptComposer(BasePromptComposer):
         return self.get_system_prompt_template(agent).render()
 
     def get_system_prompt_template(self, agent:BasicAgent) -> SystemPromptTemplate:
-        return SystemPromptTemplate(agent.get_system_prompt_blocks())
+        return SystemPromptTemplate(self.get_system_prompt_blocks(agent))
 
     def get_system_prompt_blocks(self, agent:BasicAgent) -> list[PromptBlock]:
         if not agent.enable_tool or not agent.tool_registry:

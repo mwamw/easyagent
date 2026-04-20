@@ -22,6 +22,29 @@ class ClaudeAgentInput(BaseModel):
     isolation: Optional[Literal["worktree"]] = Field(default=None, description="隔离模式")
 
 
+class ClaudeAgentGetInput(BaseModel):
+    agent_id: str = Field(description="子 agent ID")
+
+
+class ClaudeAgentListInput(BaseModel):
+    status: Optional[str] = Field(default=None, description="状态过滤")
+    team_id: Optional[str] = Field(default=None, description="团队 ID 或名称过滤")
+    current_task_id: Optional[str] = Field(default=None, description="当前任务 ID 过滤")
+    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+
+
+class ClaudeAgentWaitInput(BaseModel):
+    agent_id: str = Field(description="子 agent ID")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+
+
+class ClaudeAgentStopInput(BaseModel):
+    agent_id: str = Field(description="子 agent ID")
+    reason: str = Field(default="", description="停止原因")
+    wait: bool = Field(default=False, description="是否等待子 agent 进入终态")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+
+
 class ClaudeBashInput(BaseModel):
     command: str = Field(description="要执行的 shell 命令")
     timeout: Optional[int] = Field(default=None, description="超时时间，毫秒")
@@ -146,7 +169,7 @@ class ClaudeTaskListInput(BaseModel):
 
 
 class ClaudeSendMessageInput(BaseModel):
-    recipient_type: Literal["agent", "team"] = Field(description="接收方类型")
+    recipient_type: Literal["agent", "team", "task"] = Field(description="接收方类型")
     recipient_id: str = Field(description="接收方 ID 或团队名称")
     content: str = Field(description="要发送的消息内容")
     sender_id: Optional[str] = Field(default=None, description="发送方标识")

@@ -101,5 +101,20 @@ class TeamManager:
             self._team_names.pop(handle.name, None)
         return handle
 
+    def export_state(self) -> dict[str, Any]:
+        with self._lock:
+            teams = [handle.to_dict() for handle in self._teams.values()]
+        return {
+            "version": 1,
+            "teams": teams,
+        }
+
+    def restore_state(self, state: dict[str, Any] | None) -> None:
+        data = dict(state or {})
+        teams = [TeamHandle.from_dict(item) for item in list(data.get("teams") or [])]
+        with self._lock:
+            self._teams = {handle.team_id: handle for handle in teams}
+            self._team_names = {handle.name: handle.team_id for handle in teams if handle.name}
+
 
 __all__ = ["TeamManager"]

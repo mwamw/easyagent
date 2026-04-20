@@ -8,6 +8,7 @@ from runtime import TeamManager
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
+from .display_utils import format_structured_display
 
 
 class TeamDeleteParams(BaseModel):
@@ -41,6 +42,10 @@ class TeamDeleteTool(Tool):
         payload = team.to_dict()
         return ToolResult.success(
             content=f"已删除团队 {team.name}",
+            display_text=format_structured_display(
+                f"已删除团队 {team.name}",
+                payload,
+            ),
             structured_data=payload,
             metadata=payload,
         )

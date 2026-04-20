@@ -20,6 +20,13 @@ from .task_stop import TaskStopTool, register_task_stop_tool
 from .web_fetch import WebFetchTool, register_web_fetch_tool
 from .todo_write import TodoWriteTool, register_todo_write_tool
 from .agent_tool import AgentTool, register_agent_tool
+from .agent_runtime_tools import (
+    AgentGetTool,
+    AgentListTool,
+    AgentStopTool,
+    AgentWaitTool,
+    register_agent_runtime_tools,
+)
 from .send_message import SendMessageTool, register_send_message_tool
 from .team_create import TeamCreateTool, register_team_create_tool
 from .team_delete import TeamDeleteTool, register_team_delete_tool
@@ -74,6 +81,10 @@ __all__ = [
     "WebFetchTool",
     "TodoWriteTool",
     "AgentTool",
+    "AgentGetTool",
+    "AgentListTool",
+    "AgentWaitTool",
+    "AgentStopTool",
     "SendMessageTool",
     "TeamCreateTool",
     "TeamDeleteTool",
@@ -103,6 +114,7 @@ __all__ = [
     "register_web_fetch_tool",
     "register_todo_write_tool",
     "register_agent_tool",
+    "register_agent_runtime_tools",
     "register_send_message_tool",
     "register_team_create_tool",
     "register_team_delete_tool",

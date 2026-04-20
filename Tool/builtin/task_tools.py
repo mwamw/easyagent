@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
@@ -12,6 +11,7 @@ from task import InMemoryTaskStore, TaskService, TaskStatus
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
+from .display_utils import dump_tool_payload, format_structured_display
 
 
 class TaskCreateParams(BaseModel):
@@ -71,9 +71,14 @@ class TaskCreateTool(_TaskToolBase):
 
     def run(self, parameters: dict) -> ToolResult:
         task = self.service.create_task(**parameters)
+        payload = task.model_dump(mode="python")
         return ToolResult.success(
             content=f"已创建任务 {task.task_id}",
-            structured_data=task.model_dump(mode="python"),
+            display_text=format_structured_display(
+                f"已创建任务 {task.task_id}",
+                payload,
+            ),
+            structured_data=payload,
             metadata={"task_id": task.task_id},
         )
 
@@ -101,9 +106,14 @@ class TaskGetTool(_TaskToolBase):
                 error_type="task_not_found",
                 metadata={"task_id": task_id},
             )
+        payload = task.model_dump(mode="python")
         return ToolResult.success(
             content=f"任务 {task.task_id}",
-            structured_data=task.model_dump(mode="python"),
+            display_text=format_structured_display(
+                f"任务 {task.task_id}",
+                payload,
+            ),
+            structured_data=payload,
             metadata={"task_id": task.task_id},
         )
 
@@ -133,9 +143,14 @@ class TaskUpdateTool(_TaskToolBase):
                 error_type="task_not_found",
                 metadata={"task_id": task_id},
             )
+        payload = task.model_dump(mode="python")
         return ToolResult.success(
             content=f"已更新任务 {task.task_id}",
-            structured_data=task.model_dump(mode="python"),
+            display_text=format_structured_display(
+                f"已更新任务 {task.task_id}",
+                payload,
+            ),
+            structured_data=payload,
             metadata={"task_id": task.task_id},
         )
 
@@ -158,7 +173,7 @@ class TaskListTool(_TaskToolBase):
         structured = [task.model_dump(mode="python") for task in tasks]
         return ToolResult.success(
             content=f"共 {len(tasks)} 个任务",
-            display_text=f"共 {len(tasks)} 个任务\n{json.dumps(structured, ensure_ascii=False, indent=2)}",
+            display_text=f"共 {len(tasks)} 个任务\n{dump_tool_payload(structured)}",
             structured_data=structured,
             metadata={"task_count": len(tasks)},
         )

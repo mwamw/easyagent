@@ -10,10 +10,11 @@ from runtime import AgentRuntimeManager
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
+from .display_utils import format_structured_display
 
 
 class SendMessageParams(BaseModel):
-    recipient_type: Literal["agent", "team"] = Field(description="消息接收方类型")
+    recipient_type: Literal["agent", "team", "task"] = Field(description="消息接收方类型")
     recipient_id: str = Field(description="接收方 ID，team 类型时也支持团队名称")
     content: str = Field(description="要发送的结构化文本消息")
     sender_id: Optional[str] = Field(default=None, description="发送方标识，不填则使用当前 agent 名称")
@@ -43,13 +44,17 @@ class SendMessageTool(Tool):
 
     def run(self, parameters: dict) -> ToolResult:
         sender_id = parameters.get("sender_id") or getattr(self.parent_agent, "name", None)
+        metadata = dict(parameters.get("metadata") or {})
+        current_task_id = getattr(self.parent_agent, "current_task_id", None)
+        if current_task_id and "taskId" not in metadata:
+            metadata["taskId"] = current_task_id
         try:
             deliveries = self.agent_runtime.send_message(
                 recipient_type=parameters["recipient_type"],
                 recipient_id=parameters["recipient_id"],
                 content=parameters["content"],
                 sender_id=sender_id,
-                metadata=parameters.get("metadata") or {},
+                metadata=metadata,
             )
         except Exception as exc:
             return ToolResult.error(
@@ -69,6 +74,10 @@ class SendMessageTool(Tool):
         }
         return ToolResult.success(
             content=f"已发送 {len(deliveries)} 条消息",
+            display_text=format_structured_display(
+                f"已发送 {len(deliveries)} 条消息",
+                payload,
+            ),
             structured_data=payload,
             metadata=payload,
         )
