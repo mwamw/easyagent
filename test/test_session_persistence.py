@@ -71,6 +71,15 @@ class ReplayAwareDummyLLM(DummyLLM):
         self.kwargs = {}
 
 
+class ClosableDummyLLM(DummyLLM):
+    def __init__(self):
+        super().__init__()
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class EchoParams(BaseModel):
     text: str
 
@@ -720,6 +729,97 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertIsNotNone(report)
         self.assertEqual(report["components"]["worktree_runtime"]["status"], "restored")
         self.assertIn(os.path.abspath(worktree_path), report["components"]["worktree_runtime"]["restoredItems"])
+
+    def test_basic_agent_close_returns_cleanup_report(self):
+        repo = _init_git_repo(self.tempdir.name)
+        storage = os.path.join(self.tempdir.name, "worktrees")
+        manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+        llm = ClosableDummyLLM()
+
+        registry = ToolRegistry()
+        register_enter_worktree_tool(registry, worktree_manager=manager)
+        register_exit_worktree_tool(registry, worktree_manager=manager)
+        agent = BasicAgent(
+            name="close-agent",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+            config=Config(
+                workspace_root=repo,
+                allowed_roots=[repo],
+                enable_worktree=True,
+            ),
+        )
+
+        agent_tool = register_agent_tool(
+            registry,
+            parent_agent=agent,
+            workspace_root=repo,
+            allowed_roots=(repo,),
+            storage_dir=os.path.join(self.tempdir.name, ".agents-close"),
+        )
+        agent.bind_runtime(agent_runtime=agent_tool.agent_runtime)
+
+        registry.execute_tool_result("EnterWorktree", {"name": "close-check"})
+
+        report = agent.close()
+
+        self.assertEqual(report["status"], "closed")
+        self.assertEqual(report["components"]["agent_runtime"]["status"], "closed")
+        self.assertEqual(report["components"]["worktree_runtime"]["status"], "closed")
+        self.assertEqual(report["components"]["worktree_runtime"]["metadata"]["action"], "keep")
+        self.assertFalse(manager.get_active_session())
+        self.assertTrue(llm.closed)
+        self.assertEqual(report["components"]["llm"]["status"], "closed")
+        self.assertEqual(agent.get_last_close_report()["status"], "closed")
+
+    def test_basic_agent_close_reports_degraded_background_runtime(self):
+        llm = ClosableDummyLLM()
+        registry = ToolRegistry()
+        agent = BasicAgent(
+            name="close-background-agent",
+            llm=llm,
+            enable_tool=True,
+            tool_registry=registry,
+            config=Config(
+                workspace_root=self.tempdir.name,
+                allowed_roots=[self.tempdir.name],
+            ),
+        )
+        agent_tool = register_agent_tool(
+            registry,
+            parent_agent=agent,
+            agent_factory=lambda request: SlowRuntimeSubagent(),
+            workspace_root=self.tempdir.name,
+            allowed_roots=(self.tempdir.name,),
+            storage_dir=os.path.join(self.tempdir.name, ".agents-close-background"),
+        )
+        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
+        agent_tool.agent_runtime.bind_team_manager(team_manager)
+        agent.bind_runtime(
+            agent_runtime=agent_tool.agent_runtime,
+            team_manager=team_manager,
+        )
+
+        launch_result = registry.execute_tool_result(
+            "Agent",
+            {
+                "description": "后台 close 报告",
+                "prompt": "只读整理协作状态",
+                "run_in_background": True,
+            },
+        )
+
+        report = agent.close(close_worktree=False)
+
+        self.assertEqual(report["status"], "degraded")
+        self.assertEqual(report["components"]["agent_runtime"]["status"], "degraded")
+        self.assertIn(
+            launch_result.structured_data["agentId"],
+            report["components"]["agent_runtime"]["degradedItems"],
+        )
+        self.assertTrue(llm.closed)
+        self.assertEqual(agent.get_last_close_report()["status"], "degraded")
 
     def test_conversational_agent_restore_keeps_auto_save_flag(self):
         memory_manage = FakeMemoryManage()

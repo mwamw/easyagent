@@ -198,6 +198,7 @@ class BaseAgent(ABC):
             self.mode_controller.exit_plan_mode()
         self.execution_context = execution_context
         self.last_restore_report: Optional[SessionRestoreReport] = None
+        self.last_close_report: Optional[dict[str, Any]] = None
 
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
@@ -399,11 +400,29 @@ class BaseAgent(ABC):
     def _find_worktree_manager(tool_registry: Optional["ToolRegistry"]) -> Optional[Any]:
         if tool_registry is None:
             return None
-        for tool_name in ("Agent", "EnterWorktree", "ExitWorktree"):
+        candidates: list[Any] = []
+        seen: set[int] = set()
+        for tool_name in ("EnterWorktree", "ExitWorktree", "Agent"):
             tool = tool_registry.get_tool(tool_name)
             manager = getattr(tool, "worktree_manager", None) if tool is not None else None
-            if manager is not None:
-                return manager
+            if manager is None:
+                continue
+            marker = id(manager)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            candidates.append(manager)
+        for manager in candidates:
+            active_session_getter = getattr(manager, "get_active_session", None)
+            if not callable(active_session_getter):
+                continue
+            try:
+                if active_session_getter() is not None:
+                    return manager
+            except Exception:
+                continue
+        if candidates:
+            return candidates[0]
         return None
 
     def _build_mailbox_prompt(self) -> str:
@@ -1976,6 +1995,152 @@ class BaseAgent(ABC):
             return report.to_dict()
         return report
 
+    def close(
+        self,
+        *,
+        close_runtime: bool = True,
+        close_worktree: bool = True,
+        worktree_action: str = "keep",
+        discard_worktree_changes: bool = False,
+        close_llm: bool = True,
+    ) -> dict[str, Any]:
+        report: dict[str, Any] = {
+            "status": "closed",
+            "metadata": {
+                "agentName": self.name,
+                "agentType": self.__class__.__name__,
+            },
+            "components": {},
+            "issues": [],
+        }
+
+        def _merge_component_status(status: str) -> None:
+            normalized = str(status or "").strip().lower()
+            if normalized == "failed":
+                report["status"] = "failed"
+            elif normalized == "degraded" and report["status"] == "closed":
+                report["status"] = "degraded"
+
+        def _normalize_component_payload(
+            name: str,
+            payload: Any,
+            *,
+            default_status: str = "closed",
+        ) -> dict[str, Any]:
+            if isinstance(payload, dict):
+                component = dict(payload)
+                if "status" not in component:
+                    component = {
+                        "status": default_status,
+                        "metadata": component,
+                        "issues": [],
+                    }
+            else:
+                component = {
+                    "status": default_status,
+                    "metadata": {"value": payload},
+                    "issues": [],
+                }
+            component.setdefault("status", default_status)
+            component.setdefault("metadata", {})
+            component.setdefault("issues", [])
+            report["components"][name] = component
+            _merge_component_status(component.get("status", default_status))
+            return component
+
+        if close_runtime and self.agent_runtime is not None:
+            runtime_close = getattr(self.agent_runtime, "close", None)
+            if callable(runtime_close):
+                try:
+                    runtime_report = runtime_close()
+                    _normalize_component_payload("agent_runtime", runtime_report)
+                except Exception as exc:
+                    report["status"] = "failed"
+                    issue = {
+                        "component": "agent_runtime",
+                        "code": "runtime_close_failed",
+                        "message": f"关闭协作运行时失败: {exc}",
+                        "severity": "error",
+                    }
+                    report["issues"].append(issue)
+                    report["components"]["agent_runtime"] = {
+                        "status": "failed",
+                        "metadata": {},
+                        "issues": [issue],
+                    }
+
+        if close_worktree:
+            worktree_manager = self._find_worktree_manager(self.tool_registry)
+            if worktree_manager is not None:
+                worktree_close = getattr(worktree_manager, "close", None)
+                if callable(worktree_close):
+                    try:
+                        worktree_report = worktree_close(
+                            action=worktree_action,
+                            discard_changes=discard_worktree_changes,
+                        )
+                        if worktree_report is None:
+                            worktree_report = {
+                                "status": "closed",
+                                "metadata": {"hadActiveSession": False},
+                                "issues": [],
+                            }
+                        _normalize_component_payload("worktree_runtime", worktree_report)
+                    except Exception as exc:
+                        report["status"] = "failed"
+                        issue = {
+                            "component": "worktree_runtime",
+                            "code": "worktree_close_failed",
+                            "message": f"关闭 worktree runtime 失败: {exc}",
+                            "severity": "error",
+                        }
+                        report["issues"].append(issue)
+                        report["components"]["worktree_runtime"] = {
+                            "status": "failed",
+                            "metadata": {},
+                            "issues": [issue],
+                        }
+
+        if close_llm and self.llm is not None:
+            llm_close = getattr(self.llm, "close", None)
+            if callable(llm_close):
+                try:
+                    llm_close()
+                    _normalize_component_payload(
+                        "llm",
+                        {
+                            "status": "closed",
+                            "metadata": {
+                                "providerName": getattr(self.llm, "provider_name", None),
+                                "model": getattr(self.llm, "model", None),
+                            },
+                            "issues": [],
+                        },
+                    )
+                except Exception as exc:
+                    report["status"] = "failed"
+                    issue = {
+                        "component": "llm",
+                        "code": "llm_close_failed",
+                        "message": f"关闭 LLM 连接失败: {exc}",
+                        "severity": "error",
+                    }
+                    report["issues"].append(issue)
+                    report["components"]["llm"] = {
+                        "status": "failed",
+                        "metadata": {},
+                        "issues": [issue],
+                    }
+
+        self.last_close_report = report
+        return report
+
+    def get_last_close_report(self) -> Optional[dict[str, Any]]:
+        report = getattr(self, "last_close_report", None)
+        if report is None:
+            return None
+        return dict(report)
+
     def get_history(self):
         """获取当前 provider 的 replay/raw history（向后兼容）。"""
         return self.replay_history
@@ -2369,13 +2534,13 @@ class BaseAgent(ABC):
 
     # ==================== 向后兼容别名 ====================
 
-    def executeTool(self, tool_name: str, tool_args: dict) -> str:
-        """向后兼容：请改用 execute_tool"""
-        return self.execute_tool(tool_name, tool_args)
+    # def executeTool(self, tool_name: str, tool_args: dict) -> str:
+    #     """向后兼容：请改用 execute_tool"""
+    #     return self.execute_tool(tool_name, tool_args)
 
-    def addTool(self, tool) -> None:
-        """向后兼容：请改用 add_tool"""
-        return self.add_tool(tool)
+    # def addTool(self, tool) -> None:
+    #     """向后兼容：请改用 add_tool"""
+    #     return self.add_tool(tool)
 
     def get_tools_description(self) :
         """
@@ -2410,23 +2575,23 @@ class BaseAgent(ABC):
         except Exception as e:
             raise ToolRegistryError(f"获取 provider 工具列表失败: {e}") from e
 
-    def get_openai_tools(self) -> list:
-        """
-        获取 OpenAI 格式的工具列表
+    # def get_openai_tools(self) -> list:
+    #     """
+    #     获取 OpenAI 格式的工具列表
         
-        Returns:
-            OpenAI 格式的工具列表
+    #     Returns:
+    #         OpenAI 格式的工具列表
             
-        Raises:
-            ToolRegistryError: 工具注册表未配置
-        """
-        if self.tool_registry is None:
-            raise ToolRegistryError("工具注册表未配置!")
+    #     Raises:
+    #         ToolRegistryError: 工具注册表未配置
+    #     """
+    #     if self.tool_registry is None:
+    #         raise ToolRegistryError("工具注册表未配置!")
         
-        try:
-            return self.tool_registry.export_tools("openai")
-        except Exception as e:
-            raise ToolRegistryError(f"获取 OpenAI 工具列表失败: {e}") from e
+    #     try:
+    #         return self.tool_registry.export_tools("openai")
+    #     except Exception as e:
+    #         raise ToolRegistryError(f"获取 OpenAI 工具列表失败: {e}") from e
     @abstractmethod
     def get_enhanced_prompt(self) -> str:
         pass

@@ -294,6 +294,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：把框架从“能运行”升级到“能长期运行和恢复”。
 
+当前状态：`SessionRestoreReport`、runtime/worktree restore report 与 `BaseAgent.close()` 生命周期收口已完成，说明见 `docs/phasec_restore_report_lifecycle.md`；`hooks / guardrails / trace 关联键 / observability` 仍待后续实现。
+
 - 落地 `core/hooks/` 与 `core/guardrails/`，让内容级策略与规则级权限分层协作
 - session、compaction、interruption 恢复协议升级，覆盖 tool interruption、runtime mounts、missing tools、provider drift
 - 建立 `SessionRestoreReport`，恢复时显式报告降级、缺失、漂移，而不是静默跳过

@@ -42,8 +42,8 @@ def show_result(label: str, result) -> None:
 def build_manager() -> tuple[BasicAgent, dict[str, object]]:
     workspace = os.path.join(project_root, "example")
     llm = EasyLLM(
-        provider="anthropic_native",
-        base_url="http://127.0.0.1:5124",
+        provider="openai",
+        base_url="http://127.0.0.1:5124/v1",
         api_key="122",
         model="qwen3.5-9b",
     )
@@ -151,7 +151,7 @@ def main() -> None:
             "description": "Workers that receive mailbox updates during analysis",
         },
     )
-    show_result("TeamCreate", team_result)
+    # show_result("TeamCreate", team_result)
     team_id = team_result.structured_data["teamId"]
 
     launch_result = registry.execute_tool_result(
@@ -170,7 +170,7 @@ def main() -> None:
             "run_in_background": True,
         },
     )
-    show_result("Agent (background)", launch_result)
+    # show_result("Agent (background)", launch_result)
     child_agent_id = launch_result.structured_data["agentId"]
 
     # 给 worker 一点启动时间，便于它在后续轮次看到 mailbox 更新。
@@ -192,7 +192,7 @@ def main() -> None:
             },
         },
     )
-    show_result("SendMessage(agent)", message_result)
+    # show_result("SendMessage(agent)", message_result)
 
     get_result = registry.execute_tool_result(
         "AgentGet",
@@ -200,7 +200,7 @@ def main() -> None:
             "agent_id": child_agent_id,
         },
     )
-    show_result("AgentGet", get_result)
+    # show_result("AgentGet", get_result)
 
     manager_mailbox_view = registry.execute_tool_result(
         "MailboxRead",
@@ -210,7 +210,7 @@ def main() -> None:
             "include_consumed": True,
         },
     )
-    show_result("MailboxRead(child mailbox)", manager_mailbox_view)
+    # show_result("MailboxRead(child mailbox)", manager_mailbox_view)
 
     wait_result = registry.execute_tool_result(
         "AgentWait",
@@ -219,7 +219,7 @@ def main() -> None:
             "timeout_ms": 120000,
         },
     )
-    show_result("AgentWait", wait_result)
+    # show_result("AgentWait", wait_result)
 
     post_wait_mailbox = registry.execute_tool_result(
         "MailboxRead",
@@ -230,7 +230,7 @@ def main() -> None:
             "include_expired": True,
         },
     )
-    show_result("MailboxRead(after wait)", post_wait_mailbox)
+    # show_result("MailboxRead(after wait)", post_wait_mailbox)
 
     print("=== Runtime completion records ===")
     print([record.to_dict() for record in runtime.list_completion_records()])
@@ -242,7 +242,7 @@ def main() -> None:
             "team_id": team_id,
         },
     )
-    show_result("TeamDelete", delete_result)
+    # show_result("TeamDelete", delete_result)
 
     print("Manual verification suggestions:")
     print("1. Check whether AgentGet/AgentWait return mailbox counters and outputFile.")

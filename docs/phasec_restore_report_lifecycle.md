@@ -78,6 +78,28 @@
 
 这让“关闭运行时”也不再是黑盒动作。
 
+### 5. `BaseAgent.close()` 正式落地
+
+此前 close 语义只存在于 manager 层。现在 `BaseAgent` 也有统一 cleanup 入口：
+
+- `agent.close()`
+- `agent.get_last_close_report()`
+
+它会把：
+
+- `agent_runtime.close()`
+- `worktree_manager.close()`
+- `llm.close()`
+
+统一汇总为一份结构化 close report。
+
+这意味着上层产品不需要自己知道 runtime / worktree / provider 的细节，就能拿到：
+
+- 是否完整关闭
+- 是否存在 degraded close
+- 哪个组件关闭失败
+- worktree 是 `keep` 还是 `remove`
+
 ## 现阶段框架的变换
 
 ### 之前
@@ -104,6 +126,7 @@
 - degraded runtime 警告
 - 是否要求用户重新启动后台任务
 - 是否提示 worktree 已丢失
+- close 阶段的资源回收提示
 
 换句话说，EasyAgent 现在不只是“支持恢复”，而是“支持解释恢复结果”。
 
@@ -121,6 +144,7 @@
    - 哪个 background agent 被恢复成了 `interrupted`
    - `worktree_runtime` 是 restored 还是 degraded
    - 有没有缺失工具、缺失 skill
+7. 当这一轮调试结束后，再调用 `agent.close()`，拿到 cleanup report，确认 runtime/worktree/llm 是否都已正常收口。
 
 这个流程的意义是：恢复之后你不再需要靠猜测来判断“这个 session 还能不能续跑”。
 
@@ -138,6 +162,7 @@
 - `EnterWorktree / ExitWorktree`
 - `save_session / load_session`
 - `get_last_restore_report()`
+- `close() / get_last_close_report()`
 
 它不会被自动执行，供后续手动调试。
 
@@ -157,6 +182,8 @@
 - `test_basic_agent_session_restore_reports_degraded_background_runtime`
 - `test_basic_agent_session_restore_reports_worktree_runtime`
 - `test_basic_agent_session_restore_rebuilds_collaboration_runtime`
+- `test_basic_agent_close_returns_cleanup_report`
+- `test_basic_agent_close_reports_degraded_background_runtime`
 
 ## 结论
 

@@ -15,7 +15,8 @@
 
 - `Phase A` 已完成：`AgentGet / AgentList / AgentWait / AgentStop`、后台 handle 语义、`completion records` 已补齐
 - `Phase B` 已完成：`MailboxRead / MailboxAck`、message 生命周期、mailbox 自动注入 prompt、协作消费闭环已补齐
-- 当前下一阶段应进入 `Phase C：Runtime Lifecycle 与 Restore Report`
+- `Phase C` 已完成：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口已补齐
+- 当前下一阶段应进入 `Phase D：Code Intelligence v1`
 
 ## 当前状态对照
 
@@ -210,7 +211,7 @@
 
 目标：把 runtime 从“能保存结构”补到“能表达恢复边界”。
 
-状态：下一阶段
+状态：已完成，阶段说明见 `docs/phasec_restore_report_lifecycle.md`
 
 #### 主要工作
 
@@ -227,6 +228,7 @@
   - 创建后登记
   - agent stop/cleanup 时回收策略
 - 补 agent runtime 的 stop / cleanup / close 语义
+- 新增 `BaseAgent.close()`，把 runtime/worktree/llm cleanup 提升到 agent 层
 - 把中断请求、confirmation、runtime waiting state 一起纳入 session 恢复边界
 
 #### 建议落点
