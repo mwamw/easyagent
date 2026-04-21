@@ -12,7 +12,7 @@ from Tool.runtime import SubagentManager, SubagentRequest
 from runtime.context import ExecutionContext
 from runtime.teams.manager import TeamManager
 
-from .models import AgentHandle, BackgroundAgentHandle, MailboxMessage
+from .models import AgentHandle, BackgroundAgentHandle, CompletionRecord, MailboxMessage
 
 
 class AgentRuntimeManager:
@@ -37,9 +37,30 @@ class AgentRuntimeManager:
         self._mailboxes: dict[str, list[MailboxMessage]] = {}
         self._team_assignments: dict[str, str] = {}
         self._background_agent_ids: set[str] = set()
+        self._completion_records: list[CompletionRecord] = []
+        self._recorded_completion_ids: set[str] = set()
+        self.last_restore_report: Optional[dict[str, Any]] = None
+        self.last_close_report: Optional[dict[str, Any]] = None
         self.team_manager = None
         if team_manager is not None:
             self.bind_team_manager(team_manager)
+
+    @staticmethod
+    def _is_message_expired(message: MailboxMessage, *, now: Optional[float] = None) -> bool:
+        if message.expires_at is None:
+            return False
+        reference = now if now is not None else time.time()
+        return reference >= float(message.expires_at)
+
+    def _refresh_mailbox_locked(self, agent_id: str, *, now: Optional[float] = None) -> list[MailboxMessage]:
+        reference = now if now is not None else time.time()
+        messages = self._mailboxes.setdefault(agent_id, [])
+        for message in messages:
+            if message.status in {"consumed", "expired"}:
+                continue
+            if self._is_message_expired(message, now=reference):
+                message.status = "expired"
+        return messages
 
     def bind_team_manager(self, team_manager: Any) -> None:
         if not team_manager:
@@ -96,6 +117,35 @@ class AgentRuntimeManager:
         with self._lock:
             self._team_assignments[agent_id] = team.team_id
 
+    @staticmethod
+    def _is_terminal_status(status: str) -> bool:
+        return status in {"completed", "error", "stopped", "cancelled", "interrupted"}
+
+    def _capture_completion_record_locked(
+        self,
+        *,
+        agent_id: str,
+        handle: AgentHandle,
+    ) -> None:
+        if agent_id not in self._background_agent_ids:
+            return
+        if not self._is_terminal_status(handle.status):
+            return
+        if agent_id in self._recorded_completion_ids:
+            return
+        record = CompletionRecord(
+            agent_id=handle.agent_id,
+            status=handle.status,
+            completed_at=float(handle.finished_at or time.time()),
+            output_file=handle.output_file,
+            team_id=handle.team_id,
+            current_task_id=handle.execution_context.current_task_id,
+            error=handle.error,
+            stop_reason=handle.stop_reason,
+        )
+        self._completion_records.append(record)
+        self._recorded_completion_ids.add(agent_id)
+
     def run(
         self,
         request: SubagentRequest,
@@ -109,6 +159,8 @@ class AgentRuntimeManager:
             if run_in_background
             else self.subagent_manager.run(request)
         )
+        context.metadata.setdefault("agentId", snapshot.agent_id)
+        context.metadata.setdefault("outputFile", snapshot.output_file)
         self._remember_registration(
             snapshot.agent_id,
             request,
@@ -123,7 +175,7 @@ class AgentRuntimeManager:
         with self._lock:
             request = self._requests.get(agent_id)
             context = self._contexts.get(agent_id)
-            mailbox = list(self._mailboxes.get(agent_id, ()))
+            mailbox = list(self._refresh_mailbox_locked(agent_id))
             team_id = self._team_assignments.get(agent_id)
             is_background = agent_id in self._background_agent_ids
         if request is None or context is None:
@@ -159,13 +211,17 @@ class AgentRuntimeManager:
             metadata=dict(request.metadata or {}),
         )
         if handle_cls is BackgroundAgentHandle:
-            return handle_cls(
+            handle = handle_cls(
                 **base_kwargs,
                 stop_requested=snapshot.status == "stop_requested",
                 can_wait=True,
                 can_stop=snapshot.status not in {"completed", "error", "stopped", "cancelled", "interrupted"},
             )
-        return handle_cls(**base_kwargs)
+        else:
+            handle = handle_cls(**base_kwargs)
+        with self._lock:
+            self._capture_completion_record_locked(agent_id=agent_id, handle=handle)
+        return handle
 
     def list_handles(
         self,
@@ -229,6 +285,11 @@ class AgentRuntimeManager:
             team_id = self._team_assignments.pop(agent_id, None)
             if remove_mailbox:
                 self._mailboxes.pop(agent_id, None)
+            self._recorded_completion_ids.discard(agent_id)
+            self._completion_records = [
+                record for record in self._completion_records
+                if record.agent_id != agent_id
+            ]
         if team_id and self.team_manager is not None:
             try:
                 self.team_manager.remove_member(team_id, agent_id)
@@ -236,10 +297,109 @@ class AgentRuntimeManager:
                 pass
         return handle
 
-    def list_mailbox(self, agent_id: str) -> list[MailboxMessage]:
+    def list_completion_records(
+        self,
+        *,
+        limit: Optional[int] = None,
+        clear: bool = False,
+    ) -> list[CompletionRecord]:
+        with self._lock:
+            pending_ids = [
+                agent_id for agent_id in self._background_agent_ids
+                if agent_id not in self._recorded_completion_ids
+            ]
+        for agent_id in pending_ids:
+            try:
+                self.get_handle(agent_id)
+            except Exception:
+                continue
+        with self._lock:
+            records = list(self._completion_records)
+            if limit is not None:
+                records = records[-max(int(limit), 0):]
+            if clear:
+                for record in records:
+                    self._recorded_completion_ids.discard(record.agent_id)
+                retained_ids = {record.agent_id for record in records}
+                self._completion_records = [
+                    record for record in self._completion_records
+                    if record.agent_id not in retained_ids
+                ]
+        return records
+
+    def list_mailbox(
+        self,
+        agent_id: str,
+        *,
+        include_consumed: bool = True,
+        include_expired: bool = False,
+    ) -> list[MailboxMessage]:
         self.get_handle(agent_id)
         with self._lock:
-            return list(self._mailboxes.get(agent_id, ()))
+            messages = list(self._refresh_mailbox_locked(agent_id))
+        visible: list[MailboxMessage] = []
+        for message in messages:
+            if message.status == "consumed" and not include_consumed:
+                continue
+            if message.status == "expired" and not include_expired:
+                continue
+            visible.append(message)
+        return visible
+
+    def read_mailbox(
+        self,
+        agent_id: str,
+        *,
+        limit: Optional[int] = None,
+        include_consumed: bool = False,
+        include_expired: bool = False,
+        mark_delivered: bool = True,
+    ) -> list[MailboxMessage]:
+        self.get_handle(agent_id)
+        with self._lock:
+            reference = time.time()
+            messages = list(self._refresh_mailbox_locked(agent_id, now=reference))
+            visible: list[MailboxMessage] = []
+            for message in messages:
+                if message.status == "consumed" and not include_consumed:
+                    continue
+                if message.status == "expired" and not include_expired:
+                    continue
+                if mark_delivered and message.status == "queued":
+                    message.status = "delivered"
+                    message.delivered_at = reference
+                visible.append(message)
+            if limit is not None:
+                visible = visible[: max(int(limit), 0)]
+            return list(visible)
+
+    def ack_mailbox(
+        self,
+        agent_id: str,
+        *,
+        message_ids: Optional[list[str]] = None,
+        ack_all: bool = False,
+        actor_id: Optional[str] = None,
+    ) -> list[MailboxMessage]:
+        self.get_handle(agent_id)
+        selected_ids = {str(item).strip() for item in list(message_ids or []) if str(item).strip()}
+        if not ack_all and not selected_ids:
+            raise ValueError("必须提供 message_ids，或显式设置 ack_all=true。")
+        with self._lock:
+            reference = time.time()
+            messages = self._refresh_mailbox_locked(agent_id, now=reference)
+            acked: list[MailboxMessage] = []
+            for message in messages:
+                if message.status in {"consumed", "expired"}:
+                    continue
+                if not ack_all and message.message_id not in selected_ids:
+                    continue
+                message.status = "consumed"
+                message.consumed_at = reference
+                if actor_id:
+                    message.acked_by = actor_id
+                acked.append(message)
+            return list(acked)
 
     def send_message(
         self,
@@ -249,6 +409,7 @@ class AgentRuntimeManager:
         content: str,
         sender_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        ttl_ms: Optional[int] = None,
     ) -> list[MailboxMessage]:
         text = str(content).strip()
         if not text:
@@ -277,6 +438,9 @@ class AgentRuntimeManager:
         deliveries: list[MailboxMessage] = []
         base_metadata = dict(metadata or {})
         created_at = time.time()
+        expires_at = None
+        if ttl_ms is not None:
+            expires_at = created_at + max(float(ttl_ms), 0.0) / 1000.0
         for target_id in target_ids:
             self.get_handle(target_id)
             message = MailboxMessage(
@@ -286,6 +450,8 @@ class AgentRuntimeManager:
                 recipient_id=target_id,
                 content=text,
                 created_at=created_at,
+                status="queued",
+                expires_at=expires_at,
                 metadata={
                     **base_metadata,
                     "originalRecipientType": recipient_type,
@@ -297,10 +463,51 @@ class AgentRuntimeManager:
             deliveries.append(message)
         return deliveries
 
-    def close(self) -> None:
-        self.subagent_manager.close()
+    def close(self) -> dict[str, Any]:
+        report: dict[str, Any] = {
+            "status": "closed",
+            "restoredItems": [],
+            "degradedItems": [],
+            "missingItems": [],
+            "metadata": {},
+            "issues": [],
+        }
+        try:
+            self.list_completion_records()
+        except Exception:
+            pass
+
+        unresolved_ids: list[str] = []
+        with self._lock:
+            background_ids = list(self._background_agent_ids)
+        for agent_id in background_ids:
+            try:
+                handle = self.get_handle(agent_id)
+            except Exception:
+                continue
+            if handle.status not in {"completed", "error", "stopped", "cancelled", "interrupted"}:
+                unresolved_ids.append(agent_id)
+        if unresolved_ids:
+            report["status"] = "degraded"
+            report["degradedItems"].extend(unresolved_ids)
+            report["issues"].append(
+                {
+                    "code": "background_agents_unresolved_on_close",
+                    "message": f"关闭 AgentRuntimeManager 时仍有后台子 agent 未进入终态: {unresolved_ids}",
+                    "severity": "warning",
+                    "metadata": {"agentIds": list(unresolved_ids)},
+                }
+            )
+
+        subagent_close_report = self.subagent_manager.close()
+        report["metadata"]["subagentManager"] = subagent_close_report
+        if subagent_close_report.get("status") == "degraded" and report["status"] == "closed":
+            report["status"] = "degraded"
+        self.last_close_report = report
+        return report
 
     def export_state(self) -> dict[str, Any]:
+        self.list_completion_records()
         with self._lock:
             requests = {agent_id: request.to_dict() for agent_id, request in self._requests.items()}
             contexts = {
@@ -322,11 +529,12 @@ class AgentRuntimeManager:
             "mailboxes": mailboxes,
             "teamAssignments": team_assignments,
             "backgroundAgentIds": background_agent_ids,
+            "completionRecords": [record.to_dict() for record in self._completion_records],
         }
 
-    def restore_state(self, state: dict[str, Any] | None) -> None:
+    def restore_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
         data = dict(state or {})
-        self.subagent_manager.restore_state(data.get("subagents"))
+        subagent_report = self.subagent_manager.restore_state(data.get("subagents"))
         with self._lock:
             self._requests = {
                 agent_id: SubagentRequest.from_dict(payload)
@@ -354,6 +562,88 @@ class AgentRuntimeManager:
                 for agent_id in list(data.get("backgroundAgentIds") or [])
                 if agent_id
             }
+            self._completion_records = [
+                CompletionRecord.from_dict(payload)
+                for payload in list(data.get("completionRecords") or [])
+                if payload
+            ]
+            self._recorded_completion_ids = {
+                record.agent_id for record in self._completion_records if record.agent_id
+            }
+        report: dict[str, Any] = {
+            "status": "restored",
+            "restoredItems": [],
+            "degradedItems": [],
+            "missingItems": [],
+            "metadata": {
+                "mailboxAgentCount": len(self._mailboxes),
+                "teamAssignmentCount": len(self._team_assignments),
+                "completionRecordCount": len(self._completion_records),
+            },
+            "issues": [],
+        }
+        snapshot_ids = {
+            snapshot.agent_id
+            for snapshot in self.subagent_manager.list_snapshots()
+            if snapshot.agent_id
+        }
+        request_ids = set(self._requests.keys())
+        context_ids = set(self._contexts.keys())
+        restored_ids = sorted(snapshot_ids & request_ids & context_ids)
+        degraded_ids = sorted(snapshot_ids - set(restored_ids))
+        subagent_degraded_ids = sorted(
+            str(item) for item in list(subagent_report.get("degradedItems") or [])
+            if item
+        )
+        orphan_team_assignments = sorted(
+            agent_id for agent_id in self._team_assignments.keys()
+            if agent_id not in snapshot_ids
+        )
+        mailbox_orphans = sorted(
+            agent_id for agent_id in self._mailboxes.keys()
+            if agent_id not in snapshot_ids
+        )
+        report["restoredItems"] = restored_ids
+        report["degradedItems"].extend(degraded_ids)
+        report["degradedItems"].extend(subagent_degraded_ids)
+        if orphan_team_assignments:
+            report["degradedItems"].extend(orphan_team_assignments)
+        if mailbox_orphans:
+            report["degradedItems"].extend(mailbox_orphans)
+        if subagent_report.get("status") == "degraded":
+            report["status"] = "degraded"
+        if degraded_ids or subagent_degraded_ids or orphan_team_assignments or mailbox_orphans:
+            report["status"] = "degraded"
+        if degraded_ids:
+            report["issues"].append(
+                {
+                    "code": "runtime_context_missing",
+                    "message": f"部分子 agent 缺少 request/context，恢复为降级状态: {degraded_ids}",
+                    "severity": "warning",
+                    "metadata": {"agentIds": degraded_ids},
+                }
+            )
+        if orphan_team_assignments:
+            report["issues"].append(
+                {
+                    "code": "orphan_team_assignments",
+                    "message": f"恢复后存在无法关联到 agent snapshot 的 team assignment: {orphan_team_assignments}",
+                    "severity": "warning",
+                    "metadata": {"agentIds": orphan_team_assignments},
+                }
+            )
+        if mailbox_orphans:
+            report["issues"].append(
+                {
+                    "code": "orphan_mailboxes",
+                    "message": f"恢复后存在无法关联到 agent snapshot 的 mailbox: {mailbox_orphans}",
+                    "severity": "warning",
+                    "metadata": {"agentIds": mailbox_orphans},
+                }
+            )
+        report["metadata"]["subagentRestore"] = subagent_report
+        self.last_restore_report = report
+        return report
 
 
 __all__ = ["AgentRuntimeManager"]

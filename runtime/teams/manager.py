@@ -16,6 +16,7 @@ class TeamManager:
         self._teams: dict[str, TeamHandle] = {}
         self._team_names: dict[str, str] = {}
         self.agent_runtime = None
+        self.last_restore_report: Optional[dict[str, Any]] = None
         if agent_runtime is not None:
             self.bind_agent_runtime(agent_runtime)
 
@@ -109,12 +110,22 @@ class TeamManager:
             "teams": teams,
         }
 
-    def restore_state(self, state: dict[str, Any] | None) -> None:
+    def restore_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
         data = dict(state or {})
         teams = [TeamHandle.from_dict(item) for item in list(data.get("teams") or [])]
         with self._lock:
             self._teams = {handle.team_id: handle for handle in teams}
             self._team_names = {handle.name: handle.team_id for handle in teams if handle.name}
+        report = {
+            "status": "restored",
+            "restoredItems": [handle.team_id for handle in teams if handle.team_id],
+            "degradedItems": [],
+            "missingItems": [],
+            "metadata": {"teamCount": len(teams)},
+            "issues": [],
+        }
+        self.last_restore_report = report
+        return report
 
 
 __all__ = ["TeamManager"]

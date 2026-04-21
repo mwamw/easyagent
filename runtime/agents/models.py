@@ -16,6 +16,11 @@ class MailboxMessage:
     recipient_id: str
     content: str
     created_at: float
+    status: str = "queued"
+    delivered_at: Optional[float] = None
+    consumed_at: Optional[float] = None
+    expires_at: Optional[float] = None
+    acked_by: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -26,6 +31,11 @@ class MailboxMessage:
             "recipientId": self.recipient_id,
             "content": self.content,
             "createdAt": self.created_at,
+            "status": self.status,
+            "deliveredAt": self.delivered_at,
+            "consumedAt": self.consumed_at,
+            "expiresAt": self.expires_at,
+            "ackedBy": self.acked_by,
             "metadata": dict(self.metadata),
         }
 
@@ -39,7 +49,50 @@ class MailboxMessage:
             recipient_id=str(data.get("recipientId") or ""),
             content=str(data.get("content") or ""),
             created_at=float(data.get("createdAt") or 0.0),
+            status=str(data.get("status") or "queued"),
+            delivered_at=float(data["deliveredAt"]) if data.get("deliveredAt") is not None else None,
+            consumed_at=float(data["consumedAt"]) if data.get("consumedAt") is not None else None,
+            expires_at=float(data["expiresAt"]) if data.get("expiresAt") is not None else None,
+            acked_by=data.get("ackedBy"),
             metadata=dict(data.get("metadata") or {}),
+        )
+
+
+@dataclass(slots=True)
+class CompletionRecord:
+    agent_id: str
+    status: str
+    completed_at: float
+    output_file: str
+    team_id: Optional[str] = None
+    current_task_id: Optional[str] = None
+    error: Optional[str] = None
+    stop_reason: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "agentId": self.agent_id,
+            "status": self.status,
+            "completedAt": self.completed_at,
+            "outputFile": self.output_file,
+            "teamId": self.team_id,
+            "currentTaskId": self.current_task_id,
+            "error": self.error,
+            "stopReason": self.stop_reason,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "CompletionRecord":
+        data = dict(payload or {})
+        return cls(
+            agent_id=str(data.get("agentId") or ""),
+            status=str(data.get("status") or "completed"),
+            completed_at=float(data.get("completedAt") or 0.0),
+            output_file=str(data.get("outputFile") or ""),
+            team_id=data.get("teamId"),
+            current_task_id=data.get("currentTaskId"),
+            error=data.get("error"),
+            stop_reason=data.get("stopReason"),
         )
 
 
@@ -74,9 +127,16 @@ class AgentHandle:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        mailbox_total = len(self.mailbox)
+        queued_count = sum(1 for message in self.mailbox if message.status == "queued")
+        delivered_count = sum(1 for message in self.mailbox if message.status == "delivered")
+        consumed_count = sum(1 for message in self.mailbox if message.status == "consumed")
+        expired_count = sum(1 for message in self.mailbox if message.status == "expired")
+        pending_count = queued_count + delivered_count
         return {
             "agentId": self.agent_id,
             "status": self.status,
+            "completionState": self.status if self.status in {"completed", "error", "stopped", "cancelled", "interrupted"} else "incomplete",
             "description": self.description,
             "prompt": self.prompt,
             "outputFile": self.output_file,
@@ -95,13 +155,19 @@ class AgentHandle:
             "finishedAt": self.finished_at,
             "content": self.content,
             "error": self.error,
+            "lastError": self.error or self.stop_reason,
             "stopReason": self.stop_reason,
             "totalDurationMs": self.total_duration_ms,
             "totalToolUseCount": self.total_tool_use_count,
             "totalTokens": self.total_tokens,
             "usage": dict(self.usage),
             "mailbox": [message.to_dict() for message in self.mailbox],
-            "mailboxCount": len(self.mailbox),
+            "mailboxCount": mailbox_total,
+            "pendingMailboxCount": pending_count,
+            "queuedMailboxCount": queued_count,
+            "deliveredMailboxCount": delivered_count,
+            "consumedMailboxCount": consumed_count,
+            "expiredMailboxCount": expired_count,
             "metadata": dict(self.metadata),
         }
 

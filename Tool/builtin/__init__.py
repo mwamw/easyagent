@@ -30,6 +30,7 @@ from .agent_runtime_tools import (
 from .send_message import SendMessageTool, register_send_message_tool
 from .team_create import TeamCreateTool, register_team_create_tool
 from .team_delete import TeamDeleteTool, register_team_delete_tool
+from .mailbox_tools import MailboxAckTool, MailboxReadTool, register_mailbox_tools
 from .notebook_edit import NotebookEditTool, register_notebook_edit_tool
 from .interaction_tools import (
     AskUserQuestionTool,
@@ -88,6 +89,8 @@ __all__ = [
     "SendMessageTool",
     "TeamCreateTool",
     "TeamDeleteTool",
+    "MailboxReadTool",
+    "MailboxAckTool",
     "NotebookEditTool",
     "AskUserQuestionTool",
     "EnterPlanModeTool",
@@ -118,6 +121,7 @@ __all__ = [
     "register_send_message_tool",
     "register_team_create_tool",
     "register_team_delete_tool",
+    "register_mailbox_tools",
     "register_notebook_edit_tool",
     "register_ask_user_question_tool",
     "register_enter_plan_mode_tool",

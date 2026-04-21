@@ -215,9 +215,9 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：落地统一 runtime 主骨架，替代当前分散的 subagent、worktree、runtime 状态。
 
-当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_runtime_collaboration_final.md`。
+当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_mailbox_collaboration_complete.md`。
 
-- 建立 `runtime/agents/`，引入 `AgentHandle`、`BackgroundAgentHandle`、`MailboxMessage`、新版 `SubagentManager`
+- 建立 `runtime/agents/`，引入 `AgentHandle`、`BackgroundAgentHandle`、`MailboxMessage`、`CompletionRecord`、新版 `SubagentManager`
 - 建立 `ExecutionContext`，统一表达工作目录、权限上下文、任务上下文、工具池、mode、worktree、MCP 可见性
 - 把 `AgentTool` 从“单次委派工具”升级成“创建、查询、恢复 subagent handle 的 runtime 入口”
 - worktree 不再作为孤立工具能力，而是挂到 `ExecutionContext` 里，供 subagent 共享与继承
@@ -228,6 +228,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 - `runtime.agents.AgentHandle`
 - `runtime.agents.BackgroundAgentHandle`
 - `runtime.agents.MailboxMessage`
+- `runtime.agents.CompletionRecord`
 - `runtime.ExecutionContext`
 
 本期完成标准：
@@ -240,10 +241,11 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：完成多 agent 协作层，而不只是 subagent 启动。
 
-当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_runtime_collaboration_final.md`。
+当前状态：已完成当前阶段目标，最终收口说明见 `docs/phase23_mailbox_collaboration_complete.md`。
 
 - 落地 `runtime/teams/`，提供 `TeamHandle`、`TeamManager`
 - 新增 `SendMessage`、`TeamCreate`、`TeamDelete`，让 agent 间能传结构化消息、编组、解组
+- 新增 `MailboxRead`、`MailboxAck`，让 mailbox 成为可消费的协作协议
 - mailbox 支持点对点消息、team 广播、task 关联消息
 - task 系统与 agent runtime 打通：任务可绑定 owner agent、team、parent task
 - 背景 agent 和 team 状态要能进入 session 恢复链路
@@ -253,12 +255,15 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 - `runtime.teams.TeamHandle`
 - `runtime.teams.TeamManager`
 - `Tool.SendMessage`
+- `Tool.MailboxRead`
+- `Tool.MailboxAck`
 - `Tool.TeamCreate`
 - `Tool.TeamDelete`
 
 本期完成标准：
 
 - agent 间消息是结构化对象，不靠 prompt 文本模拟
+- mailbox 消息会进入子 agent 的执行上下文，并支持 read / ack 生命周期
 - team 能稳定管理一组 agent handle
 - task、agent、team 三者关系可查询、可恢复
 

@@ -173,6 +173,7 @@ class ClaudeSendMessageInput(BaseModel):
     recipient_id: str = Field(description="接收方 ID 或团队名称")
     content: str = Field(description="要发送的消息内容")
     sender_id: Optional[str] = Field(default=None, description="发送方标识")
+    ttl_ms: Optional[int] = Field(default=None, ge=0, description="消息 TTL，毫秒")
     metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
 
 
@@ -185,6 +186,20 @@ class ClaudeTeamCreateInput(BaseModel):
 
 class ClaudeTeamDeleteInput(BaseModel):
     team_id: str = Field(description="团队 ID，也支持团队名称")
+
+
+class ClaudeMailboxReadInput(BaseModel):
+    agent_id: Optional[str] = Field(default=None, description="agent ID，不填则默认当前 agent")
+    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+    include_consumed: bool = Field(default=False, description="是否包含已消费消息")
+    include_expired: bool = Field(default=False, description="是否包含已过期消息")
+    mark_delivered: bool = Field(default=True, description="是否把 queued 消息标记为 delivered")
+
+
+class ClaudeMailboxAckInput(BaseModel):
+    agent_id: Optional[str] = Field(default=None, description="agent ID，不填则默认当前 agent")
+    message_ids: list[str] = Field(default_factory=list, description="待确认消费的消息 ID")
+    ack_all: bool = Field(default=False, description="是否确认当前 agent 所有未消费消息")
 
 
 class ClaudeListMcpResourcesInput(BaseModel):

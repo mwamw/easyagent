@@ -11,6 +11,12 @@
 - 优先补运行时闭环、恢复闭环、扩展协议，再补能力层
 - 不优先做 CLI/TUI/voice 这类产品层能力
 
+更新说明（2026-04-20）：
+
+- `Phase A` 已完成：`AgentGet / AgentList / AgentWait / AgentStop`、后台 handle 语义、`completion records` 已补齐
+- `Phase B` 已完成：`MailboxRead / MailboxAck`、message 生命周期、mailbox 自动注入 prompt、协作消费闭环已补齐
+- 当前下一阶段应进入 `Phase C：Runtime Lifecycle 与 Restore Report`
+
 ## 当前状态对照
 
 ### 已完成的基础能力
@@ -30,9 +36,19 @@
   - `runtime/teams/manager.py`
 - 协作工具已落地：
   - `Agent`
+  - `AgentGet`
+  - `AgentList`
+  - `AgentWait`
+  - `AgentStop`
   - `SendMessage`
+  - `MailboxRead`
+  - `MailboxAck`
   - `TeamCreate`
   - `TeamDelete`
+- 多 agent 协作已具备 mailbox 消费闭环：
+  - message 生命周期：`queued / delivered / consumed / expired`
+  - 子 agent 可在执行循环中自动看到 mailbox 输入
+  - runtime 支持 `completion records` 供宿主轮询后台完成事件
 - provider schema adapter 已落地：`core/providers/tool_schema.py`
 
 ### 已完成但只到 MVP 的能力
@@ -43,55 +59,43 @@
 - `AgentRuntimeManager` 能保存 handle、mailbox、team assignment，并支持 export/restore
 - `SubagentManager` 能同步执行、后台执行、保存 output file
 - runtime/team 状态可以进入 session restore
-- mailbox 可以投递，但目前主要还是“投递成功”，不是“协作消费成功”
+- background runtime 恢复边界还没有结构化 restore report
 
 ### 当前最明显的缺口
 
 这些缺口会直接限制 EasyAgent 继续长成 Claude Code 风格 code agent：
 
-1. 主 agent 缺少查询/等待后台子 agent 的正式工具协议
-
-- 现在只有 `Agent`，没有 `AgentGet / AgentList / AgentWait / AgentStop`
-- `run_in_background=true` 时只会返回 `async_launched`
-- 主 agent 很容易在拿到 `agentId/outputFile` 后直接结束当前 turn
-
-2. mailbox 只有存储，没有消费闭环
-
-- `SendMessage` 现在只是把消息写进 runtime mailbox
-- 子 agent 没有显式的 mailbox consume / ack / wake-up 机制
-- 团队广播目前更像“送达”，不是“成员已接收并据此调整行为”
-
-3. background runtime 生命周期还不完整
+1. background runtime 生命周期还不完整
 
 - 运行状态还偏轻量，缺少真正的一等公民 `BackgroundAgentHandle`
 - 缺少后台任务完成通知、阻塞等待、停止、恢复后的降级报告
 - session restore 能恢复 runtime 结构，但不能严谨表达“哪些后台执行无法真正续跑”
 
-4. code intelligence 还没开始
+2. code intelligence 还没开始
 
 - 没有 `codeintel/`
 - 没有 LSP / symbol / diagnostics / workspace index
 - code agent 仍主要依赖 `FileRead / Grep / Glob`
 
-5. hooks / guardrails 还没开始
+3. hooks / guardrails 还没开始
 
 - 没有 `core/hooks/`
 - 没有 `core/guardrails/`
 - 当前只有 callbacks 和 permission rules，缺少内容级拦截与改写层
 
-6. Tool 协议还没到最终版
+4. Tool 协议还没到最终版
 
 - 已有 `risk_categories` 和 provider schema adapter
 - 但还没有 `side_effect_level / resource_scope / visibility_scope / conflict policy`
 - `ephemeral_context` 也还没有完整纳入 compaction / restore 协议
 
-7. MCP 仍是轻量接入，不是 first-class runtime surface
+5. MCP 仍是轻量接入，不是 first-class runtime surface
 
 - 现有 `mcp/runtime.py`、`mcp_client.py` 可以用
 - 但没有 `connection_manager / auth / cache / policy`
 - 也没有和权限系统、session/runtime 生命周期深度打通
 
-8. SDK/package 边界还没收口
+6. SDK/package 边界还没收口
 
 - 还没有 `pyproject.toml`
 - 公共 API 边界还没有正式冻结
@@ -101,23 +105,24 @@
 
 `walkthrough.md` 里的旧顺序是合理的长期路线，但按当前代码状态，优先级需要调整成：
 
-1. 先把 `Phase 2/3` 的协作闭环补完整
-2. 再补 `runtime lifecycle + restore report`
-3. 再做 `codeintel`
-4. 再做 `hooks/guardrails + tool protocol v2`
-5. 再做 `MCP engineering`
-6. 最后做 `SDK/package/doc` 收口
+1. 先做 `runtime lifecycle + restore report`
+2. 再做 `codeintel`
+3. 再做 `hooks/guardrails + tool protocol v2`
+4. 再做 `MCP engineering`
+5. 最后做 `SDK/package/doc` 收口
 
 原因很简单：
 
-- 现在最大的真实缺口不是“没有 runtime”，而是“runtime 还不能稳定协作”
-- 如果不先补 `AgentWait / mailbox consume / completion notification`，codeintel 加上去也只是让单 agent 更聪明，不能解决多 agent 工作流闭环
+- 现在多 agent 协作主闭环已经能跑通，最大的真实缺口变成“runtime 恢复边界和长期运行语义还不够清晰”
+- 如果不先补 restore report、degraded runtime 表达和 lifecycle cleanup，后续 codeintel 和更复杂协作都很难长期稳定运行
 
 ## 新执行计划
 
 ### Phase A：协作闭环补齐
 
 目标：把当前 Phase 2/3 从“能启动和发消息”补到“能协作完成任务”。
+
+状态：已完成
 
 #### 主要工作
 
@@ -167,6 +172,8 @@
 
 目标：让 mailbox 从“存消息”升级成“协作协议的一部分”。
 
+状态：已完成
+
 #### 主要工作
 
 - 增加 mailbox 读取与消费能力：
@@ -202,6 +209,8 @@
 ### Phase C：Runtime Lifecycle 与 Restore Report
 
 目标：把 runtime 从“能保存结构”补到“能表达恢复边界”。
+
+状态：下一阶段
 
 #### 主要工作
 
@@ -374,24 +383,21 @@
 
 如果按当前代码状态推进，我建议严格按下面顺序做：
 
-1. `Phase A`
-2. `Phase B`
-3. `Phase C`
-4. `Phase D`
-5. `Phase E`
-6. `Phase F`
-7. `Phase G`
+1. `Phase C`
+2. `Phase D`
+3. `Phase E`
+4. `Phase F`
+5. `Phase G`
 
-这比旧计划更贴近当前现实，因为现在最阻塞框架继续演进的不是“有没有 runtime”，而是“runtime 还不能形成真正的协作闭环”。
+这比旧计划更贴近当前现实，因为协作闭环已经补齐，当前最阻塞框架继续演进的是 runtime lifecycle 的长期运行与恢复边界。
 
 ## 本轮之后的最小任务包
 
 如果只做接下来一轮最有价值的工作，建议先完成下面这个最小任务包：
 
-1. 新增 `AgentGet / AgentList / AgentWait / AgentStop`
-2. 扩展 `AgentHandle` 状态模型
-3. 让 `example_phase2_runtime_team.py` 能等待后台子 agent 完成后再汇总
-4. 新增 mailbox read/consume 基础协议
-5. 为以上能力补齐 runtime 集成测试
+1. 引入 `SessionRestoreReport` 和 runtime restore report
+2. 明确 background agent / worktree / mailbox 的降级恢复语义
+3. 给 runtime / session restore 增加结构化告警和清理策略
+4. 补 lifecycle 集成测试与恢复文档
 
-这是当前阶段性价比最高的一步，因为它会把 EasyAgent 从“能启动多个 agent”推进到“能让多个 agent 协作完成一次工作流”。
+这是当前阶段性价比最高的一步，因为它会把 EasyAgent 从“协作闭环可用”推进到“长时间运行与恢复边界可信”。

@@ -37,6 +37,53 @@ class AgentStopParams(BaseModel):
     timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
 
 
+AGENT_GET_PROMPT = """读取单个子 agent 的完整运行时句柄。
+
+适合：
+- 你已经知道 `agent_id`，想查看它的状态、outputFile、executionContext、team/task 绑定和 mailbox 概况。
+- 你需要确认后台子 agent 当前是否还在运行、是否已报错、是否已有输出。
+
+不要用它做什么：
+- 不要用 `AgentGet` 代替 `AgentWait` 等待完成；它只是读取当前状态快照。
+- 如果你想看所有 handles 的整体分布，优先用 `AgentList`。"""
+
+
+AGENT_LIST_PROMPT = """列出当前 runtime 中的子 agent handles，并支持按状态、team、task 过滤。
+
+适合：
+- 你需要发现当前有哪些后台/前台子 agent。
+- 你需要查看某个 team 或 task 下面有哪些 agent 正在运行。
+- 你需要在多个 handles 之间挑出目标，再配合 `AgentGet` / `AgentWait` / `AgentStop` 使用。
+
+最佳实践：
+- agent 数量较多时，先加 `status`、`team_id` 或 `current_task_id` 过滤。
+- 如果已经知道具体 `agent_id`，优先用 `AgentGet`。"""
+
+
+AGENT_WAIT_PROMPT = """阻塞等待指定子 agent 到达终态或当前可观察状态。
+
+适合：
+- `Agent(run_in_background=true)` 之后等待结果落定，再继续汇总。
+- 你需要在继续执行前确认某个子 agent 是否已完成、报错或停止。
+
+重要语义：
+- 超时不代表失败，只表示在 `timeout_ms` 内没有进入你希望观察到的状态。
+- 超时后应继续看返回的 handle、status、outputFile，并决定是继续等待还是中断。
+- `AgentWait` 返回的是最新 handle，不只是一个布尔结果。"""
+
+
+AGENT_STOP_PROMPT = """向后台子 agent 发送协作停止请求，并可选择等待它进入终态。
+
+适合：
+- 当前任务已不再需要该子 agent 继续运行。
+- 你发现子 agent 跑偏、跑得太久，或收到新的高优先级约束，需要中止它。
+
+重要语义：
+- 这不是强杀进程语义，而是协作停止协议；默认 BasicAgent 子 agent 会收到停止请求并尽量优雅退出。
+- `wait=true` 时通常应配合 `timeout_ms`，确保你能确认它是否真正进入终态。
+- 停止请求成功不代表结果可用；停止后应检查返回 handle 中的 `status`、`stopReason` 和 `outputFile`。"""
+
+
 class _AgentRuntimeToolBase(Tool):
     def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None, **kwargs):
         self.agent_runtime = agent_runtime
@@ -87,6 +134,7 @@ class AgentGetTool(_AgentRuntimeToolBase):
             description="读取单个子 agent 的结构化运行时状态。",
             parameters=AgentGetParams,
             guidance="适合在多 agent 协作中查看指定子 agent 的当前状态、输出文件和 execution context。",
+            prompt=AGENT_GET_PROMPT,
             read_only=True,
             supports_parallel=True,
             source="builtin",
@@ -126,6 +174,7 @@ class AgentListTool(_AgentRuntimeToolBase):
             description="列出当前 runtime 中的子 agent handles。",
             parameters=AgentListParams,
             guidance="适合查看所有子 agent，或按状态、team、current_task_id 过滤。",
+            prompt=AGENT_LIST_PROMPT,
             read_only=True,
             supports_parallel=True,
             source="builtin",
@@ -178,6 +227,7 @@ class AgentWaitTool(_AgentRuntimeToolBase):
             description="阻塞等待指定子 agent 到达当前可观察状态或终态。",
             parameters=AgentWaitParams,
             guidance="适合在后台子 agent 运行后等待它完成，再读取结构化 handle。",
+            prompt=AGENT_WAIT_PROMPT,
             read_only=True,
             supports_parallel=False,
             source="builtin",
@@ -229,6 +279,7 @@ class AgentStopTool(_AgentRuntimeToolBase):
             description="请求停止一个后台子 agent，可选择等待其进入终态。",
             parameters=AgentStopParams,
             guidance="对默认 BasicAgent 子 agent，这是协作停止协议：先发停止请求，再按需等待终态。",
+            prompt=AGENT_STOP_PROMPT,
             read_only=False,
             destructive=True,
             supports_parallel=False,

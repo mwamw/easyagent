@@ -2,8 +2,10 @@
 会话持久化测试
 """
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 
@@ -29,10 +31,14 @@ from Tool.builtin import (
     register_agent_tool,
     register_agent_runtime_tools,
     register_file_read_tool,
+    register_enter_worktree_tool,
+    register_exit_worktree_tool,
+    register_mailbox_tools,
     register_send_message_tool,
     register_team_create_tool,
     register_team_delete_tool,
 )
+from Tool.runtime import WorktreeManager
 
 
 class DummyLLM(EasyLLM):
@@ -117,6 +123,25 @@ class RuntimeSubagent:
 
     def get_context_usage(self) -> dict:
         return {"used_tokens": 9}
+
+
+class SlowRuntimeSubagent(RuntimeSubagent):
+    def invoke(self, prompt: str) -> str:
+        time.sleep(0.5)
+        return super().invoke(prompt)
+
+
+def _init_git_repo(root: str) -> str:
+    repo = os.path.join(root, "repo")
+    os.makedirs(repo, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True, text=True)
+    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as handle:
+        handle.write("hello\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    return repo
 
     def get_trace_history(self):
         return list(self.trace_history)
@@ -529,6 +554,11 @@ class SessionPersistenceTestCase(unittest.TestCase):
             agent_runtime=agent_tool.agent_runtime,
             parent_agent=agent,
         )
+        register_mailbox_tools(
+            registry,
+            agent_runtime=agent_tool.agent_runtime,
+            parent_agent=agent,
+        )
         register_agent_runtime_tools(
             registry,
             agent_runtime=agent_tool.agent_runtime,
@@ -580,6 +610,8 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertTrue(restored.tool_registry.has_tool("AgentWait"))
         self.assertTrue(restored.tool_registry.has_tool("AgentStop"))
         self.assertTrue(restored.tool_registry.has_tool("SendMessage"))
+        self.assertTrue(restored.tool_registry.has_tool("MailboxRead"))
+        self.assertTrue(restored.tool_registry.has_tool("MailboxAck"))
         self.assertTrue(restored.tool_registry.has_tool("TeamCreate"))
         self.assertTrue(restored.tool_registry.has_tool("TeamDelete"))
 
@@ -588,6 +620,106 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(restored_handle.team_id, restored_team.team_id)
         self.assertEqual(restored_handle.execution_context.current_task_id, delegated_task.task_id)
         self.assertEqual(restored_handle.mailbox[0].content, "恢复后 mailbox 仍应保留这条消息")
+        report = restored.get_last_restore_report()
+        self.assertIsNotNone(report)
+        self.assertEqual(report["status"], "restored")
+        self.assertEqual(report["components"]["agent_runtime"]["status"], "restored")
+        self.assertEqual(report["components"]["team_runtime"]["status"], "restored")
+
+    def test_basic_agent_session_restore_reports_degraded_background_runtime(self):
+        registry = ToolRegistry()
+        task_service = TaskService(InMemoryTaskStore())
+        agent = BasicAgent(
+            name="manager",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            task_service=task_service,
+            config=Config(
+                workspace_root=self.tempdir.name,
+                allowed_roots=[self.tempdir.name],
+            ),
+        )
+        agent_tool = register_agent_tool(
+            registry,
+            parent_agent=agent,
+            agent_factory=lambda request: SlowRuntimeSubagent(),
+            workspace_root=self.tempdir.name,
+            allowed_roots=(self.tempdir.name,),
+            storage_dir=os.path.join(self.tempdir.name, ".agents-background"),
+        )
+        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
+        agent_tool.agent_runtime.bind_team_manager(team_manager)
+        register_agent_runtime_tools(
+            registry,
+            agent_runtime=agent_tool.agent_runtime,
+            parent_agent=agent,
+        )
+        register_send_message_tool(
+            registry,
+            agent_runtime=agent_tool.agent_runtime,
+            parent_agent=agent,
+        )
+        agent.bind_runtime(agent_runtime=agent_tool.agent_runtime, team_manager=team_manager)
+
+        registry.execute_tool_result(
+            "Agent",
+            {
+                "description": "后台恢复报告",
+                "prompt": "只读整理协作状态",
+                "run_in_background": True,
+            },
+        )
+
+        agent.save_session("background-runtime-degraded", store=self.session_store)
+        restored = BasicAgent.load_session(
+            "background-runtime-degraded",
+            llm=self.llm,
+            store=self.session_store,
+            task_service=task_service,
+        )
+
+        report = restored.get_last_restore_report()
+        self.assertIsNotNone(report)
+        self.assertEqual(report["status"], "degraded")
+        self.assertEqual(report["components"]["agent_runtime"]["status"], "degraded")
+        self.assertTrue(report["components"]["agent_runtime"]["degradedItems"])
+
+    def test_basic_agent_session_restore_reports_worktree_runtime(self):
+        repo = _init_git_repo(self.tempdir.name)
+        storage = os.path.join(self.tempdir.name, "worktrees")
+        manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+
+        registry = ToolRegistry()
+        register_enter_worktree_tool(registry, worktree_manager=manager)
+        register_exit_worktree_tool(registry, worktree_manager=manager)
+        agent = BasicAgent(
+            name="worktree-agent",
+            llm=self.llm,
+            enable_tool=True,
+            tool_registry=registry,
+            config=Config(
+                workspace_root=repo,
+                allowed_roots=[repo],
+                enable_worktree=True,
+            ),
+        )
+
+        enter_result = registry.execute_tool_result("EnterWorktree", {"name": "restore-session"})
+        worktree_path = enter_result.structured_data["worktreePath"]
+        self.assertTrue(os.path.isdir(worktree_path))
+
+        agent.save_session("worktree-runtime-session", store=self.session_store)
+        restored = BasicAgent.load_session(
+            "worktree-runtime-session",
+            llm=self.llm,
+            store=self.session_store,
+        )
+
+        report = restored.get_last_restore_report()
+        self.assertIsNotNone(report)
+        self.assertEqual(report["components"]["worktree_runtime"]["status"], "restored")
+        self.assertIn(os.path.abspath(worktree_path), report["components"]["worktree_runtime"]["restoredItems"])
 
     def test_conversational_agent_restore_keeps_auto_save_flag(self):
         memory_manage = FakeMemoryManage()

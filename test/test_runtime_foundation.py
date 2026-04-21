@@ -102,3 +102,55 @@ class RuntimeFoundationTestCase(unittest.TestCase):
             manager.remove_worktree(info.path, force=True)
             manager.prune()
             self.assertFalse(os.path.exists(info.path))
+
+    def test_worktree_manager_restore_report_round_trip(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = os.path.join(tempdir, "repo")
+            storage = os.path.join(tempdir, "worktrees")
+            os.makedirs(repo, exist_ok=True)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True, text=True)
+            with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as handle:
+                handle.write("hello\n")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+
+            manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+            session = manager.enter_worktree("restore-check")
+            exported = manager.export_state()
+
+            restored = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+            report = restored.restore_state(exported)
+
+            self.assertEqual(report["status"], "restored")
+            self.assertIn(os.path.abspath(session.worktree.path), report["restoredItems"])
+            self.assertIsNotNone(restored.get_active_session())
+            self.assertEqual(restored.get_active_session().worktree.path, os.path.abspath(session.worktree.path))
+
+            restored.close(action="remove", discard_changes=True)
+
+    def test_worktree_manager_restore_report_marks_missing_worktree(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = os.path.join(tempdir, "repo")
+            storage = os.path.join(tempdir, "worktrees")
+            os.makedirs(repo, exist_ok=True)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True, text=True)
+            with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as handle:
+                handle.write("hello\n")
+            subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
+
+            manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+            session = manager.enter_worktree("restore-missing")
+            exported = manager.export_state()
+            manager.close(action="remove", discard_changes=True)
+
+            restored = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
+            report = restored.restore_state(exported)
+
+            self.assertEqual(report["status"], "degraded")
+            self.assertIn(os.path.abspath(session.worktree.path), report["missingItems"])
+            self.assertIsNone(restored.get_active_session())

@@ -20,6 +20,23 @@ class TeamCreateParams(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
 
 
+TEAM_CREATE_PROMPT = """创建一个显式 team，把多个 agent 组织成可广播、可查询的协作单元。
+
+何时使用：
+- 当你准备让多个子 agent 在同一工作流下协作时。
+- 当你希望后续用 `SendMessage(recipient_type=\"team\")` 一次性广播约束。
+- 当你需要把一组 agent 视为同一个协作单元进行管理或审计时。
+
+重要语义：
+- `TeamCreate` 只创建团队句柄，不会自动启动 agent。
+- 子 agent 只有在启动时指定相同的 `team_name`，或后续被显式加入团队后，才会成为成员。
+- `member_agent_ids` 只适合添加已经存在的 agent handle；不存在的 agent 不应提前写进去。
+
+最佳实践：
+- 先创建 team，再启动带 `team_name` 的 Agent。
+- 如果当前工作流已经绑定结构化 task，可在 metadata 中保留 task 关联信息，便于后续查询。"""
+
+
 class TeamCreateTool(Tool):
     def __init__(self, *, team_manager: TeamManager, parent_agent: Any | None = None):
         self.team_manager = team_manager
@@ -28,7 +45,11 @@ class TeamCreateTool(Tool):
             name="TeamCreate",
             description="创建一个显式的 agent 团队。",
             parameters=TeamCreateParams,
-            guidance="先创建 team，再让子 agent 用相同 team_name 加入该团队。",
+            guidance=(
+                "先创建 team，再让子 agent 用相同 team_name 加入该团队。"
+                " 创建团队不会自动启动成员 agent。"
+            ),
+            prompt=TEAM_CREATE_PROMPT,
             read_only=False,
             supports_parallel=False,
             source="builtin",

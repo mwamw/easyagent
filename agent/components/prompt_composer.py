@@ -262,6 +262,17 @@ class DefaultPromptComposer(BasePromptComposer):
             )
             order += 10
 
+        mailbox_prompt = agent._build_mailbox_prompt()
+        if mailbox_prompt:
+            blocks.append(
+                PromptBlock(
+                    name="mailbox",
+                    content=mailbox_prompt,
+                    order=order,
+                )
+            )
+            order += 10
+
         exclude_names = {"memory"} if memory_prompt else None
         if include_skills:
             skills_prompt = agent._build_skills_prompt(exclude_names=exclude_names)

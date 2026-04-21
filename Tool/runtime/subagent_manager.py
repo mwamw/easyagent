@@ -164,6 +164,8 @@ class SubagentManager:
         self._snapshots: dict[str, SubagentSnapshot] = {}
         self._futures: dict[str, Future[Any]] = {}
         self._agents: dict[str, Any] = {}
+        self.last_restore_report: Optional[dict[str, Any]] = None
+        self.last_close_report: Optional[dict[str, Any]] = None
         os.makedirs(self.storage_dir, exist_ok=True)
 
     def _build_output_file(self, agent_id: str) -> str:
@@ -294,6 +296,9 @@ class SubagentManager:
 
     def _execute(self, snapshot: SubagentSnapshot, request: SubagentRequest) -> SubagentSnapshot:
         try:
+            with self._lock:
+                if snapshot.status == "async_launched":
+                    snapshot.status = "running"
             agent = self.agent_factory(request)
             with self._lock:
                 self._agents[snapshot.agent_id] = agent
@@ -380,6 +385,11 @@ class SubagentManager:
 
     def run(self, request: SubagentRequest) -> SubagentSnapshot:
         snapshot = self._create_snapshot(request, status="running")
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "agent_id": snapshot.agent_id,
+            "output_file": snapshot.output_file,
+        }
         self._write_output_file(
             snapshot.output_file,
             f"# {request.description or snapshot.agent_id}\n\n状态: running\n\n## Prompt\n{request.prompt}\n",
@@ -388,6 +398,11 @@ class SubagentManager:
 
     def launch_background(self, request: SubagentRequest) -> SubagentSnapshot:
         snapshot = self._create_snapshot(request, status="async_launched")
+        request.metadata = {
+            **dict(request.metadata or {}),
+            "agent_id": snapshot.agent_id,
+            "output_file": snapshot.output_file,
+        }
         self._write_output_file(
             snapshot.output_file,
             (
@@ -528,20 +543,73 @@ class SubagentManager:
             "snapshots": snapshots,
         }
 
-    def restore_state(self, state: dict[str, Any] | None) -> None:
+    def restore_state(self, state: dict[str, Any] | None) -> dict[str, Any]:
         data = dict(state or {})
-        snapshots = [
-            SubagentSnapshot.from_dict(item)
-            for item in list(data.get("snapshots") or [])
-            if item
-        ]
+        report: dict[str, Any] = {
+            "status": "restored",
+            "restoredItems": [],
+            "degradedItems": [],
+            "missingItems": [],
+            "metadata": {},
+            "issues": [],
+        }
+        snapshots: list[SubagentSnapshot] = []
+        for item in list(data.get("snapshots") or []):
+            if not item:
+                continue
+            snapshot = SubagentSnapshot.from_dict(item)
+            if snapshot.status in {"running", "async_launched", "stop_requested", "waiting"}:
+                snapshot.status = "interrupted"
+                snapshot.error = snapshot.error or "会话恢复后原后台执行上下文不可继续附着，请手动重新启动或续跑。"
+            if snapshot.status == "interrupted":
+                report["degradedItems"].append(snapshot.agent_id)
+                report["issues"].append(
+                    {
+                        "code": "background_agent_degraded",
+                        "message": f"后台子 agent 无法续跑，已按 interrupted 恢复: {snapshot.agent_id}",
+                        "severity": "warning",
+                        "metadata": {"agentId": snapshot.agent_id},
+                    }
+                )
+                report["status"] = "degraded"
+            else:
+                report["restoredItems"].append(snapshot.agent_id)
+            snapshots.append(snapshot)
         with self._lock:
             self._snapshots = {snapshot.agent_id: snapshot for snapshot in snapshots if snapshot.agent_id}
             self._futures = {}
             self._agents = {}
+        self.last_restore_report = report
+        return report
 
-    def close(self) -> None:
+    def close(self) -> dict[str, Any]:
+        report: dict[str, Any] = {
+            "status": "closed",
+            "restoredItems": [],
+            "degradedItems": [],
+            "missingItems": [],
+            "metadata": {},
+            "issues": [],
+        }
+        with self._lock:
+            active_ids = [
+                agent_id for agent_id, snapshot in self._snapshots.items()
+                if snapshot.status not in {"completed", "error", "stopped", "cancelled", "interrupted"}
+            ]
+        if active_ids:
+            report["status"] = "degraded"
+            report["degradedItems"].extend(active_ids)
+            report["issues"].append(
+                {
+                    "code": "background_agents_still_active",
+                    "message": f"关闭 SubagentManager 时仍有后台子 agent 未终止: {active_ids}",
+                    "severity": "warning",
+                    "metadata": {"agentIds": list(active_ids)},
+                }
+            )
         self._executor.shutdown(wait=False, cancel_futures=False)
+        self.last_close_report = report
+        return report
 
 
 __all__ = ["SubagentRequest", "SubagentSnapshot", "SubagentManager"]

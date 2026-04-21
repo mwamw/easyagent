@@ -21,10 +21,34 @@ from .task_output import TaskOutputTool
 from .task_stop import TaskStopTool
 
 
-AGENT_TOOL_PROMPT = """用于把明确的子任务交给独立子 agent。
-- prompt 要写完整，明确交付物和边界。
-- 当子任务需要隔离代码修改时，设置 `isolation=worktree`。
-- 长时间运行的任务可设置 `run_in_background=true`，然后读取 outputFile 查看进度。"""
+AGENT_TOOL_PROMPT = """把一个边界清晰、可独立推进的子任务委派给独立子 agent。
+
+何时使用：
+- 当你已经知道要拆出去的子问题，并且它有明确的输入、边界和交付物。
+- 当任务可以和当前主线并行推进，或者需要独立的 worktree / mailbox / task 绑定。
+- 当你希望把复杂工作分配给多个 agent，再通过 `AgentWait`、`AgentGet` 或 `AgentList` 汇总结果。
+
+如何写好 prompt：
+- 明确目标：子 agent 最终必须交付什么，成功标准是什么。
+- 明确边界：哪些文件、目录、模块、接口属于它，哪些不要碰。
+- 明确约束：是否只读、是否允许改代码、是否允许运行测试、是否必须遵守某种输出格式。
+- 明确汇报方式：是直接给出结论，还是修改文件后再总结，还是把结果写入 outputFile 供后续读取。
+- 如果你已经知道关键路径、候选文件、函数名或任务上下文，应直接写进 prompt，不要让子 agent盲搜。
+
+后台运行语义：
+- `run_in_background=true` 只表示“启动成功并返回 handle”，不表示任务已经完成。
+- 启动后应继续用 `AgentGet` / `AgentWait` / `AgentList` 跟踪状态，必要时读取 `outputFile`。
+- 如果子 agent 是团队协作成员，后续可以用 `SendMessage` 发运行时消息；子 agent 会通过 mailbox 看到这些消息。
+
+隔离与协作：
+- 当子任务需要隔离代码修改或临时 git 分支时，设置 `isolation=worktree`。
+- 当多个子 agent 需要共享团队身份时，设置 `team_name`，并先用 `TeamCreate` 建立团队。
+- 当父任务已经绑定结构化 task 时，Agent tool 会自动创建 child task 并把 runtime 元数据回写到任务系统。
+
+不要这样用：
+- 不要把高度耦合、需要你当前回合立即依赖结果的最关键一步无脑拆出去。
+- 不要只给一个笼统标题；prompt 过短会让子 agent 把时间浪费在重新理解需求上。
+- 不要把“启动后台 agent”当成“工作已完成”。"""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -204,6 +228,9 @@ class AgentTool(Tool):
             registry = None
             workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
             allowed_roots = tuple(request.allowed_roots or (workspace_root,))
+            delegated_task_id = None
+            if isinstance(request.metadata, dict):
+                delegated_task_id = request.metadata.get("task_id")
             parent_registry = getattr(self.parent_agent, "tool_registry", None)
             if self.tool_registry_builder is not None:
                 registry = self.tool_registry_builder(request)
@@ -244,6 +271,7 @@ class AgentTool(Tool):
                     worktree_branch=request.worktree_branch,
                     execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                    current_task_id=delegated_task_id,
                     metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
                 )
             else:
@@ -255,8 +283,17 @@ class AgentTool(Tool):
                     worktree_branch=request.worktree_branch,
                     execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
+                    current_task_id=delegated_task_id,
                     metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
                 )
+            child_execution_context.metadata.setdefault(
+                "agentId",
+                (request.metadata or {}).get("agent_id"),
+            )
+            child_execution_context.metadata.setdefault(
+                "outputFile",
+                (request.metadata or {}).get("output_file"),
+            )
 
             child_agent = BasicAgent(
                 name=request.name or request.description or "Subagent",
@@ -291,6 +328,33 @@ class AgentTool(Tool):
                     from .send_message import register_send_message_tool
 
                     register_send_message_tool(
+                        registry,
+                        agent_runtime=self.agent_runtime,
+                        parent_agent=child_agent,
+                    )
+                collaboration_requested = (
+                    request.team_name is not None
+                    or delegated_task_id is not None
+                    or any(
+                        parent_registry.has_tool(name)
+                        for name in (
+                            "Agent",
+                            "AgentGet",
+                            "AgentList",
+                            "AgentWait",
+                            "AgentStop",
+                            "SendMessage",
+                            "MailboxRead",
+                            "MailboxAck",
+                            "TeamCreate",
+                            "TeamDelete",
+                        )
+                    )
+                )
+                if collaboration_requested:
+                    from .mailbox_tools import register_mailbox_tools
+
+                    register_mailbox_tools(
                         registry,
                         agent_runtime=self.agent_runtime,
                         parent_agent=child_agent,

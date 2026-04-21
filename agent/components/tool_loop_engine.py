@@ -366,11 +366,11 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     content = agent.llm.get_response_content(response) or getattr(response, "content", None)
                     if content is not None:
                         final_response = content
+                        break
                     else:
-                        logger.warning("LLM 响应中没有内容")
-                        final_response = ""
-                    break
-
+                        logger.warning("LLM 响应中没有内容,触发纠错")
+                        messages.extend_replay(agent.llm.assistant_message_to_replay(content=" ",tool_calls=None,thinking=agent.llm.get_thinking_content(response)))
+                        messages.append_replay(agent.llm.query_to_replay("System Error: You must output a valid tool call via standard JSON or provide a valid final response, do not just output reasoning text."))
                 max_iter -= 1
 
             if final_response is None:
@@ -662,11 +662,11 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     content = agent.llm.get_response_content(response) or getattr(response, "content", None)
                     if content is not None:
                         final_response = content
+                        break
                     else:
-                        logger.warning("LLM 响应中没有内容")
-                        final_response = ""
-                    break
-
+                        logger.warning("LLM 响应中没有内容,触发纠错")
+                        messages.extend_replay(agent.llm.assistant_message_to_replay(content=" ",tool_calls=None,thinking=agent.llm.get_thinking_content(response)))
+                        messages.append_replay(agent.llm.query_to_replay("System Error: You must output a valid tool call via standard JSON or provide a valid final response, do not just output reasoning text."))
                 max_iter -= 1
 
             if final_response is None:

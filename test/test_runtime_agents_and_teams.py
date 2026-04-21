@@ -14,6 +14,7 @@ from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import (
     AgentTool,
     register_agent_runtime_tools,
+    register_mailbox_tools,
     register_send_message_tool,
     register_team_create_tool,
     register_team_delete_tool,
@@ -174,6 +175,48 @@ class TestAgentRuntimeManager(unittest.TestCase):
             self.assertEqual(refreshed.mailbox[0].content, "这是 task 级广播")
             runtime.close()
 
+    def test_runtime_mailbox_read_ack_and_completion_records(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            runtime = AgentRuntimeManager(
+                agent_factory=lambda request: FakeSubagent(delay_s=0.05),
+                storage_dir=os.path.join(tempdir, ".agents"),
+            )
+            handle = runtime.run(
+                SubagentRequest(
+                    description="后台 mailbox",
+                    prompt="等待 manager 协作消息",
+                    workspace_root=tempdir,
+                    allowed_roots=(tempdir,),
+                ),
+                run_in_background=True,
+            )
+            runtime.send_message(
+                recipient_type="agent",
+                recipient_id=handle.agent_id,
+                content="先接收消息，再汇报结果",
+                sender_id="manager",
+                ttl_ms=10_000,
+            )
+
+            read_messages = runtime.read_mailbox(handle.agent_id)
+            self.assertEqual(len(read_messages), 1)
+            self.assertEqual(read_messages[0].status, "delivered")
+
+            acked = runtime.ack_mailbox(handle.agent_id, message_ids=[read_messages[0].message_id], actor_id="manager")
+            self.assertEqual(len(acked), 1)
+            self.assertEqual(acked[0].status, "consumed")
+
+            time.sleep(0.1)
+            records = runtime.list_completion_records()
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].agent_id, handle.agent_id)
+            self.assertEqual(records[0].status, "completed")
+            self.assertEqual(records[0].output_file, handle.output_file)
+
+            waited = runtime.wait(handle.agent_id, timeout_ms=1000)
+            self.assertEqual(waited.status, "completed")
+            runtime.close()
+
     def test_runtime_export_and_restore_preserves_team_mailbox_and_task_binding(self):
         with tempfile.TemporaryDirectory() as tempdir:
             runtime = AgentRuntimeManager(
@@ -314,6 +357,67 @@ class TestCollaborationTools(unittest.TestCase):
             self.assertEqual(runtime.get_handle(handle.agent_id).mailbox[0].content, "先整理结论，再补理由")
             self.assertEqual(delete_result.status, "success")
             self.assertIn('"memberAgentIds"', delete_result.to_display_string())
+            runtime.close()
+
+    def test_mailbox_tools_and_prompt_injection_complete_message_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            runtime = AgentRuntimeManager(
+                agent_factory=lambda request: FakeSubagent(),
+                storage_dir=os.path.join(tempdir, ".agents"),
+            )
+            handle = runtime.run(
+                SubagentRequest(
+                    description="mailbox receiver",
+                    prompt="监听协作消息",
+                    workspace_root=tempdir,
+                    allowed_roots=(tempdir,),
+                )
+            )
+
+            worker_registry = ToolRegistry()
+            worker = BasicAgent(
+                name="worker",
+                llm=DummyLLM(),
+                enable_tool=True,
+                tool_registry=worker_registry,
+            )
+            register_mailbox_tools(
+                worker_registry,
+                agent_runtime=runtime,
+                parent_agent=worker,
+            )
+            worker.bind_runtime(
+                agent_runtime=runtime,
+                execution_context=handle.execution_context,
+            )
+
+            runtime.send_message(
+                recipient_type="agent",
+                recipient_id=handle.agent_id,
+                content="收到消息后先调整计划，再决定是否改文件",
+                sender_id="manager",
+            )
+
+            prompt = worker.get_enhanced_prompt()
+            self.assertIn("## 协作邮箱", prompt)
+            self.assertIn("收到消息后先调整计划，再决定是否改文件", prompt)
+
+            delivered = runtime.list_mailbox(handle.agent_id, include_consumed=False)
+            self.assertEqual(delivered[0].status, "delivered")
+
+            read_result = worker_registry.execute_tool_result("MailboxRead", {"limit": 20})
+            self.assertEqual(read_result.status, "success")
+            self.assertEqual(read_result.structured_data["count"], 1)
+            self.assertIn('"messages"', read_result.to_display_string())
+
+            message_id = read_result.structured_data["messages"][0]["messageId"]
+            ack_result = worker_registry.execute_tool_result("MailboxAck", {"message_ids": [message_id]})
+            self.assertEqual(ack_result.status, "success")
+            self.assertEqual(ack_result.structured_data["messages"][0]["status"], "consumed")
+            self.assertIn('"ackedAll"', ack_result.to_display_string())
+
+            prompt_after_ack = worker.get_enhanced_prompt()
+            self.assertNotIn("收到消息后先调整计划，再决定是否改文件", prompt_after_ack)
             runtime.close()
 
     def test_agent_tool_uses_runtime_and_returns_execution_context(self):

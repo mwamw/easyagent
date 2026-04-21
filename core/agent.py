@@ -23,6 +23,7 @@ from context.source.base import BaseContextSource
 from context.token.counter import TokenCounter
 from .callbacks import CallbackManager
 from .permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
+from .session import SessionRestoreReport
 from skill.manager import SkillManager
 from prompt import build_memory_prompt_section
 import json
@@ -196,6 +197,7 @@ class BaseAgent(ABC):
         else:
             self.mode_controller.exit_plan_mode()
         self.execution_context = execution_context
+        self.last_restore_report: Optional[SessionRestoreReport] = None
 
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
@@ -212,7 +214,71 @@ class BaseAgent(ABC):
                 logger.info("已自动注册 V2 记忆系统工具")
             except ImportError as e:
                 logger.warning(f"未能导入 register_memory_tools: {e}")
-                
+    
+    def enable_multi_agent_system(
+        self, 
+        workspace_root: str,
+        storage_dir: str,
+        max_background_tasks: int = 4
+        ) -> None:
+        """一键启用 Agent 的所有多节点协作调度能力及配套工具。"""
+        from Tool.builtin import (
+            register_agent_tool, 
+            register_agent_runtime_tools, 
+            register_send_message_tool, 
+            register_mailbox_tools, 
+            register_team_create_tool, 
+            register_team_delete_tool,
+            register_worktree_tools,
+            register_task_tools,
+            register_task_output_tool
+        )
+        from runtime import TeamManager
+        if not self.tool_registry:
+            raise ToolRegistryError("启用多智能体系统需要提供 ToolRegistry!")
+        registry = self.tool_registry
+        # 1. 注册核心任务与沙盒工具 (基础依赖)
+        if hasattr(self, "task_service") and self.task_service:
+            register_task_tools(registry, service=self.task_service)
+            register_task_output_tool(registry)
+        
+        if getattr(self.config, "enable_worktree", False):
+            from Tool.runtime import WorktreeManager
+            try:
+                repo_root = WorktreeManager.detect_repo_root(workspace_root)
+                manager = WorktreeManager(repo_root=repo_root, original_cwd=workspace_root)
+                register_worktree_tools(registry, worktree_manager=manager)
+            except Exception:
+                pass
+
+        # 2. 注册主 Agent 工具并获取 runtime
+        agent_tool = register_agent_tool(
+            registry,
+            parent_agent=self,
+            workspace_root=workspace_root,
+            allowed_roots=(workspace_root,),
+            storage_dir=storage_dir,
+            max_background_tasks=max_background_tasks,
+        )
+
+        # 3. 初始化 Team 机制
+        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
+        agent_tool.agent_runtime.bind_team_manager(team_manager)
+
+        # 4. 批量挂载其他协作类工具
+        register_agent_runtime_tools(registry, agent_runtime=agent_tool.agent_runtime, parent_agent=self)
+        register_send_message_tool(registry, agent_runtime=agent_tool.agent_runtime, parent_agent=self)
+        register_mailbox_tools(registry, agent_runtime=agent_tool.agent_runtime, parent_agent=self)
+        register_team_create_tool(registry, team_manager=team_manager, parent_agent=self)
+        register_team_delete_tool(registry, team_manager=team_manager)
+
+        # 5. 最后让主层级 Agent 绑定这个 runtime
+        self.bind_runtime(
+            agent_runtime=agent_tool.agent_runtime,
+            team_manager=team_manager,
+        )
+
+
     def with_memory(self, memory_manage: "MemoryManage") -> "BaseAgent":
         """
         方便地将 V2 版本的 MemoryManage 记忆系统绑定到 Agent。
@@ -318,6 +384,59 @@ class BaseAgent(ABC):
             metadata=metadata,
             worktree_path=getattr(current, "worktree_path", None),
             worktree_branch=getattr(current, "worktree_branch", None),
+        )
+
+    def _get_runtime_agent_id(self) -> Optional[str]:
+        execution_context = getattr(self, "execution_context", None)
+        metadata = dict(getattr(execution_context, "metadata", {}) or {})
+        raw_value = metadata.get("agentId") or metadata.get("agent_id")
+        if raw_value is None:
+            return None
+        value = str(raw_value).strip()
+        return value or None
+
+    @staticmethod
+    def _find_worktree_manager(tool_registry: Optional["ToolRegistry"]) -> Optional[Any]:
+        if tool_registry is None:
+            return None
+        for tool_name in ("Agent", "EnterWorktree", "ExitWorktree"):
+            tool = tool_registry.get_tool(tool_name)
+            manager = getattr(tool, "worktree_manager", None) if tool is not None else None
+            if manager is not None:
+                return manager
+        return None
+
+    def _build_mailbox_prompt(self) -> str:
+        agent_runtime = getattr(self, "agent_runtime", None)
+        runtime_agent_id = self._get_runtime_agent_id()
+        if agent_runtime is None or not runtime_agent_id:
+            return ""
+
+        try:
+            messages = agent_runtime.read_mailbox(
+                runtime_agent_id,
+                include_consumed=False,
+                include_expired=False,
+                mark_delivered=True,
+            )
+        except Exception as exc:
+            logger.debug("构建 mailbox prompt 失败: %s", exc)
+            return ""
+
+        if not messages:
+            return ""
+
+        payload = [message.to_dict() for message in messages]
+        return (
+            "## 协作邮箱\n"
+            "你当前有尚未确认的 mailbox 消息。这些消息已经投递到当前 agent，并在本轮系统提示中自动展示。\n"
+            "- 这些消息可能来自 manager、team 广播或 task 广播，默认都应被视为当前执行约束的一部分。\n"
+            "- 如果消息改变了目标、边界、优先级或输出格式，应先调整当前计划，再继续调用工具。\n"
+            "- 如果需要重新读取完整结构化消息，调用 `MailboxRead`。\n"
+            "- 当你已经阅读并把某条消息纳入执行后，调用 `MailboxAck` 把它标记为 consumed。\n"
+            "- 不要假设 `SendMessage` 只用于提示；对协作型子 agent 来说，这些消息就是运行时输入。\n\n"
+            "未确认消息:\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}"
         )
 
     def with_context(self, context_manager: "ContextManager") -> "BaseAgent":
@@ -1019,6 +1138,13 @@ class BaseAgent(ABC):
                     else None
                 ),
             }
+        worktree_runtime_snapshot = None
+        worktree_manager = self._find_worktree_manager(self.tool_registry)
+        if worktree_manager is not None and hasattr(worktree_manager, "export_state"):
+            try:
+                worktree_runtime_snapshot = self._make_json_safe(worktree_manager.export_state())
+            except Exception as exc:
+                logger.warning("导出 worktree runtime 状态失败: %s", exc)
 
         return {
             "schema_version": 1,
@@ -1045,6 +1171,7 @@ class BaseAgent(ABC):
             "task_service": self._make_json_safe(task_service_snapshot),
             "execution_context": self._make_json_safe(execution_context_snapshot),
             "collaboration_runtime": self._make_json_safe(collaboration_runtime_snapshot),
+            "worktree_runtime": self._make_json_safe(worktree_runtime_snapshot),
             "state": self._make_json_safe(self._get_serializable_state()),
         }
 
@@ -1325,7 +1452,13 @@ class BaseAgent(ABC):
         snapshot: dict[str, Any],
         *,
         auto_activate_skill_names: Optional[list[str]] = None,
+        restore_report: Optional[SessionRestoreReport] = None,
     ) -> None:
+        if restore_report is None:
+            restore_report = SessionRestoreReport(
+                session_id="unknown",
+                agent_type=snapshot.get("agent_type") or agent.__class__.__name__,
+            )
         for skill_name in list(auto_activate_skill_names or []):
             if not agent.skill_manager.has_skill(skill_name):
                 continue
@@ -1337,6 +1470,7 @@ class BaseAgent(ABC):
         expected_tools = list(snapshot.get("tool_names") or [])
         runtime_snapshot = snapshot.get("collaboration_runtime") or {}
         execution_context_snapshot = snapshot.get("execution_context") or {}
+        worktree_snapshot = snapshot.get("worktree_runtime") or {}
         collaboration_tools = {
             "Agent",
             "AgentGet",
@@ -1344,6 +1478,8 @@ class BaseAgent(ABC):
             "AgentWait",
             "AgentStop",
             "SendMessage",
+            "MailboxRead",
+            "MailboxAck",
             "TeamCreate",
             "TeamDelete",
         }
@@ -1358,6 +1494,23 @@ class BaseAgent(ABC):
             restored_execution_context = ExecutionContext.from_dict(execution_context_snapshot)
         except Exception:
             restored_execution_context = None
+        if restored_execution_context is not None:
+            restore_report.execution_context_restored = True
+            restore_report.extend_component(
+                "execution_context",
+                {
+                    "status": "restored",
+                    "restoredItems": ["execution_context"],
+                    "metadata": {"currentTaskId": restored_execution_context.current_task_id},
+                },
+            )
+        elif execution_context_snapshot:
+            restore_report.add_issue(
+                component="execution_context",
+                code="execution_context_restore_failed",
+                message="execution_context 快照存在，但恢复失败。",
+                metadata={"snapshot": execution_context_snapshot},
+            )
 
         if wants_collaboration_runtime:
             runtime = None
@@ -1372,11 +1525,13 @@ class BaseAgent(ABC):
                 existing_tool = None
                 if agent.tool_registry is not None and agent.tool_registry.has_tool("Agent"):
                     existing_tool = agent.tool_registry.get_tool("Agent")
+                shared_worktree_manager = cls._find_worktree_manager(agent.tool_registry)
                 if isinstance(existing_tool, AgentTool):
                     helper_tool = existing_tool
                 else:
                     helper_tool = AgentTool(
                         parent_agent=agent,
+                        worktree_manager=shared_worktree_manager,
                         workspace_root=workspace_root,
                         allowed_roots=allowed_roots,
                     )
@@ -1384,6 +1539,11 @@ class BaseAgent(ABC):
             except Exception as exc:
                 logger.warning("创建协作运行时失败: %s", exc)
                 runtime = None
+                restore_report.add_issue(
+                    component="agent_runtime",
+                    code="runtime_creation_failed",
+                    message=f"创建协作运行时失败: {exc}",
+                )
 
             if runtime is not None:
                 try:
@@ -1394,18 +1554,35 @@ class BaseAgent(ABC):
                 except Exception as exc:
                     logger.warning("创建 TeamManager 失败: %s", exc)
                     team_manager = None
+                    restore_report.add_issue(
+                        component="team_runtime",
+                        code="team_manager_creation_failed",
+                        message=f"创建 TeamManager 失败: {exc}",
+                    )
 
                 try:
                     if team_manager is not None and runtime_snapshot.get("teams"):
-                        team_manager.restore_state(runtime_snapshot.get("teams"))
+                        team_report = team_manager.restore_state(runtime_snapshot.get("teams"))
+                        restore_report.extend_component("team_runtime", team_report)
                 except Exception as exc:
                     logger.warning("恢复 team 状态失败: %s", exc)
+                    restore_report.add_issue(
+                        component="team_runtime",
+                        code="team_restore_failed",
+                        message=f"恢复 team 状态失败: {exc}",
+                    )
 
                 try:
                     if runtime_snapshot.get("agent_runtime"):
-                        runtime.restore_state(runtime_snapshot.get("agent_runtime"))
+                        runtime_report = runtime.restore_state(runtime_snapshot.get("agent_runtime"))
+                        restore_report.extend_component("agent_runtime", runtime_report)
                 except Exception as exc:
                     logger.warning("恢复 agent runtime 状态失败: %s", exc)
+                    restore_report.add_issue(
+                        component="agent_runtime",
+                        code="runtime_restore_failed",
+                        message=f"恢复 agent runtime 状态失败: {exc}",
+                    )
 
                 try:
                     agent.bind_runtime(
@@ -1415,12 +1592,18 @@ class BaseAgent(ABC):
                     )
                 except Exception as exc:
                     logger.warning("绑定协作运行时失败: %s", exc)
+                    restore_report.add_issue(
+                        component="agent_runtime",
+                        code="runtime_bind_failed",
+                        message=f"绑定协作运行时失败: {exc}",
+                    )
 
                 if agent.tool_registry is not None:
                     try:
                         from Tool.builtin import (
                             register_agent_tool,
                             register_agent_runtime_tools,
+                            register_mailbox_tools,
                             register_send_message_tool,
                             register_team_create_tool,
                             register_team_delete_tool,
@@ -1449,6 +1632,12 @@ class BaseAgent(ABC):
                                 agent_runtime=runtime,
                                 parent_agent=agent,
                             )
+                        if any(name in expected_tools for name in {"MailboxRead", "MailboxAck"}):
+                            register_mailbox_tools(
+                                agent.tool_registry,
+                                agent_runtime=runtime,
+                                parent_agent=agent,
+                            )
                         if "TeamCreate" in expected_tools and team_manager is not None:
                             register_team_create_tool(
                                 agent.tool_registry,
@@ -1462,11 +1651,41 @@ class BaseAgent(ABC):
                             )
                     except Exception as exc:
                         logger.warning("恢复协作工具失败: %s", exc)
+                        restore_report.add_issue(
+                            component="tools",
+                            code="collaboration_tool_restore_failed",
+                            message=f"恢复协作工具失败: {exc}",
+                        )
         elif restored_execution_context is not None:
             try:
                 agent.bind_runtime(execution_context=restored_execution_context)
             except Exception as exc:
                 logger.warning("恢复 execution_context 失败: %s", exc)
+                restore_report.add_issue(
+                    component="execution_context",
+                    code="execution_context_bind_failed",
+                    message=f"恢复 execution_context 失败: {exc}",
+                )
+
+        worktree_manager = cls._find_worktree_manager(agent.tool_registry)
+        if worktree_snapshot:
+            if worktree_manager is None:
+                restore_report.add_issue(
+                    component="worktree_runtime",
+                    code="worktree_manager_missing",
+                    message="会话包含 worktree runtime 状态，但恢复时没有可用的 WorktreeManager。",
+                )
+            elif hasattr(worktree_manager, "restore_state"):
+                try:
+                    worktree_report = worktree_manager.restore_state(worktree_snapshot)
+                    restore_report.extend_component("worktree_runtime", worktree_report)
+                except Exception as exc:
+                    logger.warning("恢复 worktree runtime 状态失败: %s", exc)
+                    restore_report.add_issue(
+                        component="worktree_runtime",
+                        code="worktree_restore_failed",
+                        message=f"恢复 worktree runtime 状态失败: {exc}",
+                    )
 
     @classmethod
     def _build_base_constructor_kwargs(
@@ -1682,6 +1901,11 @@ class BaseAgent(ABC):
                 f"{target_cls.__name__} 暂不支持自动恢复，请手动重建实例"
             )
 
+        restore_report = SessionRestoreReport(
+            session_id=session_id,
+            agent_type=target_cls.__name__,
+            metadata={"storePath": getattr(session_store, "db_path", None)},
+        )
         init_kwargs = target_cls._build_constructor_kwargs_from_snapshot(
             snapshot,
             llm=llm,
@@ -1699,6 +1923,7 @@ class BaseAgent(ABC):
             agent,
             snapshot,
             auto_activate_skill_names=auto_activate_skill_names,
+            restore_report=restore_report,
         )
         agent._restore_serializable_state(snapshot.get("state") or {})
 
@@ -1717,21 +1942,39 @@ class BaseAgent(ABC):
                 missing_tools = [name for name in expected_tools if not tool_registry.has_tool(name)]
         if missing_tools:
             logger.warning("恢复会话时缺少工具实现: %s", missing_tools)
+            restore_report.note_missing_tools(missing_tools)
 
         expected_skills = snapshot.get("active_skills") or []
         if expected_skills:
             if skill_manager is None:
                 logger.warning("恢复会话时未提供 skill_manager，以下 Skill 需手动恢复: %s", expected_skills)
+                restore_report.note_missing_skills(list(expected_skills))
             else:
                 missing_skills = [name for name in expected_skills if not skill_manager.has_skill(name)]
                 if missing_skills:
                     logger.warning("恢复会话时缺少 Skill 实现: %s", missing_skills)
+                    restore_report.note_missing_skills(missing_skills)
 
         if snapshot.get("enable_tool") and tool_registry is None:
             logger.warning("会话原本启用了工具，但恢复时未注入 ToolRegistry，已降级为无工具模式")
+            restore_report.add_issue(
+                component="tools",
+                code="tool_registry_missing",
+                message="会话原本启用了工具，但恢复时未注入 ToolRegistry，已降级为无工具模式。",
+            )
+
+        agent.last_restore_report = restore_report
 
         logger.info("会话已恢复: %s", session_id)
         return agent
+
+    def get_last_restore_report(self) -> Optional[dict[str, Any]]:
+        report = getattr(self, "last_restore_report", None)
+        if report is None:
+            return None
+        if hasattr(report, "to_dict"):
+            return report.to_dict()
+        return report
 
     def get_history(self):
         """获取当前 provider 的 replay/raw history（向后兼容）。"""
@@ -1900,14 +2143,14 @@ class BaseAgent(ABC):
                     return name
 
             # Chat API: tool_call.function.name
-            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'):
-                name = tool_call.function.name
+            if hasattr(tool_call, 'function') and hasattr(tool_call.function, 'name'): # type: ignore
+                name = tool_call.function.name # type: ignore
                 if name and isinstance(name, str):
                     return name
 
             # Responses API: tool_call.name (flat structure)
             if hasattr(tool_call, 'name'):
-                name = tool_call.name
+                name = tool_call.name # type: ignore
                 if name and isinstance(name, str):
                     return name
 
@@ -1944,11 +2187,11 @@ class BaseAgent(ABC):
                 arguments = None
 
             # Chat API: tool_call.function.arguments
-            if arguments is None and hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'):
-                arguments = tool_call.function.arguments
+            if arguments is None and hasattr(tool_call, 'function') and hasattr(tool_call.function, 'arguments'): # type: ignore
+                arguments = tool_call.function.arguments # type: ignore
             # Responses API: tool_call.arguments (flat structure)
             elif arguments is None and hasattr(tool_call, 'arguments'):
-                arguments = tool_call.arguments
+                arguments = tool_call.arguments # type: ignore
             elif arguments is None:
                 raise ToolExecutionError("工具调用对象中没有 arguments 属性")
 

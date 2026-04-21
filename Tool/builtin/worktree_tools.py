@@ -10,13 +10,37 @@ from ..claude_compat.models import ClaudeEnterWorktreeInput, ClaudeExitWorktreeI
 from ..runtime import WorktreeManager
 
 
-ENTER_WORKTREE_PROMPT = """用于创建并进入一个隔离的 git worktree。
-- 适合需要隔离代码修改、避免污染主工作区时使用。
-- 进入后会记录当前活动 worktree，后续可通过 ExitWorktree 退出。"""
+ENTER_WORKTREE_PROMPT = """创建并进入一个隔离的 git worktree。
 
-EXIT_WORKTREE_PROMPT = """用于退出当前活动 worktree，或直接将其移除。
-- `action=keep` 只退出，不删除 worktree。
-- `action=remove` 会移除当前 worktree；若 `discard_changes=true`，会强制移除未提交改动。"""
+何时使用：
+- 你准备做代码修改，但不希望污染当前主工作区。
+- 你需要给某个子任务或子 agent 一个独立分支和独立文件树。
+- 你需要在保留主仓库干净状态的同时，安全地试验修改。
+
+重要语义：
+- 进入后会记录当前活动 worktree；后续应通过 `ExitWorktree` 明确退出或移除。
+- 一个 worktree manager 同一时刻只允许一个 active session，避免混乱切换。
+- worktree 只是隔离工作区，不自动提交、不自动推送，也不自动清理。
+
+最佳实践：
+- 在真正修改代码之前调用，而不是修改之后再切。
+- 如果这个 worktree 只为一次临时任务服务，结束时通常应搭配 `ExitWorktree(action=\"remove\")`。
+- 如果你还需要保留结果供后续查看，先用 `action=\"keep\"` 退出，再决定后续如何处理。"""
+
+EXIT_WORKTREE_PROMPT = """退出当前活动 worktree，或直接将其移除。
+
+何时使用：
+- 当前 worktree 任务已经完成，需要回到原工作区。
+- 当前隔离分支只是临时产物，准备直接清理掉。
+
+动作语义：
+- `action=\"keep\"`：只退出当前 worktree，保留目录和分支，适合后续还要回来检查。
+- `action=\"remove\"`：移除当前 worktree。
+- `discard_changes=true` 只对 `action=\"remove\"` 有意义，会强制丢弃未提交改动和 ahead commits。
+
+注意：
+- 如果你还不确定这个 worktree 是否需要保留，不要急着 `remove`。
+- `remove + discard_changes=true` 属于高风险清理操作，只在你确定这些改动可以丢弃时使用。"""
 
 
 class EnterWorktreeTool(Tool):
