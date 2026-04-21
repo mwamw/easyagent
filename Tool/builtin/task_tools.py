@@ -67,6 +67,8 @@ class TaskCreateTool(_TaskToolBase):
             source="builtin",
             tags=["task", "planning"],
             risk_categories=["side_effect"],
+            side_effect_level="low",
+            resource_scope=["task", "runtime"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -94,6 +96,8 @@ class TaskGetTool(_TaskToolBase):
             supports_parallel=True,
             source="builtin",
             tags=["task", "read"],
+            side_effect_level="none",
+            resource_scope=["task", "runtime"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -130,6 +134,8 @@ class TaskUpdateTool(_TaskToolBase):
             source="builtin",
             tags=["task", "planning"],
             risk_categories=["side_effect"],
+            side_effect_level="low",
+            resource_scope=["task", "runtime"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -166,6 +172,8 @@ class TaskListTool(_TaskToolBase):
             supports_parallel=True,
             source="builtin",
             tags=["task", "read"],
+            side_effect_level="none",
+            resource_scope=["task", "runtime"],
         )
 
     def run(self, parameters: dict) -> ToolResult:

@@ -107,6 +107,8 @@ class MailboxReadTool(_MailboxToolBase):
             source="builtin",
             tags=["agent", "mailbox", "collaboration"],
             risk_categories=["side_effect"],
+            side_effect_level="low",
+            resource_scope=["runtime", "mailbox"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -164,6 +166,8 @@ class MailboxAckTool(_MailboxToolBase):
             source="builtin",
             tags=["agent", "mailbox", "collaboration"],
             risk_categories=["side_effect"],
+            side_effect_level="low",
+            resource_scope=["runtime", "mailbox"],
         )
 
     def run(self, parameters: dict) -> ToolResult:

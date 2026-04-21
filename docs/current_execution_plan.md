@@ -16,7 +16,9 @@
 - `Phase A` 已完成：`AgentGet / AgentList / AgentWait / AgentStop`、后台 handle 语义、`completion records` 已补齐
 - `Phase B` 已完成：`MailboxRead / MailboxAck`、message 生命周期、mailbox 自动注入 prompt、协作消费闭环已补齐
 - `Phase C` 已完成：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口已补齐
-- 当前下一阶段应进入 `Phase D：Code Intelligence v1`
+- `Phase D` 已完成：`codeintel/`、LSP stdio provider、codeintel tools、fallback 协议已补齐
+- `Phase E` 已完成：`core/hooks/`、`core/guardrails/`、Tool Protocol v2、registry 冲突策略、`ephemeral_context` trace/restore 接线已补齐
+- 当前下一阶段应进入 `Phase F：MCP Engineering`
 
 ## 当前状态对照
 
@@ -50,6 +52,21 @@
   - message 生命周期：`queued / delivered / consumed / expired`
   - 子 agent 可在执行循环中自动看到 mailbox 输入
   - runtime 支持 `completion records` 供宿主轮询后台完成事件
+- hooks / guardrails 已具备：
+  - `core/hooks/`
+  - `core/guardrails/`
+  - `before_llm_request / after_llm_response / before_tool_use / after_tool_use / before_compaction / after_session_restore`
+- Tool Protocol v2 已具备：
+  - `side_effect_level`
+  - `resource_scope`
+  - `visibility_scope`
+  - `ToolRegistry` 同名冲突策略
+  - `ephemeral_context` 进入 trace 与 pending/session restore
+- code intelligence 已具备 LSP v1：
+  - `codeintel/`
+  - `LSPCodeIntelProvider`
+  - `CodeIntelStatus / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics`
+  - unavailable 时会正式退回 `FileRead / Grep / Glob`
 - provider schema adapter 已落地：`core/providers/tool_schema.py`
 
 ### 已完成但只到 MVP 的能力
@@ -60,62 +77,52 @@
 - `AgentRuntimeManager` 能保存 handle、mailbox、team assignment，并支持 export/restore
 - `SubagentManager` 能同步执行、后台执行、保存 output file
 - runtime/team 状态可以进入 session restore
-- background runtime 恢复边界还没有结构化 restore report
+- codeintel 已能接入 LSP，但还没有离线索引层、workspace 级缓存和更强的跨语言优化
 
 ### 当前最明显的缺口
 
 这些缺口会直接限制 EasyAgent 继续长成 Claude Code 风格 code agent：
 
-1. background runtime 生命周期还不完整
-
-- 运行状态还偏轻量，缺少真正的一等公民 `BackgroundAgentHandle`
-- 缺少后台任务完成通知、阻塞等待、停止、恢复后的降级报告
-- session restore 能恢复 runtime 结构，但不能严谨表达“哪些后台执行无法真正续跑”
-
-2. code intelligence 还没开始
-
-- 没有 `codeintel/`
-- 没有 LSP / symbol / diagnostics / workspace index
-- code agent 仍主要依赖 `FileRead / Grep / Glob`
-
-3. hooks / guardrails 还没开始
-
-- 没有 `core/hooks/`
-- 没有 `core/guardrails/`
-- 当前只有 callbacks 和 permission rules，缺少内容级拦截与改写层
-
-4. Tool 协议还没到最终版
-
-- 已有 `risk_categories` 和 provider schema adapter
-- 但还没有 `side_effect_level / resource_scope / visibility_scope / conflict policy`
-- `ephemeral_context` 也还没有完整纳入 compaction / restore 协议
-
-5. MCP 仍是轻量接入，不是 first-class runtime surface
+1. MCP 仍是轻量接入，不是 first-class runtime surface
 
 - 现有 `mcp/runtime.py`、`mcp_client.py` 可以用
 - 但没有 `connection_manager / auth / cache / policy`
 - 也没有和权限系统、session/runtime 生命周期深度打通
 
-6. SDK/package 边界还没收口
+2. code intelligence 还没到最终形态
+
+- 已有 LSP v1，但还没有离线索引层
+- 还缺 workspace 级缓存、批量预热、跨语言更细策略
+- 目前的 fallback 是稳定的，但还没有更高层的“自动切换到索引器”能力
+
+3. SDK/package 边界还没收口
 
 - 还没有 `pyproject.toml`
 - 公共 API 边界还没有正式冻结
 - `docs/` 和 `example/` 还没有按“框架示例 / 产品示例”重新整理
 
+4. observability 仍是轻量级
+
+- trace 已能记录更完整的 tool result 与 `ephemeral_context`
+- 但 token/cost/失败类型聚合、统一 metrics 和 benchmark 还没有成体系
+
 ## 新的优先级原则
 
 `walkthrough.md` 里的旧顺序是合理的长期路线，但按当前代码状态，优先级需要调整成：
 
-1. 先做 `runtime lifecycle + restore report`
-2. 再做 `codeintel`
-3. 再做 `hooks/guardrails + tool protocol v2`
-4. 再做 `MCP engineering`
-5. 最后做 `SDK/package/doc` 收口
+1. 先做 `MCP engineering`
+2. 再做 `SDK/package/doc` 收口
+3. codeintel 增强与 observability 并行推进
+4. codeintel 后续增强放在并行支线：
+   - 离线索引层
+   - workspace 缓存
+   - 更细的跨语言优化
 
 原因很简单：
 
-- 现在多 agent 协作主闭环已经能跑通，最大的真实缺口变成“runtime 恢复边界和长期运行语义还不够清晰”
-- 如果不先补 restore report、degraded runtime 表达和 lifecycle cleanup，后续 codeintel 和更复杂协作都很难长期稳定运行
+- 现在多 agent 协作、runtime restore report、LSP v1、hooks/guardrails 与 Tool Protocol v2 都已经跑通
+- 当前最阻塞框架继续长成最终版的，是 MCP 工程化、SDK 收口和更强的 codeintel/observability
+- codeintel 已经有可用主干，后续更多是增强，而不是当前最先阻塞主线的缺口
 
 ## 新执行计划
 
@@ -249,6 +256,8 @@
 
 目标：让 EasyAgent 具备真正可用的 code agent 语义层。
 
+状态：已完成核心实现，阶段说明见 `docs/phased_codeintel_lsp_v1.md`
+
 #### 主要工作
 
 - 新建 `codeintel/`
@@ -264,6 +273,7 @@
 - 明确 fallback：
   - codeintel 可用时优先符号级
   - 不可用时退回 `FileRead/Grep/Glob`
+- 让 `BaseAgent.close()` 收口 codeintel manager 生命周期
 
 #### 建议落点
 
@@ -282,6 +292,8 @@
 ### Phase E：Hooks / Guardrails + Tool Protocol v2
 
 目标：把权限系统之外的内容级控制补齐，并完成工具协议升级。
+
+状态：已完成，阶段说明见 `docs/phasee_hooks_guardrails_tool_protocol_v2.md`
 
 #### 主要工作
 
@@ -385,21 +397,23 @@
 
 如果按当前代码状态推进，我建议严格按下面顺序做：
 
-1. `Phase C`
-2. `Phase D`
-3. `Phase E`
-4. `Phase F`
-5. `Phase G`
+1. `Phase F`
+2. `Phase G`
+3. codeintel 增强支线
+   - 离线索引
+   - workspace 缓存
+   - 更细粒度的 provider 策略
 
-这比旧计划更贴近当前现实，因为协作闭环已经补齐，当前最阻塞框架继续演进的是 runtime lifecycle 的长期运行与恢复边界。
+这比旧计划更贴近当前现实，因为协作闭环、runtime restore report、LSP v1，以及 hooks/guardrails + Tool Protocol v2 都已经补齐，当前最阻塞框架继续演进的是 MCP 工程化、SDK 收口和更强的索引/观测层。
 
 ## 本轮之后的最小任务包
 
 如果只做接下来一轮最有价值的工作，建议先完成下面这个最小任务包：
 
-1. 引入 `SessionRestoreReport` 和 runtime restore report
-2. 明确 background agent / worktree / mailbox 的降级恢复语义
-3. 给 runtime / session restore 增加结构化告警和清理策略
-4. 补 lifecycle 集成测试与恢复文档
+1. 落地 `mcp/connection_manager.py`
+2. 落地 `mcp/auth.py / cache.py / policy.py`
+3. 把 MCP 纳入权限系统与 session/runtime 生命周期
+4. 增加 capability snapshot 与 restore 语义
+5. 补 MCP engineering 的契约测试与真实 example
 
-这是当前阶段性价比最高的一步，因为它会把 EasyAgent 从“协作闭环可用”推进到“长时间运行与恢复边界可信”。
+这是当前阶段性价比最高的一步，因为当前框架已经有 runtime、restore、codeintel、hooks 和 Tool Protocol v2，下一块真正阻塞扩展面的就是 MCP engineering。

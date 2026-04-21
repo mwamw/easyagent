@@ -3,6 +3,7 @@ from core.agent import BaseAgent
 from core.llm import EasyLLM
 from core.Config import Config
 from typing import Optional, Any, AsyncGenerator, TYPE_CHECKING
+import inspect
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
 from core.request_input import ReplayRequestInput
@@ -53,6 +54,7 @@ class BasicAgent(BaseAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service=None,
         agent_runtime=None,
         team_manager=None,
@@ -108,6 +110,7 @@ class BasicAgent(BaseAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
             agent_runtime=agent_runtime,
             team_manager=team_manager,
@@ -257,6 +260,7 @@ class BasicAgent(BaseAgent):
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
         success: Optional[bool] = None,
+        tool_result_obj: Optional[Any] = None,
     ) -> str:
         return self.trace_recorder.record_tool_result(
             turn_id,
@@ -269,6 +273,10 @@ class BasicAgent(BaseAgent):
             mode=mode,
             stream=stream,
             success=success,
+            structured_data=getattr(tool_result_obj, "structured_data", None),
+            ephemeral_context=getattr(tool_result_obj, "ephemeral_context", None),
+            result_metadata=getattr(tool_result_obj, "metadata", None),
+            status=getattr(tool_result_obj, "status", None),
         )
 
     def _record_turn_end(
@@ -373,6 +381,7 @@ class BasicAgent(BaseAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service=None,
     ) -> dict[str, Any]:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
@@ -385,6 +394,7 @@ class BasicAgent(BaseAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
         )
         state = snapshot.get("state") or {}
@@ -438,7 +448,12 @@ class BasicAgent(BaseAgent):
         trace_query: Optional[str] = None,
         **kwargs
     ) -> str:
-        return self.tool_loop_engine.invoke(
+        invoke_fn = self.tool_loop_engine.invoke
+        signature = inspect.signature(invoke_fn)
+        if "messages" in signature.parameters:
+            kwargs = dict(kwargs)
+            kwargs.setdefault("messages", self._build_start_messages(query, include_query=True))
+        return invoke_fn(
             self,
             query,
             max_iter=max_iter,
@@ -464,7 +479,12 @@ class BasicAgent(BaseAgent):
         trace_query: Optional[str] = None,
         **kwargs
     ) -> str:
-        return await self.tool_loop_engine.ainvoke(
+        ainvoke_fn = self.tool_loop_engine.ainvoke
+        signature = inspect.signature(ainvoke_fn)
+        if "messages" in signature.parameters:
+            kwargs = dict(kwargs)
+            kwargs.setdefault("messages", self._build_start_messages(query, include_query=True))
+        return await ainvoke_fn(
             self,
             query,
             max_iter=max_iter,
@@ -490,7 +510,12 @@ class BasicAgent(BaseAgent):
         trace_query: Optional[str] = None,
         **kwargs
     ) -> AsyncGenerator[dict[str, Any], None]:
-        async for event in self.tool_loop_engine.astream_invoke(
+        astream_fn = self.tool_loop_engine.astream_invoke
+        signature = inspect.signature(astream_fn)
+        if "messages" in signature.parameters:
+            kwargs = dict(kwargs)
+            kwargs.setdefault("messages", self._build_start_messages(query, include_query=True))
+        async for event in astream_fn(
             self,
             query,
             max_iter=max_iter,
@@ -632,11 +657,29 @@ class BasicAgent(BaseAgent):
         include_query: bool = True,
         extra_replay_entries: Optional[list[Any]] = None,
     ) -> ReplayRequestInput:
-        return self.history_message_assembler.build_start_messages(
-            self,
-            query,
-            include_query=include_query,
-            extra_replay_entries=extra_replay_entries,
+        build_start_messages = self.history_message_assembler.build_start_messages
+        signature = inspect.signature(build_start_messages)
+        if "include_query" in signature.parameters or "extra_replay_entries" in signature.parameters:
+            return build_start_messages(
+                self,
+                query,
+                include_query=include_query,
+                extra_replay_entries=extra_replay_entries,
+            )
+        result = build_start_messages(self, query)
+        if isinstance(result, ReplayRequestInput):
+            return result
+        if isinstance(result, list):
+            canonical_entries: list[Any] = []
+            for message in result:
+                canonical_entries.extend(self.llm.history_entry_to_canonical(message))
+            return ReplayRequestInput(
+                provider_name=getattr(self.llm, "provider_name", None),
+                replay_history=self._build_replay_entries(canonical_entries),
+                system_prompt=None,
+            )
+        raise TypeError(
+            "自定义 history_message_assembler.build_start_messages 必须返回 ReplayRequestInput 或 list。"
         )
 
         

@@ -191,3 +191,20 @@ class AgentStopRequested(AgentError):
 
     def __init__(self, message: str = "Agent 已收到停止请求。"):
         super().__init__(message)
+
+
+class HookExecutionError(AgentError):
+    """Hook 或 Guardrail 阻断执行时抛出的异常。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str,
+        error_type: str = "hook_blocked",
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        super().__init__(message)
+        self.stage = stage
+        self.error_type = error_type
+        self.metadata = dict(metadata or {})

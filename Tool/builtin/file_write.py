@@ -21,9 +21,25 @@ from ..runtime import (
 
 
 FILE_WRITE_PROMPT = """用于创建新文件或整体覆盖已有文件。
-- 当你已经确定完整文件内容时使用。
-- 会直接替换目标文件当前内容；若只想做局部替换，优先使用 `FileEdit`。
-- 路径必须位于允许的工作区内。"""
+
+何时使用：
+- 你已经确定完整文件内容，准备一次性写入整个文件。
+- 目标文件不存在，需要完整创建。
+- 现有文件应该整体替换，而不是做局部 patch。
+
+何时不要用：
+- 只想改局部文本时，不要用它；优先使用 `FileEdit`。
+- 还没看过现有文件就想整体覆盖时，不要直接写；先 `FileRead` 理解上下文。
+
+执行语义：
+- 如果目标文件已存在，会整体替换原内容。
+- 写入采用原子替换，尽量避免半写状态。
+- 若文件存在但自上次读取后已变化，工具会拒绝写入并要求重新读取。
+
+最佳实践：
+- 先确认路径、目录、文件名是否正确。
+- 生成代码文件时，尽量一次写出可运行的完整版本，而不是先写残缺骨架再多次覆盖。
+- 返回里的 `created`、`chars_written`、`bytes_written`、`file_version` 可用于后续校验。"""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -104,6 +120,8 @@ class _WorkspaceWriteTool(Tool):
             destructive=True,
             source="builtin",
             tags=list(tags or []),
+            side_effect_level="high",
+            resource_scope=["filesystem", "workspace"],
         )
 
     def _tool_error(

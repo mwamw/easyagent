@@ -1,0 +1,2 @@
+Phase E sample workspace.
+This file exists so you can manually test FileRead/FileEdit/FileWrite.

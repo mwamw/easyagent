@@ -9,6 +9,8 @@ from pydantic import BaseModel
 
 ToolResultStatus = Literal["success", "error", "needs_confirmation"]
 ToolOutputMode = Literal["text", "json", "markdown"]
+ToolSideEffectLevel = Literal["none", "low", "medium", "high"]
+ToolVisibilityScope = Literal["resident", "runtime", "turn"]
 # 兼容字段：早期版本曾用它控制 tool prompt 是否注入 system/runtime prompt。
 # 当前框架主路径不再读取该字段；tool prompt 会统一折叠进 tool schema 的 description。
 ToolPromptVisibility = Literal["none", "resident", "runtime"]
@@ -35,6 +37,9 @@ class ToolSpec:
     demand_skill_name: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     risk_categories: list[str] = field(default_factory=list)
+    side_effect_level: ToolSideEffectLevel = "none"
+    resource_scope: list[str] = field(default_factory=list)
+    visibility_scope: ToolVisibilityScope = "resident"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def parameter_schema(self) -> dict[str, Any]:
@@ -134,6 +139,9 @@ class ToolSpec:
             "demand_skill_name": self.demand_skill_name,
             "tags": list(self.tags),
             "risk_categories": list(self.risk_categories),
+            "side_effect_level": self.side_effect_level,
+            "resource_scope": list(self.resource_scope),
+            "visibility_scope": self.visibility_scope,
             "parameters": self.parameter_schema(),
             "metadata": dict(self.metadata),
         }
@@ -149,6 +157,9 @@ class ToolSpec:
             "ephemeral": self.ephemeral,
             "tags": list(self.tags),
             "risk_categories": list(self.risk_categories),
+            "side_effect_level": self.side_effect_level,
+            "resource_scope": list(self.resource_scope),
+            "visibility_scope": self.visibility_scope,
             "metadata": dict(self.metadata),
         }
 
@@ -250,8 +261,20 @@ class Tool(ABC):
         demand_skill_name: Optional[str] = None,
         tags: Optional[list[str]] = None,
         risk_categories: Optional[list[str]] = None,
+        side_effect_level: Optional[ToolSideEffectLevel] = None,
+        resource_scope: Optional[list[str]] = None,
+        visibility_scope: ToolVisibilityScope = "resident",
         metadata: Optional[dict[str, Any]] = None,
     ):
+        resolved_side_effect_level: ToolSideEffectLevel
+        if side_effect_level is not None:
+            resolved_side_effect_level = side_effect_level
+        elif destructive:
+            resolved_side_effect_level = "high"
+        elif read_only:
+            resolved_side_effect_level = "none"
+        else:
+            resolved_side_effect_level = "medium"
         self.spec = ToolSpec(
             name=name,
             description=description,
@@ -270,6 +293,9 @@ class Tool(ABC):
             demand_skill_name=demand_skill_name,
             tags=list(tags or []),
             risk_categories=list(risk_categories or []),
+            side_effect_level=resolved_side_effect_level,
+            resource_scope=list(resource_scope or []),
+            visibility_scope=visibility_scope,
             metadata=dict(metadata or {}),
         )
         self.name = self.spec.name
@@ -318,6 +344,9 @@ class Tool(ABC):
             demand_skill_name=self.spec.demand_skill_name,
             tags=list(self.spec.tags),
             risk_categories=list(self.spec.risk_categories),
+            side_effect_level=self.spec.side_effect_level,
+            resource_scope=list(self.spec.resource_scope),
+            visibility_scope=self.spec.visibility_scope,
             metadata=dict(self.spec.metadata),
         )
 

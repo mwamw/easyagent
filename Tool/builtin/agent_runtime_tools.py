@@ -139,6 +139,8 @@ class AgentGetTool(_AgentRuntimeToolBase):
             supports_parallel=True,
             source="builtin",
             tags=["agent", "runtime", "query"],
+            side_effect_level="none",
+            resource_scope=["runtime", "task"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -179,6 +181,8 @@ class AgentListTool(_AgentRuntimeToolBase):
             supports_parallel=True,
             source="builtin",
             tags=["agent", "runtime", "query"],
+            side_effect_level="none",
+            resource_scope=["runtime", "task"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -232,6 +236,8 @@ class AgentWaitTool(_AgentRuntimeToolBase):
             supports_parallel=False,
             source="builtin",
             tags=["agent", "runtime", "wait"],
+            side_effect_level="none",
+            resource_scope=["runtime", "task"],
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -286,6 +292,8 @@ class AgentStopTool(_AgentRuntimeToolBase):
             source="builtin",
             tags=["agent", "runtime", "control"],
             risk_categories=["side_effect"],
+            side_effect_level="medium",
+            resource_scope=["runtime", "task"],
         )
 
     def run(self, parameters: dict) -> ToolResult:

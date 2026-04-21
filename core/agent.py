@@ -22,6 +22,8 @@ from context.manager import ContextManager
 from context.source.base import BaseContextSource
 from context.token.counter import TokenCounter
 from .callbacks import CallbackManager
+from .guardrails import build_default_hook_manager
+from .hooks import HookManager
 from .permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
 from .session import SessionRestoreReport
 from skill.manager import SkillManager
@@ -30,7 +32,7 @@ import json
 import asyncio
 import threading
 import concurrent.futures
-from Tool.BaseTool import Tool, ToolResult
+from Tool.BaseTool import Tool, ToolResult, ToolSpec
 from .Exception import *
 import logging
 
@@ -128,6 +130,7 @@ class BaseAgent(ABC):
         reasoning: Optional[dict[str, Any]] = None,
         permission_engine: Optional["PermissionEngine"] = None,
         permission_context: Optional["PermissionContext"] = None,
+        hook_manager: Optional["HookManager"] = None,
         task_service: Optional[Any] = None,
         agent_runtime: Optional[Any] = None,
         team_manager: Optional[Any] = None,
@@ -157,6 +160,7 @@ class BaseAgent(ABC):
         
         # 回调系统
         self.callback_manager = callback_manager or CallbackManager()
+        self.hook_manager = hook_manager or build_default_hook_manager()
         
         # 工具系统
         if enable_tool and not tool_registry:
@@ -424,6 +428,234 @@ class BaseAgent(ABC):
         if candidates:
             return candidates[0]
         return None
+
+    @staticmethod
+    def _find_codeintel_managers(tool_registry: Optional["ToolRegistry"]) -> list[Any]:
+        if tool_registry is None:
+            return []
+        managers: list[Any] = []
+        seen: set[int] = set()
+        for tool_name in (
+            "CodeIntelStatus",
+            "FindDefinition",
+            "FindReferences",
+            "GetDocumentSymbols",
+            "GetWorkspaceSymbols",
+            "GetDiagnostics",
+        ):
+            tool = tool_registry.get_tool(tool_name)
+            manager = getattr(tool, "codeintel_manager", None) if tool is not None else None
+            if manager is None:
+                continue
+            marker = id(manager)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            managers.append(manager)
+        return managers
+
+    def _run_before_llm_request(
+        self,
+        messages: Any,
+        *,
+        request_kind: str,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        stream: bool = False,
+        tools_enabled: bool = False,
+        kwargs: Optional[dict[str, Any]] = None,
+    ) -> tuple[Any, Optional[float], Optional[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+        payload = {
+            "agent": self,
+            "messages": messages,
+            "request_kind": request_kind,
+            "temperature": temperature,
+            "reasoning": reasoning,
+            "stream": stream,
+            "tools_enabled": tools_enabled,
+            "provider_name": getattr(self.llm, "provider_name", None),
+            "kwargs": dict(kwargs or {}),
+        }
+        outcome = self.hook_manager.before_llm_request(payload)
+        if outcome.blocked:
+            raise LLMInvokeError(outcome.message or "LLM 请求被 hook 阻断。")
+        updated = outcome.payload
+        return (
+            updated.get("messages", messages),
+            updated.get("temperature", temperature),
+            updated.get("reasoning", reasoning),
+            dict(updated.get("kwargs") or {}),
+            outcome.audit,
+        )
+
+    def _run_after_llm_response(
+        self,
+        response: Any,
+        *,
+        messages: Any,
+        request_kind: str,
+        stream: bool,
+        tools_enabled: bool,
+        hook_audit: Optional[list[dict[str, Any]]] = None,
+    ) -> Any:
+        payload = {
+            "agent": self,
+            "messages": messages,
+            "request_kind": request_kind,
+            "stream": stream,
+            "tools_enabled": tools_enabled,
+            "provider_name": getattr(self.llm, "provider_name", None),
+            "response": response,
+            "hook_audit": list(hook_audit or []),
+        }
+        outcome = self.hook_manager.after_llm_response(payload)
+        if outcome.blocked:
+            raise LLMInvokeError(outcome.message or "LLM 响应被 hook 阻断。")
+        return outcome.payload.get("response", response)
+
+    def _run_before_tool_use(
+        self,
+        tool_name: str,
+        tool_args: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], ToolSpec | None]:
+        tool_spec = self.tool_registry.get_tool_spec(tool_name) if self.tool_registry is not None else None
+        payload = {
+            "agent": self,
+            "tool_name": tool_name,
+            "tool_args": dict(tool_args or {}),
+            "tool_spec": tool_spec,
+            "execution_context": self.execution_context,
+            "permission_mode": getattr(self.permission_context.mode, "value", self.permission_context.mode),
+        }
+        outcome = self.hook_manager.before_tool_use(payload)
+        if outcome.blocked:
+            blocked_result = ToolResult.error(
+                outcome.message or f"工具 '{tool_name}' 被 hook 阻断。",
+                error_type=outcome.error_type,
+                metadata={
+                    "tool_name": tool_name,
+                    "tool_args": dict(tool_args or {}),
+                    "hook_audit": outcome.audit,
+                },
+            )
+            raise HookExecutionError(
+                blocked_result.content,
+                stage="before_tool_use",
+                error_type=blocked_result.error_type or "hook_blocked",
+                metadata=blocked_result.metadata,
+            )
+        updated = outcome.payload
+        return dict(updated.get("tool_args") or tool_args), outcome.audit, updated.get("tool_spec", tool_spec)
+
+    def _run_after_tool_use(
+        self,
+        tool_name: str,
+        tool_args: dict[str, Any],
+        result: ToolResult,
+        *,
+        tool_spec: ToolSpec | None = None,
+        hook_audit: Optional[list[dict[str, Any]]] = None,
+    ) -> ToolResult:
+        payload = {
+            "agent": self,
+            "tool_name": tool_name,
+            "tool_args": dict(tool_args or {}),
+            "tool_spec": tool_spec,
+            "tool_result": result,
+            "execution_context": self.execution_context,
+            "hook_audit": list(hook_audit or []),
+        }
+        outcome = self.hook_manager.after_tool_use(payload)
+        if outcome.blocked:
+            blocked_result = ToolResult.error(
+                outcome.message or f"工具 '{tool_name}' 的结果被 hook 阻断。",
+                error_type=outcome.error_type,
+                metadata={
+                    "tool_name": tool_name,
+                    "tool_args": dict(tool_args or {}),
+                    "hook_audit": [*(hook_audit or []), *outcome.audit],
+                },
+            )
+            return blocked_result
+        updated_result = outcome.payload.get("tool_result", result)
+        if not isinstance(updated_result, ToolResult):
+            raise ToolExecutionError(
+                f"after_tool_use hook 必须返回 ToolResult，实际收到: {type(updated_result).__name__}"
+            )
+        merged_audit = [*(hook_audit or []), *outcome.audit]
+        if merged_audit:
+            updated_result.metadata = dict(updated_result.metadata)
+            updated_result.metadata.setdefault("hook_audit", []).extend(merged_audit)
+        return updated_result
+
+    def _run_before_compaction(
+        self,
+        *,
+        operation: str,
+        max_tokens: Optional[int],
+        force: bool = False,
+    ) -> Optional[int]:
+        payload = {
+            "agent": self,
+            "operation": operation,
+            "max_tokens": max_tokens,
+            "force": force,
+            "provider_name": getattr(self.llm, "provider_name", None),
+            "history": list(self._history),
+            "replay_history": list(self.replay_history),
+            "pending_step_state": self.get_pending_step_state(),
+        }
+        outcome = self.hook_manager.before_compaction(payload)
+        if outcome.blocked:
+            self._last_history_compaction = {
+                "was_compacted": False,
+                "compaction_possible": True,
+                "budget": max_tokens,
+                "hook_blocked": True,
+                "hook_message": outcome.message,
+                "hook_audit": outcome.audit,
+                "tracked_at": datetime.now().isoformat(),
+            }
+            return None
+        updated = outcome.payload
+        return updated.get("max_tokens", max_tokens)
+
+    def _run_after_session_restore_hook(
+        self,
+        *,
+        session_id: str,
+        restore_report: SessionRestoreReport,
+        snapshot: dict[str, Any],
+    ) -> SessionRestoreReport:
+        payload = {
+            "agent": self,
+            "session_id": session_id,
+            "restore_report": restore_report,
+            "snapshot": snapshot,
+        }
+        outcome = self.hook_manager.after_session_restore(payload)
+        if outcome.blocked:
+            restore_report.add_issue(
+                component="hooks",
+                code="after_session_restore_blocked",
+                message=outcome.message or "after_session_restore hook 阻断了恢复后处理。",
+                metadata={"hook_audit": outcome.audit},
+            )
+            return restore_report
+        updated_report = outcome.payload.get("restore_report", restore_report)
+        if not isinstance(updated_report, SessionRestoreReport):
+            raise SessionSerializationError(
+                f"after_session_restore hook 必须返回 SessionRestoreReport，实际收到: {type(updated_report).__name__}"
+            )
+        if outcome.audit:
+            updated_report.extend_component(
+                "hooks",
+                {
+                    "status": "applied",
+                    "appliedHooks": outcome.audit,
+                },
+            )
+        return updated_report
 
     def _build_mailbox_prompt(self) -> str:
         agent_runtime = getattr(self, "agent_runtime", None)
@@ -695,6 +927,7 @@ class BaseAgent(ABC):
             "assistant_replay": list(assistant_replay or []),
             "tool_results_canonical": [],
             "tool_results_replay": [],
+            "tool_ephemeral_contexts": [],
             "tool_calls": _json_safe(tool_calls or []),
             "round_number": round_number,
             "provider_name": getattr(self.llm, "provider_name", None),
@@ -705,11 +938,22 @@ class BaseAgent(ABC):
         *,
         tool_canonical: list[Any],
         tool_replay: list[Any],
+        ephemeral_context: Any = None,
+        tool_name: Optional[str] = None,
     ) -> None:
         if self._pending_step_state is None:
             return
         self._pending_step_state["tool_results_canonical"].extend(list(tool_canonical or []))
         self._pending_step_state["tool_results_replay"].extend(list(tool_replay or []))
+        if ephemeral_context is not None:
+            self._pending_step_state["tool_ephemeral_contexts"].append(
+                _json_safe(
+                    {
+                        "tool_name": tool_name,
+                        "context": ephemeral_context,
+                    }
+                )
+            )
 
     def _commit_pending_step_state(self) -> bool:
         if not self._pending_step_state:
@@ -978,6 +1222,13 @@ class BaseAgent(ABC):
         budget = self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        budget = self._run_before_compaction(
+            operation="compact_persistent_history_if_needed",
+            max_tokens=budget,
+            force=False,
+        )
+        if budget is None or budget <= 0:
+            return False
         result = self.context_manager.compact_persistent_history(
             self._history,
             self.replay_history,
@@ -994,6 +1245,13 @@ class BaseAgent(ABC):
         if self.context_manager is None or not self._history:
             return False
         budget = self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return False
+        budget = self._run_before_compaction(
+            operation="acompact_persistent_history_if_needed",
+            max_tokens=budget,
+            force=False,
+        )
         if budget is None or budget <= 0:
             return False
         result = await self.context_manager.acompact_persistent_history(
@@ -1014,6 +1272,13 @@ class BaseAgent(ABC):
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        budget = self._run_before_compaction(
+            operation="compact_history",
+            max_tokens=budget,
+            force=True,
+        )
+        if budget is None or budget <= 0:
+            return False
         result = self.context_manager.compact_persistent_history(
             self._history,
             self.replay_history,
@@ -1031,6 +1296,13 @@ class BaseAgent(ABC):
         if self.context_manager is None or not self._history:
             return False
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
+        if budget is None or budget <= 0:
+            return False
+        budget = self._run_before_compaction(
+            operation="acompact_history",
+            max_tokens=budget,
+            force=True,
+        )
         if budget is None or budget <= 0:
             return False
         result = await self.context_manager.acompact_persistent_history(
@@ -1718,6 +1990,7 @@ class BaseAgent(ABC):
         skill_manager: Optional["SkillManager"] = None,
         permission_engine: Optional["PermissionEngine"] = None,
         permission_context: Optional["PermissionContext"] = None,
+        hook_manager: Optional["HookManager"] = None,
         task_service: Optional[Any] = None,
     ) -> dict[str, Any]:
         config_data = snapshot.get("config") or {}
@@ -1739,6 +2012,7 @@ class BaseAgent(ABC):
             "skill_manager": skill_manager,
             "permission_engine": permission_engine,
             "permission_context": permission_context,
+            "hook_manager": hook_manager,
             "task_service": task_service,
         }
 
@@ -1754,6 +2028,7 @@ class BaseAgent(ABC):
         skill_manager: Optional["SkillManager"] = None,
         permission_engine: Optional["PermissionEngine"] = None,
         permission_context: Optional["PermissionContext"] = None,
+        hook_manager: Optional["HookManager"] = None,
         task_service: Optional[Any] = None,
     ) -> dict[str, Any]:
         return cls._build_base_constructor_kwargs(
@@ -1766,6 +2041,7 @@ class BaseAgent(ABC):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
         )
 
@@ -1876,6 +2152,7 @@ class BaseAgent(ABC):
         skill_manager: Optional["SkillManager"] = None,
         permission_engine: Optional["PermissionEngine"] = None,
         permission_context: Optional["PermissionContext"] = None,
+        hook_manager: Optional["HookManager"] = None,
         task_service: Optional[Any] = None,
     ) -> "BaseAgent":
         if not session_id or not isinstance(session_id, str):
@@ -1935,6 +2212,7 @@ class BaseAgent(ABC):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
         )
         agent = target_cls(**init_kwargs)
@@ -1982,6 +2260,11 @@ class BaseAgent(ABC):
                 message="会话原本启用了工具，但恢复时未注入 ToolRegistry，已降级为无工具模式。",
             )
 
+        restore_report = agent._run_after_session_restore_hook(
+            session_id=session_id,
+            restore_report=restore_report,
+            snapshot=snapshot,
+        )
         agent.last_restore_report = restore_report
 
         logger.info("会话已恢复: %s", session_id)
@@ -2100,6 +2383,33 @@ class BaseAgent(ABC):
                             "metadata": {},
                             "issues": [issue],
                         }
+
+        codeintel_managers = self._find_codeintel_managers(self.tool_registry)
+        if codeintel_managers:
+            codeintel_component = {
+                "status": "closed",
+                "metadata": {"managerCount": len(codeintel_managers)},
+                "issues": [],
+            }
+            for manager in codeintel_managers:
+                close_fn = getattr(manager, "close", None)
+                if not callable(close_fn):
+                    continue
+                try:
+                    close_fn()
+                except Exception as exc:
+                    codeintel_component["status"] = "degraded"
+                    codeintel_component["issues"].append(
+                        {
+                            "component": "codeintel",
+                            "code": "codeintel_close_failed",
+                            "message": f"关闭 codeintel manager 失败: {exc}",
+                            "severity": "warning",
+                        }
+                    )
+                    if report["status"] == "closed":
+                        report["status"] = "degraded"
+            report["components"]["codeintel"] = codeintel_component
 
         if close_llm and self.llm is not None:
             llm_close = getattr(self.llm, "close", None)
@@ -2399,15 +2709,34 @@ class BaseAgent(ABC):
         """
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
-        
-        self.callback_manager.on_tool_start(tool_name, tool_args)
-        
+
+        try:
+            effective_args, before_audit, tool_spec = self._run_before_tool_use(tool_name, tool_args)
+        except HookExecutionError as exc:
+            metadata = dict(exc.metadata)
+            blocked_result = ToolResult.error(
+                str(exc),
+                error_type=exc.error_type,
+                metadata=metadata,
+            )
+            self.callback_manager.on_tool_end(tool_name, "", success=False, error=exc)
+            return blocked_result
+
+        self.callback_manager.on_tool_start(tool_name, effective_args)
+
         try:
             result = self.tool_registry.execute_tool_result(
                 tool_name,
-                tool_args,
+                effective_args,
                 permission_context=self.permission_context,
                 permission_engine=self.permission_engine,
+            )
+            result = self._run_after_tool_use(
+                tool_name,
+                effective_args,
+                result,
+                tool_spec=tool_spec,
+                hook_audit=before_audit,
             )
             display_result = result.to_display_string()
             success = result.status == "success"
@@ -2435,9 +2764,21 @@ class BaseAgent(ABC):
         """
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
-        
-        self.callback_manager.on_tool_start(tool_name, tool_args)
-        
+
+        try:
+            effective_args, before_audit, tool_spec = self._run_before_tool_use(tool_name, tool_args)
+        except HookExecutionError as exc:
+            metadata = dict(exc.metadata)
+            blocked_result = ToolResult.error(
+                str(exc),
+                error_type=exc.error_type,
+                metadata=metadata,
+            )
+            self.callback_manager.on_tool_end(tool_name, "", success=False, error=exc)
+            return blocked_result
+
+        self.callback_manager.on_tool_start(tool_name, effective_args)
+
         try:
             loop = asyncio.get_running_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -2446,11 +2787,18 @@ class BaseAgent(ABC):
                     partial(
                         self.tool_registry.execute_tool_result,
                         tool_name,
-                        tool_args,
+                        effective_args,
                         permission_context=self.permission_context,
                         permission_engine=self.permission_engine,
                     ),
                 )
+            result = self._run_after_tool_use(
+                tool_name,
+                effective_args,
+                result,
+                tool_spec=tool_spec,
+                hook_audit=before_audit,
+            )
             display_result = result.to_display_string()
             success = result.status == "success"
             self.callback_manager.on_tool_end(

@@ -116,6 +116,10 @@ class BaseTraceRecorder(ABC):
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
         success: Optional[bool] = None,
+        structured_data: Any = None,
+        ephemeral_context: Any = None,
+        result_metadata: Any = None,
+        status: Optional[str] = None,
     ) -> str:
         pass
 
@@ -358,6 +362,10 @@ class InMemoryTraceRecorder(BaseTraceRecorder):
         mode: Optional[str] = None,
         stream: Optional[bool] = None,
         success: Optional[bool] = None,
+        structured_data: Any = None,
+        ephemeral_context: Any = None,
+        result_metadata: Any = None,
+        status: Optional[str] = None,
     ) -> str:
         event = self.record_event(
             "tool_result",
@@ -369,10 +377,14 @@ class InMemoryTraceRecorder(BaseTraceRecorder):
             tool_name=tool_name,
             tool_args=tool_args,
             tool_call_id=tool_id,
+            structured_data=structured_data,
+            ephemeral_context=ephemeral_context,
+            result_metadata=result_metadata,
             metadata={
                 "mode": mode,
                 "stream": stream,
                 "success": success,
+                "status": status,
             },
         )
         return str(event["id"])

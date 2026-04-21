@@ -10,23 +10,38 @@ from core.permissions import PermissionBehavior, PermissionContext, PermissionEn
 
 
 ToolVisibility = Literal["resident", "runtime", "turn"]
-from core.Exception import ToolNotFoundError
+ToolConflictPolicy = Literal["replace", "error", "keep_existing"]
+from core.Exception import ToolNotFoundError, ToolRegistryError
 class ToolRegistry:
-    def __init__(self):
+    def __init__(self, *, conflict_policy: ToolConflictPolicy = "replace"):
         self.tools: dict[str, Tool] = {}
         self._tool_visibility: dict[str, ToolVisibility] = {}
+        self.conflict_policy: ToolConflictPolicy = conflict_policy
 
-    def register_tool(self, tool: Tool, *, visibility: ToolVisibility = "resident"):
+    def register_tool(
+        self,
+        tool: Tool,
+        *,
+        visibility: ToolVisibility = "resident",
+        conflict_policy: ToolConflictPolicy | None = None,
+    ):
+        policy = conflict_policy or self.conflict_policy
+        existing = self.tools.get(tool.name)
+        if existing is not None:
+            if policy == "keep_existing":
+                return existing
+            if policy == "error":
+                raise ToolRegistryError(f"Tool '{tool.name}' 已存在，当前冲突策略禁止覆盖。")
         self.tools[tool.name] = tool
         self._tool_visibility[tool.name] = visibility
+        tool.spec.visibility_scope = visibility
+        return tool
 
     def mount_runtime_tool(self, tool: Tool):
-        self.register_tool(tool, visibility="runtime")
-        return tool
+        return self.register_tool(tool, visibility="runtime")
 
     def mount_turn_tool(self, tool: Tool):
-        self.register_tool(tool, visibility="turn")
-        return tool
+        return self.register_tool(tool, visibility="turn")
 
     def clear_runtime_tools(self) -> None:
         names = [
@@ -202,6 +217,9 @@ class ToolRegistry:
         metadata.setdefault("tool_name", tool.name)
         metadata.setdefault("tool_visibility", self.get_tool_visibility(tool.name))
         metadata.setdefault("tool_source", spec.source)
+        metadata.setdefault("side_effect_level", spec.side_effect_level)
+        metadata.setdefault("resource_scope", list(spec.resource_scope))
+        metadata.setdefault("visibility_scope", spec.visibility_scope)
         if spec.risk_categories:
             metadata.setdefault("risk_categories", list(spec.risk_categories))
         if spec.demand_skill_tool:

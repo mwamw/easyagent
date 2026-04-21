@@ -271,6 +271,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：让框架具备真正可用的 code agent 语义层。
 
+当前状态：`codeintel/`、LSP stdio provider、`CodeIntelStatus / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics` 已落地，说明见 `docs/phased_codeintel_lsp_v1.md`；后续还可以继续补离线索引层和更强的跨语言优化。
+
 - 落地 `codeintel/`，先以 LSP 为主，实现 definition、references、document/workspace symbols、diagnostics
 - 增加 `CodeIntelProvider` 抽象，避免直接把 LSP 细节压进工具层
 - 新增 codeintel 工具，但结果统一进入 context pipeline，而不是直接拼成 prompt 文本
@@ -294,7 +296,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：把框架从“能运行”升级到“能长期运行和恢复”。
 
-当前状态：`SessionRestoreReport`、runtime/worktree restore report 与 `BaseAgent.close()` 生命周期收口已完成，说明见 `docs/phasec_restore_report_lifecycle.md`；`hooks / guardrails / trace 关联键 / observability` 仍待后续实现。
+当前状态：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口，以及 `core/hooks/` / `core/guardrails/` 已落地，说明见 `docs/phasec_restore_report_lifecycle.md` 与 `docs/phasee_hooks_guardrails_tool_protocol_v2.md`；更完整的 observability、trace 聚合和 benchmark 仍待后续实现。
 
 - 落地 `core/hooks/` 与 `core/guardrails/`，让内容级策略与规则级权限分层协作
 - session、compaction、interruption 恢复协议升级，覆盖 tool interruption、runtime mounts、missing tools、provider drift
@@ -317,6 +319,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 ### Phase 6: Tool Protocol + MCP Engineering
 
 目标：完成扩展协议的最终版，保证框架具备长期可扩展性。
+
+当前状态：Tool Protocol v2 核心字段、registry 冲突策略和 `ephemeral_context` 的 trace/restore 接线已落地，说明见 `docs/phasee_hooks_guardrails_tool_protocol_v2.md`；MCP engineering 仍是下一阶段主任务。
 
 - Tool 协议补齐 `side_effect_level`、`resource_scope`、`visibility_scope`、生命周期分层、同名冲突策略
 - 引入 schema adapter，统一导出 OpenAI、Anthropic、Google、MCP 所需 schema

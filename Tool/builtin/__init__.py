@@ -55,6 +55,15 @@ from .worktree_tools import (
     register_exit_worktree_tool,
     register_worktree_tools,
 )
+from .codeintel_tools import (
+    CodeIntelStatusTool,
+    FindDefinitionTool,
+    FindReferencesTool,
+    GetDiagnosticsTool,
+    GetDocumentSymbolsTool,
+    GetWorkspaceSymbolsTool,
+    register_codeintel_tools,
+)
 from .mcp_tool import (
     MCPToolManager,
     MCPWrappedTool,
@@ -102,6 +111,12 @@ __all__ = [
     "ConfigTool",
     "EnterWorktreeTool",
     "ExitWorktreeTool",
+    "CodeIntelStatusTool",
+    "FindDefinitionTool",
+    "FindReferencesTool",
+    "GetDocumentSymbolsTool",
+    "GetWorkspaceSymbolsTool",
+    "GetDiagnosticsTool",
     "register_search_tool",
     "register_calculator_tool",
     "register_file_read_tool",
@@ -131,6 +146,7 @@ __all__ = [
     "register_enter_worktree_tool",
     "register_exit_worktree_tool",
     "register_worktree_tools",
+    "register_codeintel_tools",
     "MCPToolManager",
     "MCPWrappedTool",
     "MCPListResourcesTool",

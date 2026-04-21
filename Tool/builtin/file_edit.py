@@ -14,9 +14,29 @@ from .file_write import _WorkspaceWriteTool
 
 
 FILE_EDIT_PROMPT = """用于对已有文件做精确文本替换。
-- `old_string` 必须能在目标文件中命中。
-- 默认要求唯一命中；若有多处相同文本，需显式设置 `replace_all=true`。
-- 当你已知完整文件内容时，优先使用 `FileWrite`。"""
+
+核心原则：
+- 这是“精确编辑工具”，不是模糊编辑器。
+- `old_string` 必须与目标文件中的现有文本真实匹配。
+- 默认要求唯一命中；若有多处相同文本，必须显式设置 `replace_all=true`。
+
+何时使用：
+- 你已经知道要替换的原文和新文本，且只想改局部。
+- 你希望尽量减少 diff，只动必要行。
+
+何时不要用：
+- 还不确定原始文本是否真实存在时，不要直接调用；先 `FileRead`。
+- 需要重写整个文件结构时，优先用 `FileWrite`。
+- 想做基于语义的复杂重构时，不要把一个模糊想法硬塞成 `old_string`。
+
+失败语义：
+- `no_match`：`old_string` 没命中。
+- `non_unique_match`：命中多处但未设置 `replace_all=true`。
+- `stale_file` / `read_required`：文件已变化或未读取过，需先重新 `FileRead`。
+
+最佳实践：
+- `old_string` 尽量包含足够上下文，避免多处重复命中。
+- 先小步精确改，再运行测试或 diagnostics 验证，而不是一次拼很多大替换。"""
 
 MAX_EDIT_FILE_SIZE = 2 * 1024 * 1024
 SMART_QUOTE_TRANSLATION = str.maketrans({

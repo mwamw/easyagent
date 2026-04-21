@@ -1,6 +1,12 @@
 # Tool module for EasyAgent
-from .BaseTool import Tool, ToolResult, ToolSpec
-from .ToolRegistry import ToolRegistry
+from .BaseTool import (
+    Tool,
+    ToolResult,
+    ToolSideEffectLevel,
+    ToolSpec,
+    ToolVisibilityScope,
+)
+from .ToolRegistry import ToolConflictPolicy, ToolRegistry
 from .claude_compat import (
     CLAUDE_TOOL_MODELS,
     CLAUDE_TOOL_ORDER,
@@ -67,6 +73,12 @@ from .builtin import (
     ConfigTool,
     EnterWorktreeTool,
     ExitWorktreeTool,
+    CodeIntelStatusTool,
+    FindDefinitionTool,
+    FindReferencesTool,
+    GetDocumentSymbolsTool,
+    GetWorkspaceSymbolsTool,
+    GetDiagnosticsTool,
     register_search_tool,
     register_calculator_tool,
     register_file_read_tool,
@@ -95,6 +107,7 @@ from .builtin import (
     register_enter_worktree_tool,
     register_exit_worktree_tool,
     register_worktree_tools,
+    register_codeintel_tools,
     MCPToolManager,
     MCPWrappedTool,
     MCPListResourcesTool,
@@ -111,7 +124,10 @@ __all__ = [
     "Tool",
     "ToolSpec",
     "ToolResult",
+    "ToolSideEffectLevel",
+    "ToolVisibilityScope",
     "ToolRegistry",
+    "ToolConflictPolicy",
     "ClaudeCompatTool",
     "ClaudeCompatDelegatingTool",
     "ClaudeToolDefinition",
@@ -173,6 +189,12 @@ __all__ = [
     "ConfigTool",
     "EnterWorktreeTool",
     "ExitWorktreeTool",
+    "CodeIntelStatusTool",
+    "FindDefinitionTool",
+    "FindReferencesTool",
+    "GetDocumentSymbolsTool",
+    "GetWorkspaceSymbolsTool",
+    "GetDiagnosticsTool",
     "register_search_tool",
     "register_calculator_tool",
     "register_file_read_tool",
@@ -201,6 +223,7 @@ __all__ = [
     "register_enter_worktree_tool",
     "register_exit_worktree_tool",
     "register_worktree_tools",
+    "register_codeintel_tools",
     "MCPClient",
     "MCPHub",
     "MCPToolManager",

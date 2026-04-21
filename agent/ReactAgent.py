@@ -79,6 +79,7 @@ class ReactAgent(BasicAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service=None,
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
@@ -118,6 +119,7 @@ class ReactAgent(BasicAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
@@ -159,6 +161,7 @@ class ReactAgent(BasicAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service=None,
     ) -> dict[str, Any]:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
@@ -171,6 +174,7 @@ class ReactAgent(BasicAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
         )
         state = snapshot.get("state") or {}

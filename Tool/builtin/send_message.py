@@ -68,6 +68,8 @@ class SendMessageTool(Tool):
             source="builtin",
             tags=["agent", "team", "collaboration"],
             risk_categories=["side_effect"],
+            side_effect_level="medium",
+            resource_scope=["runtime", "mailbox", "task"],
         )
 
     def run(self, parameters: dict) -> ToolResult:

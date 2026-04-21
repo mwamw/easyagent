@@ -15,10 +15,30 @@ from ..runtime import BackgroundTaskSnapshot, FilesystemAccessError, FilesystemG
 
 DEFAULT_BASH_OUTPUT_CHARS = 120000
 
-BASH_TOOL_PROMPT = """用于执行本地 shell 命令。
-- 优先用于测试、构建、格式化、搜索日志、git 查询等本地开发任务。
-- 长时间运行的命令请设置 `run_in_background=true`，然后用 `TaskOutput` 轮询输出。
-- 命令会在当前工作目录执行；如果命令有副作用，请确保目标文件已经读取并理解。"""
+BASH_TOOL_PROMPT = """用于执行本地 shell 命令，是 code agent 的高风险执行面之一。
+
+适用场景：
+- 运行测试、构建、格式化、lint、git 查询、日志排查、包管理脚本。
+- 做“仓库真实状态验证”，例如确认测试是否通过、确认某个命令输出、确认生成产物。
+
+调用前要求：
+- 先明确目标是什么，再执行最小必要命令，不要把多步探索揉成一个超长命令。
+- 如果命令会修改文件、安装依赖、删除内容或启动长期进程，必须清楚副作用边界。
+- 需要读取某个文件后再改动时，应先读文件或用更精确的文件工具，而不是直接靠 shell 粗暴修改。
+
+后台任务：
+- 长时间运行的命令请设置 `run_in_background=true`。
+- 后台启动后，使用 `TaskOutput` 轮询 stdout/stderr，再视情况用 `TaskStop` 停止。
+- 不要假设后台任务已经成功完成；必须看输出或退出码。
+
+输出解读：
+- 返回里会包含 `task_id`、`status`、`return_code`、`stdout`、`stderr` 等结构化字段。
+- 如果输出被截断，要根据 `truncated` 字段决定是否继续轮询或缩小命令范围。
+
+安全边界：
+- 命令会在当前工作目录执行。
+- 极度危险的命令会被 guardrail 阻断。
+- 这不是默认首选的文本编辑工具；精确改文件优先用 `FileEdit` / `FileWrite`。"""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -106,6 +126,7 @@ class _ShellToolBase(Tool):
         destructive: bool = True,
         supports_parallel: bool = True,
         tags: Optional[list[str]] = None,
+        resource_scope: Optional[list[str]] = None,
     ):
         self.workspace_root = _normalize_workspace_root(workspace_root)
         self.guard = FilesystemGuard(self.workspace_root, allowed_roots=allowed_roots)
@@ -124,6 +145,8 @@ class _ShellToolBase(Tool):
             supports_parallel=supports_parallel,
             source="builtin",
             tags=list(tags or []),
+            side_effect_level="high" if destructive else ("none" if read_only else "medium"),
+            resource_scope=list(resource_scope or ["process", "filesystem", "workspace"]),
         )
 
     def _tool_error(
@@ -175,6 +198,7 @@ class BashTool(_ShellToolBase):
             destructive=True,
             supports_parallel=False,
             tags=["shell", "local", "claude_code"],
+            resource_scope=["process", "filesystem", "workspace"],
         )
 
     def run(self, parameters: dict) -> ToolResult:

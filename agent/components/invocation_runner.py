@@ -134,16 +134,33 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             messages = agent._build_start_messages(query, include_query=False)
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
 
+            messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                messages,
+                request_kind="plain_invoke",
+                temperature=temperature,
+                reasoning=agent.reasoning,
+                stream=False,
+                tools_enabled=False,
+                kwargs=kwargs,
+            )
             agent.callback_manager.on_llm_start(messages)
             response_obj = agent.llm.invoke_raw(
                 messages,
-                temperature=temperature,
-                reasoning=agent.reasoning,
-                **kwargs,
+                temperature=request_temperature,
+                reasoning=request_reasoning,
+                **llm_kwargs,
+            )
+            response_obj = agent._run_after_llm_response(
+                response_obj,
+                messages=messages,
+                request_kind="plain_invoke",
+                stream=False,
+                tools_enabled=False,
+                hook_audit=llm_hook_audit,
             )
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
-            agent.callback_manager.on_llm_end(provider_content or "")
+            agent.callback_manager.on_llm_end(response_obj)
             agent._raise_if_stop_requested()
 
             if response is None:
@@ -237,12 +254,21 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         display_state = agent._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
+            messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                messages,
+                request_kind="plain_stream_invoke",
+                temperature=temperature,
+                reasoning=agent.reasoning,
+                stream=True,
+                tools_enabled=False,
+                kwargs=kwargs,
+            )
             agent.callback_manager.on_llm_start(messages)
             for event in agent.llm.stream_events(
                 messages,
-                temperature=temperature,
-                reasoning=agent.reasoning,
-                **kwargs,
+                temperature=request_temperature,
+                reasoning=request_reasoning,
+                **llm_kwargs,
             ):
                 event_type = event.get("type")
                 if event_type == "thinking_delta":
@@ -258,7 +284,22 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                     final_content = event.get("content", "") or final_content
                     streamed_thinking = event.get("thinking", "") or streamed_thinking
             result = "".join(final_results) or final_content
-            agent.callback_manager.on_llm_end(result)
+            stream_response = agent._run_after_llm_response(
+                {
+                    "type": "final_response",
+                    "content": result,
+                    "thinking": streamed_thinking,
+                },
+                messages=messages,
+                request_kind="plain_stream_invoke",
+                stream=True,
+                tools_enabled=False,
+                hook_audit=llm_hook_audit,
+            )
+            if isinstance(stream_response, dict):
+                result = str(stream_response.get("content", result) or result)
+                streamed_thinking = str(stream_response.get("thinking", streamed_thinking) or streamed_thinking)
+            agent.callback_manager.on_llm_end(stream_response)
             result = agent.skill_manager.on_after_invoke(query, result)
             agent._append_assistant_message_history(
                 content=result,
@@ -396,16 +437,33 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             messages = agent._build_start_messages(query, include_query=False)
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
 
+            messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                messages,
+                request_kind="plain_ainvoke",
+                temperature=temperature,
+                reasoning=agent.reasoning,
+                stream=False,
+                tools_enabled=False,
+                kwargs=kwargs,
+            )
             agent.callback_manager.on_llm_start(messages)
             response_obj = await agent.llm.ainvoke_raw(
                 messages,
-                temperature=temperature,
-                reasoning=agent.reasoning,
-                **kwargs,
+                temperature=request_temperature,
+                reasoning=request_reasoning,
+                **llm_kwargs,
+            )
+            response_obj = agent._run_after_llm_response(
+                response_obj,
+                messages=messages,
+                request_kind="plain_ainvoke",
+                stream=False,
+                tools_enabled=False,
+                hook_audit=llm_hook_audit,
             )
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
-            agent.callback_manager.on_llm_end(provider_content or "")
+            agent.callback_manager.on_llm_end(response_obj)
             agent._raise_if_stop_requested()
 
             if response is None:
@@ -495,12 +553,21 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         display_state = agent._new_stream_display_state()
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
+            messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                messages,
+                request_kind="plain_astream_invoke",
+                temperature=temperature,
+                reasoning=agent.reasoning,
+                stream=True,
+                tools_enabled=False,
+                kwargs=kwargs,
+            )
             agent.callback_manager.on_llm_start(messages)
             async for event in agent.llm.astream_events(
                 messages,
-                temperature=temperature,
-                reasoning=agent.reasoning,
-                **kwargs,
+                temperature=request_temperature,
+                reasoning=request_reasoning,
+                **llm_kwargs,
             ):
                 event_type = event.get("type")
                 if event_type == "thinking_delta":
@@ -517,7 +584,22 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                     streamed_thinking = event.get("thinking", "") or streamed_thinking
 
             result = "".join(final_results) or final_content
-            agent.callback_manager.on_llm_end(result)
+            stream_response = agent._run_after_llm_response(
+                {
+                    "type": "final_response",
+                    "content": result,
+                    "thinking": streamed_thinking,
+                },
+                messages=messages,
+                request_kind="plain_astream_invoke",
+                stream=True,
+                tools_enabled=False,
+                hook_audit=llm_hook_audit,
+            )
+            if isinstance(stream_response, dict):
+                result = str(stream_response.get("content", result) or result)
+                streamed_thinking = str(stream_response.get("thinking", streamed_thinking) or streamed_thinking)
+            agent.callback_manager.on_llm_end(stream_response)
             result = agent.skill_manager.on_after_invoke(query, result)
             agent._append_assistant_message_history(
                 content=result,

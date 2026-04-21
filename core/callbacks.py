@@ -66,7 +66,7 @@ class BaseCallback(ABC):
         """
         pass
     
-    def on_llm_end(self, response: str , **kwargs) -> None:
+    def on_llm_end(self, response: dict[str,Any] | str , **kwargs) -> None:
         """
         LLM 调用结束时
         
@@ -401,7 +401,7 @@ class CallbackManager:
             except Exception as e:
                 logger.warning(f"回调执行失败: {e}")
     
-    def on_llm_end(self, response: str, **kwargs) -> None:
+    def on_llm_end(self, response: str | dict[str,Any], **kwargs) -> None:
         for cb in self.callbacks:
             try:
                 cb.on_llm_end(response, **kwargs)

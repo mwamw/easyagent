@@ -201,6 +201,8 @@ class AgentTool(Tool):
             supports_parallel=False,
             source="builtin",
             tags=["agent", "orchestration", "claude_code"],
+            side_effect_level="medium",
+            resource_scope=["runtime", "workspace", "task"],
         )
 
     def _maybe_create_worktree_manager(self, parent_agent: Any | None) -> Optional[WorktreeManager]:

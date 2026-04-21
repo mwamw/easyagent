@@ -77,6 +77,7 @@ class ConversationalAgent(BasicAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service: Optional[Any] = None,
         verbose_thinking: bool = False,
         trace_recorder: Optional["BaseTraceRecorder"] = None,
@@ -117,6 +118,7 @@ class ConversationalAgent(BasicAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
             verbose_thinking=verbose_thinking,
             trace_recorder=trace_recorder,
@@ -148,6 +150,7 @@ class ConversationalAgent(BasicAgent):
         skill_manager=None,
         permission_engine=None,
         permission_context=None,
+        hook_manager=None,
         task_service: Optional[Any] = None,
     ) -> dict:
         kwargs = super()._build_constructor_kwargs_from_snapshot(
@@ -160,6 +163,7 @@ class ConversationalAgent(BasicAgent):
             skill_manager=skill_manager,
             permission_engine=permission_engine,
             permission_context=permission_context,
+            hook_manager=hook_manager,
             task_service=task_service,
         )
         state = snapshot.get("state") or {}

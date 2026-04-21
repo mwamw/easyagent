@@ -169,15 +169,32 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             extra_replay_entries=ephemeral_replay,
                         )
                         needs_rebuild = False
+                    messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                        messages,
+                        request_kind="tool_invoke",
+                        temperature=temperature,
+                        reasoning=agent.reasoning,
+                        stream=False,
+                        tools_enabled=True,
+                        kwargs=kwargs,
+                    )
                     agent.callback_manager.on_llm_start(messages)
                     response = agent.llm.invoke_with_tools(
                         messages,
                         agent.get_provider_tools(),
-                        temperature=temperature,
-                        reasoning=agent.reasoning,
-                        **kwargs,
+                        temperature=request_temperature,
+                        reasoning=request_reasoning,
+                        **llm_kwargs,
                     )
-                    agent.callback_manager.on_llm_end(getattr(response, "content", "") or "")
+                    response = agent._run_after_llm_response(
+                        response,
+                        messages=messages,
+                        request_kind="tool_invoke",
+                        stream=False,
+                        tools_enabled=True,
+                        hook_audit=llm_hook_audit,
+                    )
+                    agent.callback_manager.on_llm_end(response)
                     agent._raise_if_stop_requested()
 
                     if response is None:
@@ -295,10 +312,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 mode="tool",
                                 stream=False,
                                 success=tool_result_obj.status == "success",
+                                tool_result_obj=tool_result_obj,
                             )
                             agent._append_pending_tool_result(
                                 tool_canonical=tool_canonical,
                                 tool_replay=tool_replay,
+                                ephemeral_context=tool_result_obj.ephemeral_context,
+                                tool_name=tool_name,
                             )
                             messages.extend_replay(tool_replay)
                             self._inject_tool_ephemeral_context(
@@ -334,6 +354,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             agent._append_pending_tool_result(
                                 tool_canonical=tool_canonical,
                                 tool_replay=tool_replay,
+                                tool_name=tool_name,
                             )
                             messages.extend_replay(tool_replay)
                         except ToolInterruption as e:
@@ -358,6 +379,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             agent._append_pending_tool_result(
                                 tool_canonical=tool_canonical,
                                 tool_replay=tool_replay,
+                                tool_name=tool_name,
                             )
                             messages.extend_replay(tool_replay)
                     agent._commit_pending_step_state()
@@ -452,15 +474,32 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             extra_replay_entries=ephemeral_replay,
                         )
                         needs_rebuild = False
+                    messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                        messages,
+                        request_kind="tool_ainvoke",
+                        temperature=temperature,
+                        reasoning=agent.reasoning,
+                        stream=False,
+                        tools_enabled=True,
+                        kwargs=kwargs,
+                    )
                     agent.callback_manager.on_llm_start(messages)
                     response = await agent.llm.ainvoke_with_tools(
                         messages,
                         agent.get_provider_tools(),
-                        reasoning=agent.reasoning,
-                        temperature=temperature,
-                        **kwargs,
+                        reasoning=request_reasoning,
+                        temperature=request_temperature,
+                        **llm_kwargs,
                     )
-                    agent.callback_manager.on_llm_end(getattr(response, "content", "") or "")
+                    response = agent._run_after_llm_response(
+                        response,
+                        messages=messages,
+                        request_kind="tool_ainvoke",
+                        stream=False,
+                        tools_enabled=True,
+                        hook_audit=llm_hook_audit,
+                    )
+                    agent.callback_manager.on_llm_end(response)
                     agent._raise_if_stop_requested()
 
                     if response is None:
@@ -580,12 +619,14 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 mode="tool",
                                 stream=False,
                                 success=tool_result_obj.status == "success",
+                                tool_result_obj=tool_result_obj,
                             )
                             return {
                                 "tool_name": tool_name,
                                 "tool_result": tool_result_obj,
                                 "tool_canonical": tool_canonical,
                                 "tool_replay": tool_replay,
+                                "tool_ephemeral_context": tool_result_obj.ephemeral_context,
                             }
                         except ToolExecutionError as e:
                             logger.error(f"工具 '{tool_name}' 执行失败: {e}")
@@ -607,6 +648,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 "tool_result": None,
                                 "tool_canonical": agent.llm.tool_result_to_canonical(error_msg, tool_id, tool_name),
                                 "tool_replay": agent.llm.tool_result_to_replay(error_msg, tool_id, tool_name),
+                                "tool_ephemeral_context": None,
                             }
                         except ToolInterruption:
                             raise
@@ -630,6 +672,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 "tool_result": None,
                                 "tool_canonical": agent.llm.tool_result_to_canonical(error_msg, tool_id, tool_name),
                                 "tool_replay": agent.llm.tool_result_to_replay(error_msg, tool_id, tool_name),
+                                "tool_ephemeral_context": None,
                             }
 
                     tasks = [_process_single_tool(tc) for tc in tool_calls]
@@ -638,6 +681,8 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         agent._append_pending_tool_result(
                             tool_canonical=payload["tool_canonical"],
                             tool_replay=payload["tool_replay"],
+                            ephemeral_context=payload.get("tool_ephemeral_context"),
+                            tool_name=payload["tool_name"],
                         )
                         messages.extend_replay(payload["tool_replay"])
                         result_obj = payload.get("tool_result")
@@ -751,13 +796,22 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         extra_replay_entries=ephemeral_replay,
                     )
                     needs_rebuild = False
+                messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
+                    messages,
+                    request_kind="tool_astream_invoke",
+                    temperature=temperature,
+                    reasoning=agent.reasoning,
+                    stream=True,
+                    tools_enabled=True,
+                    kwargs=kwargs,
+                )
                 agent.callback_manager.on_llm_start(messages)
                 llm_stream = agent.llm.astream_with_tools(
                     messages,
                     agent.get_provider_tools(),
-                    temperature=temperature,
-                    reasoning=agent.reasoning,
-                    **kwargs,
+                    temperature=request_temperature,
+                    reasoning=request_reasoning,
+                    **llm_kwargs,
                 )
                 should_continue = False
                 streamed_thinking = ""
@@ -793,6 +847,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             continue
 
                         if event_type == "tool_calls":
+                            event = agent._run_after_llm_response(
+                                dict(event),
+                                messages=messages,
+                                request_kind="tool_astream_invoke",
+                                stream=True,
+                                tools_enabled=True,
+                                hook_audit=llm_hook_audit,
+                            )
+                            if not isinstance(event, dict):
+                                raise ToolExecutionError("after_llm_response 在流式工具轮次中必须返回 dict 事件。")
                             thinking_suffix = agent._stream_snapshot_suffix(
                                 streamed_thinking,
                                 event.get("thinking", "") or "",
@@ -846,7 +910,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 round_number=round_index,
                             )
 
-                            agent.callback_manager.on_llm_end(event.get("content", "") or "")
+                            agent.callback_manager.on_llm_end(event)
                             agent._raise_if_stop_requested()
                             reasoning_event_id = None
                             if streamed_thinking:
@@ -961,10 +1025,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     mode="tool",
                                     stream=True,
                                     success=tool_success,
+                                    tool_result_obj=tool_result_obj,
                                 )
                                 agent._append_pending_tool_result(
                                     tool_canonical=tool_canonical,
                                     tool_replay=tool_replay,
+                                    ephemeral_context=(
+                                        tool_result_obj.ephemeral_context
+                                        if tool_result_obj is not None else None
+                                    ),
+                                    tool_name=tool_name,
                                 )
                                 messages.extend_replay(tool_replay)
                                 if tool_result_obj is not None:
@@ -989,8 +1059,18 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             break
 
                         if event_type == "final_response":
+                            event = agent._run_after_llm_response(
+                                dict(event),
+                                messages=messages,
+                                request_kind="tool_astream_invoke",
+                                stream=True,
+                                tools_enabled=True,
+                                hook_audit=llm_hook_audit,
+                            )
+                            if not isinstance(event, dict):
+                                raise ToolExecutionError("after_llm_response 在流式最终响应中必须返回 dict 事件。")
                             final_response = event.get("content", "") or ""
-                            agent.callback_manager.on_llm_end(final_response)
+                            agent.callback_manager.on_llm_end(event)
                             if event.get("thinking"):
                                 agent._set_round_reasoning(
                                     event.get("thinking", "") or "",
