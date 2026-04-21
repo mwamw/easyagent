@@ -225,5 +225,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    agent, workspace, session_db = build_agent()
-    asyncio.run(agent.astream_invoke("先阅读 notes.txt，再说明当前有哪些 guardrails，最后解释为什么 Bash 的危险命令会被阻断。", max_iter=10, temperature=0.7))
+    # agent, workspace, session_db = build_agent()
+    # # asyncio.run(agent.astream_invoke("先阅读 notes.txt，再说明当前有哪些 guardrails，最后解释为什么 Bash 的危险命令会被阻断。", max_iter=10, temperature=0.7))
+    # bash_spec = agent.tool_registry.get_tool_spec("Bash")
+    # print(bash_spec)
+    main()

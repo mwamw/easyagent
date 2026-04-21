@@ -320,7 +320,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：完成扩展协议的最终版，保证框架具备长期可扩展性。
 
-当前状态：Tool Protocol v2 核心字段、registry 冲突策略和 `ephemeral_context` 的 trace/restore 接线已落地，说明见 `docs/phasee_hooks_guardrails_tool_protocol_v2.md`；MCP engineering 仍是下一阶段主任务。
+当前状态：Tool Protocol v2 核心字段、registry 冲突策略和 `ephemeral_context` 的 trace/restore 接线，以及 MCP engineering 已落地，说明见 `docs/phasee_hooks_guardrails_tool_protocol_v2.md` 与 `docs/phasef_mcp_engineering.md`；下一阶段进入 `Phase 7` 的 SDK 收口与通用 Agent 能力整理。
 
 - Tool 协议补齐 `side_effect_level`、`resource_scope`、`visibility_scope`、生命周期分层、同名冲突策略
 - 引入 schema adapter，统一导出 OpenAI、Anthropic、Google、MCP 所需 schema
@@ -346,6 +346,8 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 ### Phase 7: General-Agent Consolidation + SDK Release
 
 目标：把框架收口成“既支持 code agent，也支持通用 agent”的最终发布形态。
+
+当前状态：这是当前下一阶段主任务。
 
 - 重新整理 `memory / rag / multimodal` 接入方式，统一挂到 runtime、context、tool、skill 抽象下
 - 明确公共 API 边界，避免上层产品依赖内部文件布局

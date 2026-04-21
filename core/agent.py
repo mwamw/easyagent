@@ -454,6 +454,55 @@ class BaseAgent(ABC):
             managers.append(manager)
         return managers
 
+    @staticmethod
+    def _find_mcp_hub(tool_registry: Optional["ToolRegistry"]) -> Optional[Any]:
+        if tool_registry is None:
+            return None
+        list_surfaces = getattr(tool_registry, "list_runtime_surfaces", None)
+        if callable(list_surfaces):
+            try:
+                hubs = list_surfaces("mcp_hub")
+                if hubs:
+                    return next(iter(hubs.values()))
+            except Exception:
+                pass
+        for tool in tool_registry.get_visible_tools(scope="all"):
+            hub = getattr(tool, "hub", None)
+            if hub is not None:
+                return hub
+        return None
+
+    @staticmethod
+    def _find_mcp_managers(tool_registry: Optional["ToolRegistry"]) -> list[Any]:
+        if tool_registry is None:
+            return []
+        managers: list[Any] = []
+        seen: set[int] = set()
+        list_surfaces = getattr(tool_registry, "list_runtime_surfaces", None)
+        if callable(list_surfaces):
+            try:
+                surfaces = list_surfaces("mcp_manager")
+                for manager in surfaces.values():
+                    marker = id(manager)
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                    managers.append(manager)
+            except Exception:
+                pass
+        if managers:
+            return managers
+        for tool in tool_registry.get_visible_tools(scope="all"):
+            manager = getattr(tool, "manager", None)
+            if manager is None or getattr(manager, "source_identifier", None) is None:
+                continue
+            marker = id(manager)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            managers.append(manager)
+        return managers
+
     def _run_before_llm_request(
         self,
         messages: Any,
@@ -1437,6 +1486,28 @@ class BaseAgent(ABC):
             except Exception as exc:
                 logger.warning("导出 worktree runtime 状态失败: %s", exc)
 
+        mcp_runtime_snapshot = None
+        mcp_hub = self._find_mcp_hub(self.tool_registry)
+        mcp_managers = self._find_mcp_managers(self.tool_registry)
+        if mcp_hub is not None and hasattr(mcp_hub, "export_state"):
+            try:
+                mcp_runtime_snapshot = {
+                    "hub": self._make_json_safe(mcp_hub.export_state()),
+                }
+            except Exception as exc:
+                logger.warning("导出 MCP hub 状态失败: %s", exc)
+        elif mcp_managers:
+            try:
+                mcp_runtime_snapshot = {
+                    "managers": [
+                        self._make_json_safe(manager.export_state())
+                        for manager in mcp_managers
+                        if hasattr(manager, "export_state")
+                    ],
+                }
+            except Exception as exc:
+                logger.warning("导出 MCP manager 状态失败: %s", exc)
+
         return {
             "schema_version": 1,
             "agent_type": self.__class__.__name__,
@@ -1463,6 +1534,7 @@ class BaseAgent(ABC):
             "execution_context": self._make_json_safe(execution_context_snapshot),
             "collaboration_runtime": self._make_json_safe(collaboration_runtime_snapshot),
             "worktree_runtime": self._make_json_safe(worktree_runtime_snapshot),
+            "mcp_runtime": self._make_json_safe(mcp_runtime_snapshot),
             "state": self._make_json_safe(self._get_serializable_state()),
         }
 
@@ -1576,6 +1648,7 @@ class BaseAgent(ABC):
         tool_registry: Optional["ToolRegistry"] = None,
         config: Optional[Config] = None,
         task_service: Optional[Any] = None,
+        mcp_client_overrides: Optional[dict[str, Any]] = None,
     ) -> Optional["ToolRegistry"]:
         if tool_registry is not None:
             return tool_registry
@@ -1729,6 +1802,56 @@ class BaseAgent(ABC):
                     register_exit_worktree_tool(registry, worktree_manager=worktree_manager)
             except Exception as exc:
                 logger.warning("自动恢复工具 '%s' 失败: %s", tool_name, exc)
+
+        mcp_runtime_snapshot = snapshot.get("mcp_runtime") or {}
+        if mcp_runtime_snapshot:
+            try:
+                from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_resource_hub_tools
+                from mcp import MCPHub
+
+                overrides = dict(mcp_client_overrides or {})
+                hub_payload = mcp_runtime_snapshot.get("hub")
+                standalone_manager_payloads = list(mcp_runtime_snapshot.get("managers") or [])
+
+                if hub_payload:
+                    hub = MCPHub()
+                    register_surface = getattr(registry, "register_runtime_surface", None)
+                    if callable(register_surface):
+                        register_surface("mcp_hub", "default", hub)
+                    for item in list(hub_payload.get("servers") or []):
+                        server_name = str(item.get("serverName") or "").strip()
+                        manager_state = dict(item.get("manager") or {})
+                        client = overrides.get(server_name)
+                        try:
+                            manager = MCPToolManager.from_state(manager_state, client=client)
+                            manager.register_to_registry(
+                                registry,
+                                include_resources=manager.include_resources,
+                                resource_tool_prefix=manager.resource_tool_prefix,
+                                hub=hub,
+                                server_name=server_name or manager.registry_server_name,
+                                legacy_resource_tools=False,
+                            )
+                        except Exception as exc:
+                            logger.warning("自动恢复 MCP server '%s' 失败: %s", server_name, exc)
+                    if any(name in expected_tools for name in {"ListMcpResources", "ReadMcpResource"}):
+                        register_mcp_resource_hub_tools(registry, hub)
+
+                for manager_state in standalone_manager_payloads:
+                    state_payload = dict(manager_state or {})
+                    server_name = str(state_payload.get("registryServerName") or state_payload.get("serverName") or "").strip()
+                    client = overrides.get(server_name)
+                    try:
+                        manager = MCPToolManager.from_state(state_payload, client=client)
+                        manager.register_to_registry(
+                            registry,
+                            include_resources=manager.include_resources,
+                            resource_tool_prefix=manager.resource_tool_prefix,
+                        )
+                    except Exception as exc:
+                        logger.warning("自动恢复 MCP manager '%s' 失败: %s", server_name, exc)
+            except Exception as exc:
+                logger.warning("自动恢复 MCP runtime 失败: %s", exc)
 
         if not registry.get_tool_names():
             if expected_tools:
@@ -1978,6 +2101,54 @@ class BaseAgent(ABC):
                         message=f"恢复 worktree runtime 状态失败: {exc}",
                     )
 
+        mcp_runtime_snapshot = snapshot.get("mcp_runtime") or {}
+        expected_mcp_servers: list[str] = []
+        hub_snapshot = mcp_runtime_snapshot.get("hub") or {}
+        for item in list(hub_snapshot.get("servers") or []):
+            server_name = str(item.get("serverName") or "").strip()
+            if server_name:
+                expected_mcp_servers.append(server_name)
+        for item in list(mcp_runtime_snapshot.get("managers") or []):
+            server_name = str(
+                item.get("registryServerName")
+                or item.get("serverName")
+                or ""
+            ).strip()
+            if server_name:
+                expected_mcp_servers.append(server_name)
+        expected_mcp_servers = sorted(set(expected_mcp_servers))
+
+        if mcp_runtime_snapshot or expected_mcp_servers:
+            current_hub = cls._find_mcp_hub(agent.tool_registry)
+            current_managers = cls._find_mcp_managers(agent.tool_registry)
+            current_servers = sorted(
+                {
+                    str(getattr(manager, "registry_server_name", None) or getattr(manager, "server_label", "")).strip()
+                    for manager in current_managers
+                    if str(getattr(manager, "registry_server_name", None) or getattr(manager, "server_label", "")).strip()
+                }
+            )
+            missing_servers = [name for name in expected_mcp_servers if name not in current_servers]
+            restore_report.extend_component(
+                "mcp_runtime",
+                {
+                    "status": "restored" if not missing_servers else "degraded",
+                    "restoredItems": current_servers,
+                    "degradedItems": missing_servers,
+                    "metadata": {
+                        "serverCount": len(current_servers),
+                        "hasHub": current_hub is not None,
+                    },
+                },
+            )
+            if missing_servers:
+                restore_report.add_issue(
+                    component="mcp_runtime",
+                    code="mcp_runtime_partial_restore",
+                    message=f"MCP runtime 仅部分恢复，缺少 server: {missing_servers}",
+                    metadata={"missingServers": missing_servers},
+                )
+
     @classmethod
     def _build_base_constructor_kwargs(
         cls,
@@ -2154,6 +2325,7 @@ class BaseAgent(ABC):
         permission_context: Optional["PermissionContext"] = None,
         hook_manager: Optional["HookManager"] = None,
         task_service: Optional[Any] = None,
+        mcp_client_overrides: Optional[dict[str, Any]] = None,
     ) -> "BaseAgent":
         if not session_id or not isinstance(session_id, str):
             raise SessionSerializationError("session_id 必须是非空字符串")
@@ -2186,6 +2358,7 @@ class BaseAgent(ABC):
             tool_registry=tool_registry,
             config=snapshot_config,
             task_service=task_service,
+            mcp_client_overrides=mcp_client_overrides,
         )
 
         if cls is not BaseAgent and target_cls is not cls:
@@ -2383,6 +2556,54 @@ class BaseAgent(ABC):
                             "metadata": {},
                             "issues": [issue],
                         }
+
+        mcp_hub = self._find_mcp_hub(self.tool_registry)
+        mcp_managers = self._find_mcp_managers(self.tool_registry)
+        if mcp_hub is not None:
+            hub_close = getattr(mcp_hub, "close", None)
+            if callable(hub_close):
+                try:
+                    hub_report = hub_close()
+                    _normalize_component_payload("mcp_runtime", hub_report)
+                except Exception as exc:
+                    report["status"] = "failed"
+                    issue = {
+                        "component": "mcp_runtime",
+                        "code": "mcp_hub_close_failed",
+                        "message": f"关闭 MCP hub 失败: {exc}",
+                        "severity": "error",
+                    }
+                    report["issues"].append(issue)
+                    report["components"]["mcp_runtime"] = {
+                        "status": "failed",
+                        "metadata": {},
+                        "issues": [issue],
+                    }
+        elif mcp_managers:
+            mcp_component = {
+                "status": "closed",
+                "metadata": {"managerCount": len(mcp_managers)},
+                "issues": [],
+            }
+            for manager in mcp_managers:
+                close_fn = getattr(manager, "close", None)
+                if not callable(close_fn):
+                    continue
+                try:
+                    close_fn()
+                except Exception as exc:
+                    mcp_component["status"] = "degraded"
+                    mcp_component["issues"].append(
+                        {
+                            "component": "mcp_runtime",
+                            "code": "mcp_manager_close_failed",
+                            "message": f"关闭 MCP manager 失败: {exc}",
+                            "severity": "warning",
+                        }
+                    )
+                    if report["status"] == "closed":
+                        report["status"] = "degraded"
+            report["components"]["mcp_runtime"] = mcp_component
 
         codeintel_managers = self._find_codeintel_managers(self.tool_registry)
         if codeintel_managers:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from Tool.BaseTool import Tool
+if TYPE_CHECKING:
+    from Tool.BaseTool import Tool
 
 from .context import PermissionContext
 from .types import PermissionRule, RiskCategory
@@ -42,6 +43,20 @@ def extract_command_values(parameters: dict[str, Any]) -> list[str]:
     for key, value in parameters.items():
         if key in COMMAND_PARAM_NAMES and isinstance(value, str) and value.strip():
             values.append(value.strip())
+    return values
+
+
+def extract_mcp_server_values(tool: Tool, parameters: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    server_value = parameters.get("server")
+    if isinstance(server_value, str) and server_value.strip():
+        values.append(server_value.strip())
+
+    spec = tool.get_spec()
+    metadata = dict(getattr(spec, "metadata", {}) or {})
+    metadata_server = metadata.get("mcp_server")
+    if isinstance(metadata_server, str) and metadata_server.strip():
+        values.append(metadata_server.strip())
     return values
 
 
@@ -116,6 +131,17 @@ def _rule_matches_command(rule: PermissionRule, parameters: dict[str, Any]) -> b
     return any(any(value.startswith(prefix) for prefix in prefixes) for value in values)
 
 
+def _rule_matches_mcp_server(rule: PermissionRule, tool: Tool, parameters: dict[str, Any]) -> bool:
+    expected = _normalize_str_list(
+        rule.matcher.get("mcp_servers")
+        or rule.matcher.get("server_names")
+    )
+    if not expected:
+        return True
+    values = extract_mcp_server_values(tool, parameters)
+    return bool(set(expected) & set(values))
+
+
 def _rule_matches_param_equals(rule: PermissionRule, parameters: dict[str, Any]) -> bool:
     expected = rule.matcher.get("param_equals") or {}
     if not expected:
@@ -153,6 +179,8 @@ def find_matching_rule(
         if not _rule_matches_path(rule, parameters):
             continue
         if not _rule_matches_command(rule, parameters):
+            continue
+        if not _rule_matches_mcp_server(rule, tool, parameters):
             continue
         if not _rule_matches_param_equals(rule, parameters):
             continue

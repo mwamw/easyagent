@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from Tool.BaseTool import Tool
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from Tool.BaseTool import Tool
 
 from .context import PermissionContext
 from .rules import derive_risk_categories, find_matching_rule

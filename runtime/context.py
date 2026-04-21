@@ -20,6 +20,7 @@ def _normalize_roots(values: Iterable[str] | None, fallback_root: str) -> tuple[
 class ExecutionContext:
     workspace_root: str
     allowed_roots: tuple[str, ...]
+    mcp_servers: tuple[str, ...] = field(default_factory=tuple)
     execution_mode: str = "execute"
     permission_mode: str = "default"
     current_task_id: Optional[str] = None
@@ -63,9 +64,32 @@ class ExecutionContext:
         task_id = current_task_id if current_task_id is not None else getattr(agent, "current_task_id", None)
         merged_metadata = dict(getattr(getattr(agent, "execution_context", None), "metadata", {}) or {})
         merged_metadata.update(dict(metadata or {}))
+
+        visible_mcp_servers: list[str] = []
+        tool_registry = getattr(agent, "tool_registry", None)
+        if tool_registry is not None:
+            list_surfaces = getattr(tool_registry, "list_runtime_surfaces", None)
+            if callable(list_surfaces):
+                try:
+                    visible_mcp_servers.extend(str(name) for name in list_surfaces("mcp_manager").keys())
+                except Exception:
+                    pass
+            if not visible_mcp_servers:
+                try:
+                    for tool in tool_registry.get_visible_tools(scope="all"):
+                        spec = tool.get_spec()
+                        server_name = str(spec.metadata.get("mcp_server") or "").strip()
+                        if server_name:
+                            visible_mcp_servers.append(server_name)
+                except Exception:
+                    pass
+        normalized_mcp_servers = tuple(
+            sorted({value for value in visible_mcp_servers if value})
+        )
         return cls(
             workspace_root=resolved_workspace,
             allowed_roots=roots,
+            mcp_servers=normalized_mcp_servers,
             execution_mode=str(mode_value),
             permission_mode=str(permission_value),
             current_task_id=task_id,
@@ -92,6 +116,7 @@ class ExecutionContext:
         return ExecutionContext(
             workspace_root=resolved_workspace,
             allowed_roots=_normalize_roots(allowed_roots or self.allowed_roots, resolved_workspace),
+            mcp_servers=tuple(self.mcp_servers),
             execution_mode=execution_mode or self.execution_mode,
             permission_mode=permission_mode or self.permission_mode,
             current_task_id=current_task_id if current_task_id is not None else self.current_task_id,
@@ -104,6 +129,7 @@ class ExecutionContext:
         return {
             "workspaceRoot": self.workspace_root,
             "allowedRoots": list(self.allowed_roots),
+            "mcpServers": list(self.mcp_servers),
             "executionMode": self.execution_mode,
             "permissionMode": self.permission_mode,
             "currentTaskId": self.current_task_id,
@@ -123,6 +149,11 @@ class ExecutionContext:
             allowed_roots=_normalize_roots(
                 data.get("allowedRoots"),
                 str(workspace_root),
+            ),
+            mcp_servers=tuple(
+                str(item).strip()
+                for item in list(data.get("mcpServers") or [])
+                if str(item).strip()
             ),
             execution_mode=str(data.get("executionMode") or "execute"),
             permission_mode=str(data.get("permissionMode") or "default"),

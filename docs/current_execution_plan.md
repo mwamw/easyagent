@@ -18,7 +18,8 @@
 - `Phase C` 已完成：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口已补齐
 - `Phase D` 已完成：`codeintel/`、LSP stdio provider、codeintel tools、fallback 协议已补齐
 - `Phase E` 已完成：`core/hooks/`、`core/guardrails/`、Tool Protocol v2、registry 冲突策略、`ephemeral_context` trace/restore 接线已补齐
-- 当前下一阶段应进入 `Phase F：MCP Engineering`
+- `Phase F` 已完成：`mcp/connection_manager.py`、`mcp/auth.py`、`mcp/cache.py`、`mcp/policy.py`、MCP runtime surface、session restore/close report 接线已补齐，说明见 `docs/phasef_mcp_engineering.md`
+- 当前下一阶段应进入 `Phase G：SDK 收口与通用 Agent 能力整理`
 
 ## 当前状态对照
 
@@ -62,6 +63,15 @@
   - `visibility_scope`
   - `ToolRegistry` 同名冲突策略
   - `ephemeral_context` 进入 trace 与 pending/session restore
+- MCP engineering 已具备：
+  - `mcp/auth.py`
+  - `mcp/policy.py`
+  - `mcp/cache.py`
+  - `mcp/connection_manager.py`
+  - MCP runtime export/restore
+  - MCP runtime 进入 session restore 与 close report
+  - ToolRegistry runtime surfaces: `mcp_manager` / `mcp_hub`
+  - permission matcher 支持 `mcp_servers`
 - code intelligence 已具备 LSP v1：
   - `codeintel/`
   - `LSPCodeIntelProvider`
@@ -83,25 +93,19 @@
 
 这些缺口会直接限制 EasyAgent 继续长成 Claude Code 风格 code agent：
 
-1. MCP 仍是轻量接入，不是 first-class runtime surface
-
-- 现有 `mcp/runtime.py`、`mcp_client.py` 可以用
-- 但没有 `connection_manager / auth / cache / policy`
-- 也没有和权限系统、session/runtime 生命周期深度打通
-
-2. code intelligence 还没到最终形态
+1. code intelligence 还没到最终形态
 
 - 已有 LSP v1，但还没有离线索引层
 - 还缺 workspace 级缓存、批量预热、跨语言更细策略
 - 目前的 fallback 是稳定的，但还没有更高层的“自动切换到索引器”能力
 
-3. SDK/package 边界还没收口
+2. SDK/package 边界还没收口
 
 - 还没有 `pyproject.toml`
 - 公共 API 边界还没有正式冻结
 - `docs/` 和 `example/` 还没有按“框架示例 / 产品示例”重新整理
 
-4. observability 仍是轻量级
+3. observability 仍是轻量级
 
 - trace 已能记录更完整的 tool result 与 `ephemeral_context`
 - 但 token/cost/失败类型聚合、统一 metrics 和 benchmark 还没有成体系
@@ -110,18 +114,17 @@
 
 `walkthrough.md` 里的旧顺序是合理的长期路线，但按当前代码状态，优先级需要调整成：
 
-1. 先做 `MCP engineering`
-2. 再做 `SDK/package/doc` 收口
-3. codeintel 增强与 observability 并行推进
-4. codeintel 后续增强放在并行支线：
+1. 先做 `SDK/package/doc` 收口
+2. codeintel 增强与 observability 并行推进
+3. codeintel 后续增强放在并行支线：
    - 离线索引层
    - workspace 缓存
    - 更细的跨语言优化
 
 原因很简单：
 
-- 现在多 agent 协作、runtime restore report、LSP v1、hooks/guardrails 与 Tool Protocol v2 都已经跑通
-- 当前最阻塞框架继续长成最终版的，是 MCP 工程化、SDK 收口和更强的 codeintel/observability
+- 现在多 agent 协作、runtime restore report、LSP v1、hooks/guardrails、Tool Protocol v2 和 MCP engineering 都已经跑通
+- 当前最阻塞框架继续长成最终版的，是 SDK 收口以及更强的 codeintel/observability
 - codeintel 已经有可用主干，后续更多是增强，而不是当前最先阻塞主线的缺口
 
 ## 新执行计划
@@ -335,6 +338,8 @@
 
 目标：把 MCP 从“能用”补到“框架一等扩展面”。
 
+状态：已完成，阶段说明见 `docs/phasef_mcp_engineering.md`
+
 #### 主要工作
 
 - 增加：
@@ -397,23 +402,22 @@
 
 如果按当前代码状态推进，我建议严格按下面顺序做：
 
-1. `Phase F`
-2. `Phase G`
-3. codeintel 增强支线
+1. `Phase G`
+2. codeintel 增强支线
    - 离线索引
    - workspace 缓存
    - 更细粒度的 provider 策略
 
-这比旧计划更贴近当前现实，因为协作闭环、runtime restore report、LSP v1，以及 hooks/guardrails + Tool Protocol v2 都已经补齐，当前最阻塞框架继续演进的是 MCP 工程化、SDK 收口和更强的索引/观测层。
+这比旧计划更贴近当前现实，因为协作闭环、runtime restore report、LSP v1、hooks/guardrails + Tool Protocol v2，以及 MCP engineering 都已经补齐，当前最阻塞框架继续演进的是 SDK 收口和更强的索引/观测层。
 
 ## 本轮之后的最小任务包
 
 如果只做接下来一轮最有价值的工作，建议先完成下面这个最小任务包：
 
-1. 落地 `mcp/connection_manager.py`
-2. 落地 `mcp/auth.py / cache.py / policy.py`
-3. 把 MCP 纳入权限系统与 session/runtime 生命周期
-4. 增加 capability snapshot 与 restore 语义
-5. 补 MCP engineering 的契约测试与真实 example
+1. 增加 `pyproject.toml` 与可发布安装入口
+2. 明确公共 API 边界
+3. 重整 `docs/` 与 `example/` 的 SDK/产品示例分层
+4. 整理 `memory / rag / multimodal` 的统一接入方式
+5. 补 SDK 收口阶段的契约测试与真实 example
 
-这是当前阶段性价比最高的一步，因为当前框架已经有 runtime、restore、codeintel、hooks 和 Tool Protocol v2，下一块真正阻塞扩展面的就是 MCP engineering。
+这是当前阶段性价比最高的一步，因为当前框架已经有 runtime、restore、codeintel、hooks、Tool Protocol v2 和 MCP engineering，下一块真正阻塞发布形态的就是 SDK 收口。

@@ -7,6 +7,7 @@ maps MCP prompts into SkillRegistry on-demand skills.
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from typing import Any, Dict, List, Optional, Type
 
@@ -137,6 +138,14 @@ def _build_mcp_guidance(
     if base_guidance.strip():
         lines.append(base_guidance.strip())
 
+    lines.extend(
+        [
+            "调用前先确认当前任务是否真的需要远程 MCP 能力，而不是本地 builtin tool、Skill 或已有上下文就能完成。",
+            "参数必须完全遵守 schema；不要臆造字段，也不要把自然语言说明塞进结构化参数。",
+            "如果这是高成本或高副作用操作，先缩小目标范围，再执行最小必要调用。",
+        ]
+    )
+
     if hints["read_only"]:
         lines.append("该 MCP 能力声明为只读，预期不会修改远程状态。")
     if hints["destructive"]:
@@ -151,6 +160,13 @@ def _build_mcp_guidance(
 
     if capability_kind == "resource_read":
         lines.append("如资源列表项带有 annotations，应结合这些 annotations 判断资源是否适合当前任务。")
+        lines.append("优先先列资源再读资源；不要在不知道 URI 是否存在时盲目读取。")
+    elif capability_kind == "resource_list":
+        lines.append("返回的是资源目录，不是资源正文；拿到 URI 后再决定是否继续读取。")
+    elif capability_kind == "tool":
+        lines.append("如果服务返回内容与本地推断冲突，应优先以远程返回为准，并在必要时解释冲突来源。")
+    elif capability_kind in {"prompt_list", "prompt_get"}:
+        lines.append("MCP prompt 是远程模板，不等于最终答案；应把它作为执行上下文的一部分来理解。")
 
     return "\n".join(line for line in lines if line)
 
@@ -208,6 +224,80 @@ def _effective_server_name(manager: "MCPToolManager") -> str:
     return manager.registry_server_name
 
 
+def _mcp_source_identifier(server_name: str, capability_kind: str, capability_name: Optional[str] = None) -> str:
+    normalized_server = str(server_name or "mcp").strip() or "mcp"
+    normalized_kind = str(capability_kind or "capabilities").strip() or "capabilities"
+    if capability_name:
+        return f"mcp://{normalized_server}/{normalized_kind}/{capability_name}"
+    return f"mcp://{normalized_server}/{normalized_kind}"
+
+
+def _serialize_for_display(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(value)
+
+
+def _build_mcp_display_text(
+    title: str,
+    payload: Any,
+    *,
+    summary: Optional[str] = None,
+) -> str:
+    lines = [title.strip()]
+    if summary:
+        lines.append(summary.strip())
+    if payload is not None:
+        lines.append("结构化详情:")
+        lines.append(_serialize_for_display(payload))
+    return "\n\n".join(line for line in lines if line)
+
+
+def _mcp_error_to_tool_result(
+    exc: Exception,
+    *,
+    manager: "MCPToolManager",
+    capability_kind: str,
+    capability_name: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> ToolResult:
+    detail = manager.describe_error(exc)
+    server_name = _effective_server_name(manager)
+    error_type = detail.get("errorType") or "mcp_operation_error"
+    message = str(detail.get("message") or str(exc))
+    title = f"MCP server `{server_name}` 的 `{capability_kind}` 调用失败。"
+    summary_lines = [
+        f"错误类型: {error_type}",
+        f"原因: {message}",
+    ]
+    if capability_name:
+        summary_lines.insert(0, f"目标能力: {capability_name}")
+    display_text = _build_mcp_display_text(
+        title,
+        detail,
+        summary="\n".join(summary_lines),
+    )
+    merged_metadata = dict(metadata or {})
+    merged_metadata.update(
+        {
+            "mcp_server": server_name,
+            "mcp_error_type": error_type,
+            "mcp_capability_kind": capability_kind,
+        }
+    )
+    if capability_name:
+        merged_metadata["mcp_capability_name"] = capability_name
+    return ToolResult.error(
+        message,
+        error_type=error_type,
+        display_text=display_text,
+        metadata=merged_metadata,
+    )
+
+
 def _format_resource_listing(resources: List[Dict[str, Any]]) -> str:
     if not resources:
         return "未发现 MCP 资源。"
@@ -236,16 +326,20 @@ def _resource_read_result_to_tool_result(
     server_name: str,
     uri: str,
 ) -> ToolResult:
-    metadata = {"mcp_server": server_name, "uri": uri}
+    metadata = {
+        "mcp_server": server_name,
+        "uri": uri,
+        "source_identifier": _mcp_source_identifier(server_name, "resources", uri),
+    }
     if isinstance(result, bytes):
-        encoded = base64.b64encode(result).decode("ascii")
+        payload = {
+            "server": server_name,
+            "uri": uri,
+            "encoding": "base64",
+            "content": base64.b64encode(result).decode("ascii"),
+        }
         return ToolResult.success(
-            structured_data={
-                "server": server_name,
-                "uri": uri,
-                "encoding": "base64",
-                "content": encoded,
-            },
+            structured_data=payload,
             metadata=metadata,
         )
     if isinstance(result, list):
@@ -260,13 +354,15 @@ def _resource_read_result_to_tool_result(
                 )
             else:
                 normalized.append(item)
+        payload = {"server": server_name, "uri": uri, "content": normalized}
         return ToolResult.success(
-            structured_data={"server": server_name, "uri": uri, "content": normalized},
+            structured_data=payload,
             metadata=metadata,
         )
+    payload = {"server": server_name, "uri": uri, "content": str(result or "")}
     return ToolResult.success(
         content=str(result or ""),
-        structured_data={"server": server_name, "uri": uri, "content": str(result or "")},
+        structured_data=payload,
         metadata=metadata,
     )
 
@@ -293,9 +389,12 @@ class MCPWrappedTool(Tool):
         parameters = _build_pydantic_model_from_schema(self.mcp_tool_name, input_schema)
         base_guidance = (
             f"这是一个远程 MCP 工具 `{tool_name}`。\n"
-            "严格按照参数 schema 提供输入，不要臆造额外字段。\n"
-            "结果来自外部服务或远程进程；若结果与本地上下文冲突，以最新返回结果为准。"
+            f"它映射到 MCP server `{_effective_server_name(manager)}` 上的原始能力 `{self.mcp_tool_name}`。\n"
+            "调用它时要先判断当前问题是否确实需要远程能力，再按最小必要参数执行。\n"
+            "如果你需要复用结果，优先引用返回里的结构化字段，而不是自行改写关键事实。"
         )
+        server_name = _effective_server_name(manager)
+        source_identifier = _mcp_source_identifier(server_name, "tools", self.mcp_tool_name)
 
         super().__init__(
             name=tool_name,
@@ -306,6 +405,13 @@ class MCPWrappedTool(Tool):
             read_only=hint_state["read_only"],
             destructive=hint_state["destructive"],
             requires_confirmation=hint_state["destructive"] or hint_state["open_world"],
+            risk_categories=["mcp"],
+            side_effect_level=(
+                "none"
+                if hint_state["read_only"] and not hint_state["open_world"]
+                else ("high" if hint_state["destructive"] else "medium")
+            ),
+            resource_scope=[source_identifier],
             supports_parallel=(
                 hint_state["idempotent"]
                 if hint_state["idempotent_present"]
@@ -320,23 +426,69 @@ class MCPWrappedTool(Tool):
                 "mcp_destructive": hint_state["destructive"],
                 "mcp_open_world": hint_state["open_world"],
                 "mcp_idempotent": hint_state["idempotent"] if hint_state["idempotent_present"] else None,
+                "mcp_capability_kind": "tool",
+                "source_identifier": source_identifier,
             },
         )
 
     def run(self, parameters: dict):
-        result = self.manager.execute_tool(self.mcp_tool_name, parameters)
+        try:
+            result = self.manager.execute_tool(self.mcp_tool_name, parameters)
+        except Exception as exc:
+            return _mcp_error_to_tool_result(
+                exc,
+                manager=self.manager,
+                capability_kind="tool",
+                capability_name=self.mcp_tool_name,
+                metadata={"mcp_tool_name": self.mcp_tool_name},
+            )
         if isinstance(result, ToolResult):
             return result
         if isinstance(result, (dict, list)):
+            payload = {
+                "server": _effective_server_name(self.manager),
+                "tool": self.mcp_tool_name,
+                "result": result,
+            }
+            source_identifier = _mcp_source_identifier(_effective_server_name(self.manager), "tools", self.mcp_tool_name)
             return ToolResult.success(
-                structured_data=result,
-                metadata={"mcp_tool_name": self.mcp_tool_name},
+                structured_data=payload,
+                metadata={
+                    "mcp_tool_name": self.mcp_tool_name,
+                    "mcp_server": _effective_server_name(self.manager),
+                    "source_identifier": source_identifier,
+                },
             )
         if result is None:
-            return ToolResult.success("", metadata={"mcp_tool_name": self.mcp_tool_name})
+            payload = {
+                "server": _effective_server_name(self.manager),
+                "tool": self.mcp_tool_name,
+                "result": None,
+            }
+            source_identifier = _mcp_source_identifier(_effective_server_name(self.manager), "tools", self.mcp_tool_name)
+            return ToolResult.success(
+                "",
+                structured_data=payload,
+                metadata={
+                    "mcp_tool_name": self.mcp_tool_name,
+                    "mcp_server": _effective_server_name(self.manager),
+                    "source_identifier": source_identifier,
+                },
+            )
+        payload = {
+            "server": _effective_server_name(self.manager),
+            "tool": self.mcp_tool_name,
+            "result": str(result),
+        }
+        source_identifier = _mcp_source_identifier(_effective_server_name(self.manager), "tools", self.mcp_tool_name)
         return ToolResult.success(
             str(result),
-            metadata={"mcp_tool_name": self.mcp_tool_name},
+            structured_data=payload,
+            metadata={
+                "mcp_tool_name": self.mcp_tool_name,
+                "mcp_server": _effective_server_name(self.manager),
+                "source_identifier": source_identifier,
+            },
         )
 
 
@@ -345,34 +497,58 @@ class MCPListResourcesTool(Tool):
 
     def __init__(self, manager: "MCPToolManager", prefix: str = ""):
         self.manager = manager
+        source_identifier = _mcp_source_identifier(_effective_server_name(manager), "resources")
         super().__init__(
             name=_prefixed_name(prefix, "list_mcp_resources"),
             description=f"列出 MCP 服务 `{_effective_server_name(manager)}` 当前暴露的资源。",
             parameters=MCPListResourcesParams,
             guidance=_build_mcp_guidance((
-                "当你需要浏览远程 MCP 资源目录、先确认有哪些资源可读时使用。"
-                "它只返回资源清单，不返回资源正文。"
+                "当你需要浏览远程 MCP 资源目录、确认有哪些 URI 可读取时使用。\n"
+                "先看资源目录，再决定是否继续读取具体资源；不要把它当成资源正文读取工具。"
             ), {}, capability_kind="resource_list"),
             read_only=True,
             source="mcp",
             tags=["mcp", "resource", "read"],
             supports_parallel=True,
-            metadata={"mcp_server": _effective_server_name(manager), "mcp_resource_tool": True},
+            risk_categories=["mcp"],
+            side_effect_level="none",
+            resource_scope=[source_identifier],
+            metadata={
+                "mcp_server": _effective_server_name(manager),
+                "mcp_resource_tool": True,
+                "mcp_capability_kind": "resource_list",
+                "source_identifier": source_identifier,
+            },
         )
 
     def run(self, parameters: dict) -> ToolResult:
         server_name = _effective_server_name(self.manager)
-        resources = [
-            {
-                "server": server_name,
-                **resource,
-            }
-            for resource in self.manager.list_remote_resources()
-        ]
+        try:
+            resources = [
+                {
+                    "server": server_name,
+                    **resource,
+                }
+                for resource in self.manager.list_remote_resources()
+            ]
+        except Exception as exc:
+            return _mcp_error_to_tool_result(
+                exc,
+                manager=self.manager,
+                capability_kind="resource_list",
+                metadata={"mcp_server": server_name},
+            )
+        payload = {
+            "server": server_name,
+            "resources": resources,
+        }
         return ToolResult.success(
             _format_resource_listing(resources),
-            structured_data=resources,
-            metadata={"mcp_server": server_name},
+            structured_data=payload,
+            metadata={
+                "mcp_server": server_name,
+                "source_identifier": _mcp_source_identifier(server_name, "resources"),
+            },
         )
 
 
@@ -381,19 +557,29 @@ class MCPReadResourceTool(Tool):
 
     def __init__(self, manager: "MCPToolManager", prefix: str = ""):
         self.manager = manager
+        source_identifier = _mcp_source_identifier(_effective_server_name(manager), "resources", "{uri}")
         super().__init__(
             name=_prefixed_name(prefix, "read_mcp_resource"),
             description=f"读取 MCP 服务 `{_effective_server_name(manager)}` 上指定 URI 的资源内容。",
             parameters=MCPReadResourceParams,
             guidance=_build_mcp_guidance((
-                "先通过 `list_mcp_resources` 确认可用 URI，再读取具体资源。"
-                "如果返回的是二进制内容，会以 base64 文本形式返回。"
+                "先通过 `list_mcp_resources` 确认可用 URI，再读取具体资源。\n"
+                "如果你还没确认 URI 是否存在，先不要直接读取。\n"
+                "如果返回的是二进制内容，结果会以 base64 形式返回。"
             ), {}, capability_kind="resource_read"),
             read_only=True,
             source="mcp",
             tags=["mcp", "resource", "read"],
             supports_parallel=True,
-            metadata={"mcp_server": _effective_server_name(manager), "mcp_resource_tool": True},
+            risk_categories=["mcp"],
+            side_effect_level="none",
+            resource_scope=[source_identifier],
+            metadata={
+                "mcp_server": _effective_server_name(manager),
+                "mcp_resource_tool": True,
+                "mcp_capability_kind": "resource_read",
+                "source_identifier": source_identifier,
+            },
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -402,7 +588,16 @@ class MCPReadResourceTool(Tool):
             return ToolResult.error("错误：必须提供资源 URI。", error_type="invalid_parameters")
 
         server_name = _effective_server_name(self.manager)
-        result = self.manager.read_remote_resource(uri)
+        try:
+            result = self.manager.read_remote_resource(uri)
+        except Exception as exc:
+            return _mcp_error_to_tool_result(
+                exc,
+                manager=self.manager,
+                capability_kind="resource_read",
+                capability_name=uri,
+                metadata={"mcp_server": server_name, "uri": uri},
+            )
         return _resource_read_result_to_tool_result(result, server_name=server_name, uri=uri)
 
 
@@ -416,14 +611,22 @@ class MCPHubListResourcesTool(Tool):
             description="列出已注册 MCP server 暴露的资源；可按 server 过滤。",
             parameters=ClaudeListMcpResourcesInput,
             guidance=(
-                "当需要浏览 MCP 资源目录时使用。"
-                "若已知目标 server，优先显式提供 server；否则会聚合所有已注册 server 的资源。"
+                "当需要浏览 MCP 资源目录时使用。\n"
+                "若已知目标 server，优先显式提供 server；否则会聚合所有已注册 server 的资源。\n"
+                "它返回的是资源目录，不是资源正文；拿到 URI 后再用 `ReadMcpResource` 读取。"
             ),
             read_only=True,
             source="mcp",
             tags=["mcp", "resource", "read", "claude_code"],
             supports_parallel=True,
-            metadata={"mcp_hub": True},
+            risk_categories=["mcp"],
+            side_effect_level="none",
+            resource_scope=["mcp://hub/resources"],
+            metadata={
+                "mcp_hub": True,
+                "mcp_capability_kind": "resource_list",
+                "source_identifier": "mcp://hub/resources",
+            },
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -434,17 +637,26 @@ class MCPHubListResourcesTool(Tool):
             return ToolResult.error(
                 str(exc),
                 error_type="mcp_server_not_found",
+                display_text=_build_mcp_display_text(
+                    "读取 MCP 资源目录失败。",
+                    {"server": server, "availableServers": self.hub.list_servers()},
+                    summary=str(exc),
+                ),
                 metadata={"server": server},
             )
-
+        payload = {
+            "server": server,
+            "resources": resources,
+            "servers": self.hub.list_servers(),
+        }
         return ToolResult.success(
             _format_resource_listing(resources),
-            structured_data={
+            structured_data=payload,
+            metadata={
                 "server": server,
-                "resources": resources,
-                "servers": self.hub.list_servers(),
+                "mcp_servers": self.hub.list_servers(),
+                "source_identifier": "mcp://hub/resources",
             },
-            metadata={"server": server, "mcp_servers": self.hub.list_servers()},
         )
 
 
@@ -457,12 +669,23 @@ class MCPHubReadResourceTool(Tool):
             name="ReadMcpResource",
             description="读取指定 MCP server 上某个 URI 的资源内容。",
             parameters=ClaudeReadMcpResourceInput,
-            guidance="先通过 ListMcpResources 确认可用 server 和 URI，再读取资源正文。",
+            guidance=(
+                "先通过 `ListMcpResources` 确认可用 server 和 URI，再读取资源正文。\n"
+                "如果你还不能确认 server/URI 是否正确，先不要盲读。\n"
+                "读取结果来自远程 MCP server，应优先以远程返回为准。"
+            ),
             read_only=True,
             source="mcp",
             tags=["mcp", "resource", "read", "claude_code"],
             supports_parallel=True,
-            metadata={"mcp_hub": True},
+            risk_categories=["mcp"],
+            side_effect_level="none",
+            resource_scope=["mcp://hub/resources/read"],
+            metadata={
+                "mcp_hub": True,
+                "mcp_capability_kind": "resource_read",
+                "source_identifier": "mcp://hub/resources/read",
+            },
         )
 
     def run(self, parameters: dict) -> ToolResult:
@@ -480,6 +703,11 @@ class MCPHubReadResourceTool(Tool):
             return ToolResult.error(
                 str(exc),
                 error_type="mcp_server_not_found",
+                display_text=_build_mcp_display_text(
+                    "读取 MCP 资源失败。",
+                    {"server": server, "uri": uri, "availableServers": self.hub.list_servers()},
+                    summary=str(exc),
+                ),
                 metadata={"server": server, "uri": uri},
             )
         return _resource_read_result_to_tool_result(result, server_name=normalized_server, uri=uri)
@@ -497,6 +725,11 @@ class MCPToolManager(MCPRuntimeManager):
         tool_prefix: str = "",
         auto_connect: bool = True,
         client: Optional[MCPClientProtocol] = None,
+        auth_config: Optional[Any] = None,
+        policy_context: Optional[Any] = None,
+        cache_store: Optional[Any] = None,
+        max_retries: Optional[int] = None,
+        persist_connection: Optional[bool] = None,
         include_resources: bool = False,
         resource_tool_prefix: Optional[str] = None,
         **transport_kwargs: Any,
@@ -509,6 +742,11 @@ class MCPToolManager(MCPRuntimeManager):
             tool_prefix=tool_prefix,
             auto_connect=auto_connect,
             client=client,
+            auth_config=auth_config,
+            policy_context=policy_context,
+            cache_store=cache_store,
+            max_retries=max_retries,
+            persist_connection=persist_connection,
             **transport_kwargs,
         )
         self.include_resources = include_resources
@@ -543,6 +781,19 @@ class MCPToolManager(MCPRuntimeManager):
     ) -> List[Tool]:
         if hub is not None:
             self._registered_server_name = hub.register_manager(self, server_name=server_name)
+            register_surface = getattr(registry, "register_runtime_surface", None)
+            if callable(register_surface):
+                register_surface("mcp_hub", "default", hub)
+        else:
+            self._registered_server_name = server_name or self.server_label
+        if getattr(self, "connection_manager", None) is not None:
+            try:
+                self.connection_manager.state.server_name = self.registry_server_name
+            except Exception:
+                pass
+        register_surface = getattr(registry, "register_runtime_surface", None)
+        if callable(register_surface):
+            register_surface("mcp_manager", self.registry_server_name, self)
 
         remote_tools = self.list_remote_tools()
         wrapped: List[Tool] = []
@@ -646,6 +897,7 @@ class MCPToolManager(MCPRuntimeManager):
                 mcp_server=self.server_label,
                 mcp_prompt_name=prompt_name,
                 mcp_prompt_arguments=normalized_prompt_info["arguments"],
+                source_identifier=f"mcp://{self.server_label}/prompts/{prompt_name}",
             )
             registered.append(skill_name)
 
@@ -661,6 +913,62 @@ class MCPToolManager(MCPRuntimeManager):
     def get_registered_prompt_skills(self) -> List[str]:
         return list(self._registered_prompt_skills)
 
+    def export_state(self) -> dict[str, Any]:
+        payload = super().export_state()
+        payload.update(
+            {
+                "includeResources": self.include_resources,
+                "resourceToolPrefix": self.resource_tool_prefix,
+                "registryServerName": self._registered_server_name,
+                "registeredPromptSkills": list(self._registered_prompt_skills),
+                "wrappedToolNames": [tool.name for tool in self._wrapped_tools],
+                "resourceToolNames": [tool.name for tool in self._resource_tools],
+            }
+        )
+        return payload
+
+    def restore_state(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+        report = super().restore_state(payload)
+        state = dict(payload or {})
+        self.include_resources = bool(state.get("includeResources", self.include_resources))
+        self.resource_tool_prefix = state.get("resourceToolPrefix", self.resource_tool_prefix)
+        self._registered_server_name = state.get("registryServerName", self._registered_server_name)
+        self._registered_prompt_skills = [
+            str(item).strip()
+            for item in list(state.get("registeredPromptSkills") or [])
+            if str(item).strip()
+        ]
+        return report
+
+    @classmethod
+    def from_state(
+        cls,
+        payload: dict[str, Any],
+        *,
+        client: Optional[MCPClientProtocol] = None,
+    ) -> "MCPToolManager":
+        state = dict(payload or {})
+        server_source_info = dict(state.get("serverSource") or {})
+        if not bool(server_source_info.get("restorable", False)) and client is None:
+            raise RuntimeError("MCP server_source 不可恢复；请在恢复时显式提供 client。")
+
+        manager = cls(
+            server_source=server_source_info.get("value"),
+            server_args=list(state.get("serverArgs") or []),
+            transport_type=state.get("transportType"),
+            env=dict(state.get("env") or {}),
+            tool_prefix=str(state.get("toolPrefix") or ""),
+            auto_connect=bool(state.get("autoConnect", True)),
+            client=client,
+            auth_config=state.get("auth"),
+            policy_context=state.get("policy"),
+            include_resources=bool(state.get("includeResources", False)),
+            resource_tool_prefix=state.get("resourceToolPrefix"),
+            **dict(state.get("transportKwargs") or {}),
+        )
+        manager.restore_state(state)
+        return manager
+
 
 def build_mcp_hub_resource_tools(hub: MCPHub) -> List[Tool]:
     return [
@@ -673,6 +981,9 @@ def register_mcp_resource_hub_tools(
     registry: ToolRegistry,
     hub: MCPHub,
 ) -> tuple[Tool, Tool]:
+    register_surface = getattr(registry, "register_runtime_surface", None)
+    if callable(register_surface):
+        register_surface("mcp_hub", "default", hub)
     registered: List[Tool] = []
     for tool in build_mcp_hub_resource_tools(hub):
         existing = registry.get_tool(tool.name)
@@ -693,6 +1004,11 @@ def register_mcp_tools(
     tool_prefix: str = "",
     auto_connect: bool = True,
     client: Optional[MCPClientProtocol] = None,
+    auth_config: Optional[Any] = None,
+    policy_context: Optional[Any] = None,
+    cache_store: Optional[Any] = None,
+    max_retries: Optional[int] = None,
+    persist_connection: Optional[bool] = None,
     *,
     include_resources: bool = False,
     resource_tool_prefix: Optional[str] = None,
@@ -709,6 +1025,11 @@ def register_mcp_tools(
         tool_prefix=tool_prefix,
         auto_connect=auto_connect,
         client=client,
+        auth_config=auth_config,
+        policy_context=policy_context,
+        cache_store=cache_store,
+        max_retries=max_retries,
+        persist_connection=persist_connection,
         include_resources=include_resources,
         resource_tool_prefix=resource_tool_prefix,
         **transport_kwargs,
@@ -730,6 +1051,11 @@ def mcptool(
     tool_prefix: str = "",
     auto_connect: bool = True,
     client: Optional[MCPClientProtocol] = None,
+    auth_config: Optional[Any] = None,
+    policy_context: Optional[Any] = None,
+    cache_store: Optional[Any] = None,
+    max_retries: Optional[int] = None,
+    persist_connection: Optional[bool] = None,
     include_resources: bool = False,
     resource_tool_prefix: Optional[str] = None,
     **transport_kwargs: Any,
@@ -742,6 +1068,11 @@ def mcptool(
         tool_prefix=tool_prefix,
         auto_connect=auto_connect,
         client=client,
+        auth_config=auth_config,
+        policy_context=policy_context,
+        cache_store=cache_store,
+        max_retries=max_retries,
+        persist_connection=persist_connection,
         include_resources=include_resources,
         resource_tool_prefix=resource_tool_prefix,
         **transport_kwargs,

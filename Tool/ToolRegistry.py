@@ -16,6 +16,7 @@ class ToolRegistry:
     def __init__(self, *, conflict_policy: ToolConflictPolicy = "replace"):
         self.tools: dict[str, Tool] = {}
         self._tool_visibility: dict[str, ToolVisibility] = {}
+        self._runtime_surfaces: dict[str, dict[str, Any]] = {}
         self.conflict_policy: ToolConflictPolicy = conflict_policy
 
     def register_tool(
@@ -220,6 +221,9 @@ class ToolRegistry:
         metadata.setdefault("side_effect_level", spec.side_effect_level)
         metadata.setdefault("resource_scope", list(spec.resource_scope))
         metadata.setdefault("visibility_scope", spec.visibility_scope)
+        source_identifier = spec.metadata.get("source_identifier")
+        if source_identifier:
+            metadata.setdefault("source_identifier", source_identifier)
         if spec.risk_categories:
             metadata.setdefault("risk_categories", list(spec.risk_categories))
         if spec.demand_skill_tool:
@@ -234,6 +238,37 @@ class ToolRegistry:
     def execute_tool(self, name: str, parameters: dict):
         result = self.execute_tool_result(name, parameters)
         return result.to_display_string()
+
+    def register_runtime_surface(self, kind: str, name: str, surface: Any) -> Any:
+        normalized_kind = str(kind or "").strip()
+        normalized_name = str(name or "").strip()
+        if not normalized_kind:
+            raise ToolRegistryError("runtime surface kind 不能为空。")
+        if not normalized_name:
+            raise ToolRegistryError("runtime surface name 不能为空。")
+        bucket = self._runtime_surfaces.setdefault(normalized_kind, {})
+        bucket[normalized_name] = surface
+        return surface
+
+    def get_runtime_surface(self, kind: str, name: str) -> Any:
+        bucket = self._runtime_surfaces.get(str(kind or "").strip(), {})
+        return bucket.get(str(name or "").strip())
+
+    def list_runtime_surfaces(self, kind: str | None = None) -> dict[str, Any] | dict[str, dict[str, Any]]:
+        if kind is None:
+            return {
+                surface_kind: dict(items)
+                for surface_kind, items in self._runtime_surfaces.items()
+            }
+        return dict(self._runtime_surfaces.get(str(kind or "").strip(), {}))
+
+    def unregister_runtime_surface(self, kind: str, name: str) -> None:
+        bucket = self._runtime_surfaces.get(str(kind or "").strip())
+        if not bucket:
+            return
+        bucket.pop(str(name or "").strip(), None)
+        if not bucket:
+            self._runtime_surfaces.pop(str(kind or "").strip(), None)
 
     def export_tools(self, provider_name: str = "openai", *, scope: str = "all") -> Any:
         from core.providers.tool_schema import create_tool_schema_adapter

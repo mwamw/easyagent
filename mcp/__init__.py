@@ -17,6 +17,10 @@ import sys
 from typing import Any
 
 from .mcp_client import MCPClient
+from .auth import MCPAuthConfig
+from .cache import MCPCapabilitySnapshot, MCPServerCache
+from .connection_manager import MCPConnectionManager, MCPConnectionState, MCPPolicyError
+from .policy import MCPPolicyContext, MCPPolicyDecision, MCPPolicyRule
 from .runtime import MCPHub, MCPRuntimeManager
 
 # Lazy-exported symbol placeholder for static analyzers.
@@ -83,4 +87,18 @@ def __getattr__(name: str) -> Any:
 	raise AttributeError(f"module 'mcp' has no attribute {name!r}")
 
 
-__all__ = ["MCPClient", "MCPRuntimeManager", "MCPHub", "MCPServer"]
+__all__ = [
+    "MCPAuthConfig",
+    "MCPCapabilitySnapshot",
+    "MCPClient",
+    "MCPConnectionManager",
+    "MCPConnectionState",
+    "MCPHub",
+    "MCPPolicyContext",
+    "MCPPolicyDecision",
+    "MCPPolicyError",
+    "MCPPolicyRule",
+    "MCPRuntimeManager",
+    "MCPServer",
+    "MCPServerCache",
+]

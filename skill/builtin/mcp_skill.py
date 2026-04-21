@@ -67,6 +67,7 @@ class MCPPromptSkill(BaseSkill):
                 "mcp_server": manager.server_label,
                 "mcp_prompt_name": prompt_name,
                 "mcp_prompt_arguments": arguments,
+                "source_identifier": f"mcp://{manager.server_label}/prompts/{prompt_name}",
             },
         )
         super().__init__(config)
@@ -140,6 +141,11 @@ class MCPSkill(BaseSkill):
         env: Optional[Dict[str, str]] = None,
         tool_prefix: str = "",
         auto_connect: bool = True,
+        auth_config: Optional[Any] = None,
+        policy_context: Optional[Any] = None,
+        cache_store: Optional[Any] = None,
+        max_retries: Optional[int] = None,
+        persist_connection: Optional[bool] = None,
         skill_name: Optional[str] = None,
         *,
         include_resource_tools: bool = True,
@@ -166,6 +172,11 @@ class MCPSkill(BaseSkill):
         self._env = env
         self._tool_prefix = tool_prefix
         self._auto_connect = auto_connect
+        self._auth_config = auth_config
+        self._policy_context = policy_context
+        self._cache_store = cache_store
+        self._max_retries = max_retries
+        self._persist_connection = persist_connection
         self._transport_kwargs = transport_kwargs
         self._include_resource_tools = include_resource_tools
         self._resource_tool_prefix = resource_tool_prefix
@@ -186,6 +197,11 @@ class MCPSkill(BaseSkill):
                 env=self._env,
                 tool_prefix=self._tool_prefix,
                 auto_connect=self._auto_connect,
+                auth_config=self._auth_config,
+                policy_context=self._policy_context,
+                cache_store=self._cache_store,
+                max_retries=self._max_retries,
+                persist_connection=self._persist_connection,
                 **self._transport_kwargs,
             )
         return self._manager
