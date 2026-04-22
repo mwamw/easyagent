@@ -74,6 +74,7 @@ include = [
   "skill*",
   "task*",
   "Tool*",
+  "observability*",
 ]
 exclude = [
   "docs*",

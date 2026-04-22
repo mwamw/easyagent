@@ -29,6 +29,7 @@ from .session import SessionRestoreReport
 from observability import InMemoryObservabilityRecorder
 from skill.manager import SkillManager
 from prompt import build_memory_prompt_section
+from core.providers import create_codec
 import json
 import asyncio
 import threading
@@ -661,12 +662,14 @@ class BaseAgent(ABC):
         operation: str,
         max_tokens: Optional[int],
         force: bool = False,
+        tokens_before: Optional[int] = None,
     ) -> Optional[int]:
         payload = {
             "agent": self,
             "operation": operation,
             "max_tokens": max_tokens,
             "force": force,
+            "tokens_before": tokens_before,
             "provider_name": getattr(self.llm, "provider_name", None),
             "history": list(self._history),
             "replay_history": list(self.replay_history),
@@ -1283,16 +1286,60 @@ class BaseAgent(ABC):
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         return True
 
+    def _estimate_history_compaction_tokens(self) -> Optional[int]:
+        if not self.replay_history:
+            return 0
+        try:
+            codec = create_codec(getattr(self.llm, "provider_name", None))
+            return codec.count_request_tokens(
+                self._context_usage_counter,
+                self.replay_history,
+                system_prompt=self._stable_system_prompt(),
+                tools=self._stable_tools(),
+                reasoning=self.reasoning,
+            )
+        except Exception:
+            return None
+
+    def _precheck_history_compaction(
+        self,
+        *,
+        max_tokens: Optional[int],
+        force: bool = False,
+    ) -> tuple[bool, Optional[int]]:
+        if max_tokens is None or max_tokens <= 0:
+            return False, None
+        tokens_before = self._estimate_history_compaction_tokens()
+        if tokens_before is None:
+            return True, None
+        if force or tokens_before > max_tokens:
+            return True, tokens_before
+        self._last_history_compaction = _build_history_compaction_state(
+            was_compacted=False,
+            compaction_possible=False,
+            tokens_before=tokens_before,
+            tokens_after=tokens_before,
+            max_tokens=max_tokens,
+        )
+        return False, tokens_before
+
     def compact_persistent_history_if_needed(self) -> bool:
         if self.context_manager is None or not self._history:
             return False
         budget = self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        should_compact, tokens_before = self._precheck_history_compaction(
+            max_tokens=budget,
+            force=False,
+        )
+        if not should_compact:
+            return False
         budget = self._run_before_compaction(
             operation="compact_persistent_history_if_needed",
             max_tokens=budget,
             force=False,
+            tokens_before=tokens_before,
         )
         if budget is None or budget <= 0:
             return False
@@ -1314,10 +1361,17 @@ class BaseAgent(ABC):
         budget = self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        should_compact, tokens_before = self._precheck_history_compaction(
+            max_tokens=budget,
+            force=False,
+        )
+        if not should_compact:
+            return False
         budget = self._run_before_compaction(
             operation="acompact_persistent_history_if_needed",
             max_tokens=budget,
             force=False,
+            tokens_before=tokens_before,
         )
         if budget is None or budget <= 0:
             return False
@@ -1339,10 +1393,15 @@ class BaseAgent(ABC):
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        _, tokens_before = self._precheck_history_compaction(
+            max_tokens=budget,
+            force=True,
+        )
         budget = self._run_before_compaction(
             operation="compact_history",
             max_tokens=budget,
             force=True,
+            tokens_before=tokens_before,
         )
         if budget is None or budget <= 0:
             return False
@@ -1365,10 +1424,15 @@ class BaseAgent(ABC):
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
+        _, tokens_before = self._precheck_history_compaction(
+            max_tokens=budget,
+            force=True,
+        )
         budget = self._run_before_compaction(
             operation="acompact_history",
             max_tokens=budget,
             force=True,
+            tokens_before=tokens_before,
         )
         if budget is None or budget <= 0:
             return False

@@ -212,6 +212,39 @@ class ToolRegistry:
             raise e
         return result
 
+    def execute_confirmed_tool_result(
+        self,
+        name: str,
+        parameters: dict[str, Any],
+        *,
+        permission_context: PermissionContext | None = None,
+        permission_engine: PermissionEngine | None = None,
+    ) -> ToolResult:
+        """Execute a previously-confirmed tool call.
+
+        This bypasses confirmation-only interruptions (`requires_confirmation`
+        and permission `ASK`) but still honors hard permission denials and all
+        normal validation/runtime errors.
+        """
+        try:
+            tool, validated = self.validate_tool_call(name, parameters)
+            auth_result = self.authorize_tool_call(
+                tool,
+                validated,
+                permission_context=permission_context,
+                permission_engine=permission_engine,
+            )
+            if auth_result is not None and auth_result.status != "needs_confirmation":
+                self._enrich_tool_result(tool, auth_result)
+                return auth_result
+            raw_result = tool.run(validated)
+            result = self.normalize_tool_result(name, raw_result)
+            self._enrich_tool_result(tool, result)
+        except ToolNotFoundError as e:
+            result = ToolResult.error(str(e), error_type="tool_not_found")
+            raise e
+        return result
+
     def _enrich_tool_result(self, tool: Tool, result: ToolResult) -> None:
         spec = tool.get_spec()
         metadata = dict(result.metadata)

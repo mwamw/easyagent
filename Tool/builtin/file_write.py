@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import os
 import tempfile
 from typing import Any, Iterable, Optional
@@ -60,6 +61,55 @@ def _structured_error(
         metadata=dict(metadata or {}),
         structured_data=structured_data,
     )
+
+
+def _normalize_diff_path(path: str) -> str:
+    return path.replace(os.sep, "/")
+
+
+def _diff_relative_path(path: str, workspace_root: str) -> str:
+    try:
+        relative = os.path.relpath(path, workspace_root)
+    except ValueError:
+        return _normalize_diff_path(path)
+    if relative in ("", "."):
+        return _normalize_diff_path(os.path.basename(path) or path)
+    if relative == os.pardir or relative.startswith(f"..{os.sep}"):
+        return _normalize_diff_path(path)
+    return _normalize_diff_path(relative)
+
+
+def _build_file_diff_payload(
+    path: str,
+    before: str,
+    after: str,
+    *,
+    workspace_root: str,
+    created: bool,
+) -> Optional[dict[str, Any]]:
+    if before == after:
+        return None
+    relative_path = _diff_relative_path(path, workspace_root)
+    before_label = "/dev/null" if created else f"a/{relative_path}"
+    diff_lines = list(
+        difflib.unified_diff(
+            before.splitlines(),
+            after.splitlines(),
+            fromfile=before_label,
+            tofile=f"b/{relative_path}",
+            lineterm="",
+        )
+    )
+    lines = [f"diff --git a/{relative_path} b/{relative_path}"]
+    if created:
+        lines.append("new file mode 100644")
+    lines.extend(diff_lines)
+    return {
+        "file_path": path,
+        "relative_path": relative_path,
+        "created": created,
+        "unified": "\n".join(lines),
+    }
 
 
 def write_text_atomically(path: str, content: str, *, workspace_root: str) -> dict[str, Any]:
@@ -218,6 +268,10 @@ class FileWriteTool(_WorkspaceWriteTool):
             guard_result = self._ensure_recent_read(resolved)
             if guard_result is not None:
                 return guard_result
+            before_content = ""
+            if os.path.exists(resolved):
+                with open(resolved, "r", encoding="utf-8", errors="replace") as handle:
+                    before_content = handle.read()
             write_info = self._atomic_write(resolved, content)
             version = remember_file_version(resolved)
         except (PathResolutionError, FilesystemAccessError, ValueError) as exc:
@@ -237,14 +291,29 @@ class FileWriteTool(_WorkspaceWriteTool):
 
         created = write_info["created"]
         action = "已创建文件" if created else "已覆盖文件"
+        diff_payload = _build_file_diff_payload(
+            resolved,
+            before_content,
+            content,
+            workspace_root=self.workspace_root,
+            created=created,
+        )
+        payload = {
+            "file_path": resolved,
+            **write_info,
+            "file_version": version.to_dict(),
+        }
+        if diff_payload is not None:
+            payload["diff"] = diff_payload
         return ToolResult.success(
             f"{action}: {resolved}",
-            structured_data={
+            structured_data=payload,
+            metadata={
                 "file_path": resolved,
                 **write_info,
                 "file_version": version.to_dict(),
+                "diff_available": diff_payload is not None,
             },
-            metadata={"file_path": resolved, **write_info, "file_version": version.to_dict()},
         )
 
 

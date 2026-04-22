@@ -38,6 +38,28 @@ __all__ = [
     "create_tool_schema_adapter",
 ]
 
+Provider_MAP = {
+    "openai": OpenAIProvider,
+    "openai_responses": OpenAIResponsesProvider,
+    "google": GoogleProvider,
+    "gemini": GoogleProvider,
+    "google_native": GoogleNativeProvider,
+    "gemini_native": GoogleNativeProvider,
+    "anthropic": AnthropicProvider,
+    "claude": AnthropicProvider,
+    "anthropic_native": AnthropicNativeProvider,
+    "claude_native": AnthropicNativeProvider,
+    # 以下都使用 OpenAI 兼容接口
+    "deepseek": OpenAIProvider,
+    "qwen": OpenAIProvider,
+    "kimi": OpenAIProvider,
+    "moonshot": OpenAIProvider,
+    "zhipu": OpenAIProvider,
+    "glm": OpenAIProvider,
+    "ollama": OpenAIProvider,
+    "vllm": OpenAIProvider,
+    "modelscope": OpenAIProvider,
+}
 
 def create_provider(
     provider_name: str,
@@ -65,30 +87,7 @@ def create_provider(
     if provider_name == "auto":
         provider_name = detect_provider_from_model(model)
     
-    provider_map = {
-        "openai": OpenAIProvider,
-        "openai_responses": OpenAIResponsesProvider,
-        "google": GoogleProvider,
-        "gemini": GoogleProvider,
-        "google_native": GoogleNativeProvider,
-        "gemini_native": GoogleNativeProvider,
-        "anthropic": AnthropicProvider,
-        "claude": AnthropicProvider,
-        "anthropic_native": AnthropicNativeProvider,
-        "claude_native": AnthropicNativeProvider,
-        # 以下都使用 OpenAI 兼容接口
-        "deepseek": OpenAIProvider,
-        "qwen": OpenAIProvider,
-        "kimi": OpenAIProvider,
-        "moonshot": OpenAIProvider,
-        "zhipu": OpenAIProvider,
-        "glm": OpenAIProvider,
-        "ollama": OpenAIProvider,
-        "vllm": OpenAIProvider,
-        "modelscope": OpenAIProvider,
-    }
-    
-    provider_class = provider_map.get(provider_name, OpenAIProvider)
+    provider_class = Provider_MAP.get(provider_name, OpenAIProvider)
     return provider_class(model=model, api_key=api_key, base_url=base_url, _provider_name=provider_name, **kwargs)
 
 

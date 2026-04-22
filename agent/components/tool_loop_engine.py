@@ -132,6 +132,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         trace_query: Optional[str] = None,
         **kwargs,
     ) -> str:
+        resume_from_history = bool(kwargs.pop("resume_from_history", False))
         agent.enable_tool = True
         agent._clear_last_tool_interrupt()
         agent._clear_ephemeral_skill_state()
@@ -140,8 +141,9 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         if agent.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
 
-        raw_query = trace_query if trace_query is not None else query
-        agent._append_query_history(query)
+        raw_query = trace_query if trace_query is not None else (query or "[resume_pending_tool_interrupt]")
+        if not resume_from_history:
+            agent._append_query_history(query)
         agent.compact_persistent_history_if_needed()
         ephemeral_replay: list[Any] = []
         messages = agent._build_start_messages(
@@ -155,10 +157,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
         agent_run_id = agent._observe_agent_run_start(
-            query,
+            query if not resume_from_history else "[resume_pending_tool_interrupt]",
             mode="tool",
             stream=False,
-            metadata={"entrypoint": "tool_loop_engine.invoke"},
+            metadata={
+                "entrypoint": "tool_loop_engine.invoke",
+                "resumed": resume_from_history,
+            },
         )
 
         try:
@@ -484,6 +489,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         trace_query: Optional[str] = None,
         **kwargs,
     ) -> str:
+        resume_from_history = bool(kwargs.pop("resume_from_history", False))
         agent.enable_tool = True
         agent._clear_last_tool_interrupt()
         agent._clear_ephemeral_skill_state()
@@ -492,8 +498,9 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         if agent.tool_registry is None:
             raise ToolRegistryError("工具调用需要提供 ToolRegistry!")
 
-        raw_query = trace_query if trace_query is not None else query
-        agent._append_query_history(query)
+        raw_query = trace_query if trace_query is not None else (query or "[resume_pending_tool_interrupt]")
+        if not resume_from_history:
+            agent._append_query_history(query)
         await agent.acompact_persistent_history_if_needed()
         ephemeral_replay: list[Any] = []
         messages = agent._build_start_messages(
@@ -507,10 +514,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
         agent_run_id = agent._observe_agent_run_start(
-            query,
+            query if not resume_from_history else "[resume_pending_tool_interrupt]",
             mode="tool",
             stream=False,
-            metadata={"entrypoint": "tool_loop_engine.ainvoke"},
+            metadata={
+                "entrypoint": "tool_loop_engine.ainvoke",
+                "resumed": resume_from_history,
+            },
         )
 
         try:
@@ -848,9 +858,11 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         trace_query: Optional[str] = None,
         **kwargs,
     ) -> AsyncGenerator[dict[str, Any], None]:
-        agent._validate_invoke_params(query, max_iter, temperature)
+        resume_from_history = bool(kwargs.pop("resume_from_history", False))
+        if not resume_from_history:
+            agent._validate_invoke_params(query, max_iter, temperature)
         agent._raise_if_stop_requested()
-        raw_query = trace_query if trace_query is not None else query
+        raw_query = trace_query if trace_query is not None else (query or "[resume_pending_tool_interrupt]")
         agent._current_query = query
         agent._clear_last_tool_interrupt()
         agent._clear_ephemeral_skill_state()
@@ -862,7 +874,8 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=error)
             raise error
 
-        agent._append_query_history(query)
+        if not resume_from_history:
+            agent._append_query_history(query)
         await agent.acompact_persistent_history_if_needed()
         ephemeral_replay: list[Any] = []
         messages = agent._build_start_messages(
@@ -875,10 +888,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         round_index = 0
         agent_run_id = agent._observe_agent_run_start(
-            query,
+            query if not resume_from_history else "[resume_pending_tool_interrupt]",
             mode="tool",
             stream=True,
-            metadata={"entrypoint": "tool_loop_engine.astream_invoke"},
+            metadata={
+                "entrypoint": "tool_loop_engine.astream_invoke",
+                "resumed": resume_from_history,
+            },
         )
 
         try:
@@ -1097,6 +1113,10 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     "tool_id": tool_id,
                                     "tool_args": tool_args,
                                     "content": tool_result,
+                                    "status": getattr(tool_result_obj, "status", None),
+                                    "structured_data": getattr(tool_result_obj, "structured_data", None),
+                                    "result_metadata": getattr(tool_result_obj, "metadata", None),
+                                    "error_type": getattr(tool_result_obj, "error_type", None),
                                 }
                                 tool_canonical = agent.llm.tool_result_to_canonical(tool_result, tool_id, tool_name)
                                 tool_replay = agent.llm.tool_result_to_replay(tool_result, tool_id, tool_name)

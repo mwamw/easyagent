@@ -147,6 +147,30 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interrupt["status"], "needs_confirmation")
         self.assertEqual(self.agent.get_history_length(), 3)
 
+    def test_execute_confirmed_tool_result_bypasses_confirmation_short_circuit(self):
+        result = self.registry.execute_confirmed_tool_result("dangerous", {})
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.to_display_string(), "should not run")
+        self.assertEqual(self.tool.run_count, 1)
+
+    def test_resolve_last_tool_interrupt_commits_pending_step(self):
+        with self.assertRaises(ToolConfirmationRequired):
+            self.agent.invoke("执行危险操作")
+
+        resolved = self.agent.resolve_last_tool_interrupt(
+            content="用户已确认执行，工具输出：操作完成。",
+            commit_pending_step=True,
+        )
+
+        self.assertEqual(resolved["tool_name"], "dangerous")
+        self.assertFalse(self.agent.has_pending_tool_interrupt())
+        self.assertIsNone(self.agent.get_pending_step_state())
+        history_text = "\n".join(
+            str(entry)
+            for entry in self.agent.get_history()
+        )
+        self.assertIn("操作完成", history_text)
+
     async def test_astream_invoke_with_tool_emits_interruption_event(self):
         events = []
         async for event in self.agent.astream_invoke_with_tool("执行危险操作"):

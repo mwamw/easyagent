@@ -46,6 +46,9 @@ class FileMutationToolsTestCase(unittest.TestCase):
         self.assertEqual(result.status, "success")
         self.assertTrue(os.path.exists(target))
         self.assertTrue(result.metadata["created"])
+        self.assertIn("diff --git a/src/new_file.py b/src/new_file.py", result.structured_data["diff"]["unified"])
+        self.assertIn("+++ b/src/new_file.py", result.structured_data["diff"]["unified"])
+        self.assertIn("+print('created')", result.structured_data["diff"]["unified"])
         with open(target, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "print('created')\n")
 
@@ -74,6 +77,9 @@ class FileMutationToolsTestCase(unittest.TestCase):
         result = tool.run({"file_path": target, "content": "print('overwrite')\n"})
 
         self.assertEqual(result.status, "success")
+        self.assertIn("--- a/src/target.py", result.structured_data["diff"]["unified"])
+        self.assertIn("+++ b/src/target.py", result.structured_data["diff"]["unified"])
+        self.assertIn("+print('overwrite')", result.structured_data["diff"]["unified"])
         with open(target, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "print('overwrite')\n")
 
@@ -94,6 +100,8 @@ class FileMutationToolsTestCase(unittest.TestCase):
 
         self.assertEqual(result.status, "success")
         self.assertEqual(result.structured_data["replacements"], 1)
+        self.assertIn("-value = 'hello'", result.structured_data["diff"]["unified"])
+        self.assertIn("+value = 'world'", result.structured_data["diff"]["unified"])
         with open(target, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "value = 'world'\n")
 

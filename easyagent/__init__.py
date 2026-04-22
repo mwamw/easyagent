@@ -9,6 +9,7 @@ from .agents import (
     StructuredOutputAgent,
 )
 from .codeintel import CachedFileEntry, CachedQueryEntry, CodeIntelManager, CodeIntelProvider, WorkspaceCodeIntelCache
+from .config import Config
 from .context import ContextManager
 from .guardrails import (
     DangerousCommandGuardrail,
@@ -51,6 +52,7 @@ from .session import ConversationStore, SessionRestoreReport, SessionStore
 from .skills import BaseSkill, SkillManager, SkillRegistry
 from .tasks import TaskRecord, TaskService, TaskStatus
 from .tools import Tool, ToolConflictPolicy, ToolRegistry, ToolResult, ToolSpec
+from .worktree import GitWorktreeInfo, GitWorktreeSession, WorktreeManager
 from .version import __version__
 
 __all__ = [
@@ -63,6 +65,7 @@ __all__ = [
     "CachedQueryEntry",
     "CodeIntelManager",
     "CodeIntelProvider",
+    "Config",
     "ContextManager",
     "ConversationStore",
     "ConversationalAgent",
@@ -114,6 +117,9 @@ __all__ = [
     "ToolRegistry",
     "ToolResult",
     "ToolSpec",
+    "GitWorktreeInfo",
+    "GitWorktreeSession",
+    "WorktreeManager",
     "WorkspaceCodeIntelCache",
     "build_default_hook_manager",
     "install_default_guardrails",

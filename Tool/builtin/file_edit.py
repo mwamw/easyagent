@@ -10,7 +10,7 @@ from ..BaseTool import ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeFileEditInput
 from ..runtime import FilesystemAccessError, PathResolutionError, remember_file_version
-from .file_write import _WorkspaceWriteTool
+from .file_write import _WorkspaceWriteTool, _build_file_diff_payload
 
 
 FILE_EDIT_PROMPT = """用于对已有文件做精确文本替换。
@@ -262,21 +262,31 @@ class FileEditTool(_WorkspaceWriteTool):
             )
 
         changed_lines = line_numbers if replace_all else line_numbers[:1]
+        diff_payload = _build_file_diff_payload(
+            resolved,
+            content,
+            new_content,
+            workspace_root=self.workspace_root,
+            created=False,
+        )
+        payload = {
+            "file_path": resolved,
+            "changed": True,
+            "replacements": replacements,
+            "match_count": match_count,
+            "replace_all": replace_all,
+            "line_numbers": changed_lines,
+            "old_string_preview": _preview_text(old_string),
+            "new_string_preview": _preview_text(new_string),
+            "match_mode": match_plan.match_mode,
+            "file_version": version.to_dict(),
+            **write_info,
+        }
+        if diff_payload is not None:
+            payload["diff"] = diff_payload
         return ToolResult.success(
             f"已更新文件: {resolved} (替换 {replacements} 处匹配)",
-            structured_data={
-                "file_path": resolved,
-                "changed": True,
-                "replacements": replacements,
-                "match_count": match_count,
-                "replace_all": replace_all,
-                "line_numbers": changed_lines,
-                "old_string_preview": _preview_text(old_string),
-                "new_string_preview": _preview_text(new_string),
-                "match_mode": match_plan.match_mode,
-                "file_version": version.to_dict(),
-                **write_info,
-            },
+            structured_data=payload,
             metadata={
                 "file_path": resolved,
                 "replacements": replacements,
@@ -284,6 +294,7 @@ class FileEditTool(_WorkspaceWriteTool):
                 "replace_all": replace_all,
                 "match_mode": match_plan.match_mode,
                 "file_version": version.to_dict(),
+                "diff_available": diff_payload is not None,
                 **write_info,
             },
         )

@@ -141,6 +141,15 @@ class CompactionBlockHook(BaseHook):
         return HookDecision.block("阻止本次 compaction 以保留原始历史。")
 
 
+class CountingCompactionHook(BaseHook):
+    def __init__(self):
+        self.calls = 0
+
+    def before_compaction(self, payload: dict):
+        self.calls += 1
+        return None
+
+
 class HookAndProtocolTests(unittest.TestCase):
     def test_before_tool_use_hook_can_modify_tool_args(self):
         registry = ToolRegistry()
@@ -312,6 +321,24 @@ class HookAndProtocolTests(unittest.TestCase):
         self.assertFalse(compacted)
         self.assertTrue(agent._last_history_compaction["hook_blocked"])
         self.assertIn("阻止本次 compaction", agent._last_history_compaction["hook_message"])
+
+    def test_before_compaction_hook_is_not_called_when_history_is_within_budget(self):
+        context_manager = ContextManager(max_tokens=4096)
+        hook = CountingCompactionHook()
+        agent = BasicAgent(
+            name="compaction-precheck-agent",
+            llm=DummyLLM(PlainProvider()),
+            context_manager=context_manager,
+            hook_manager=HookManager([hook]),
+        )
+        agent._append_query_history("hello")
+        agent._append_assistant_message_history(content="world")
+
+        compacted = agent.compact_persistent_history_if_needed()
+
+        self.assertFalse(compacted)
+        self.assertEqual(hook.calls, 0)
+        self.assertFalse(agent._last_history_compaction["was_compacted"])
 
 
 if __name__ == "__main__":

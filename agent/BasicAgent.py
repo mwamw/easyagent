@@ -315,8 +315,52 @@ class BasicAgent(BaseAgent):
     def get_last_tool_interrupt(self) -> Optional[dict[str, Any]]:
         return self.tool_interrupt_controller.get_last_interrupt()
 
+    def has_pending_tool_interrupt(self) -> bool:
+        return self.get_last_tool_interrupt() is not None
+
     def _clear_last_tool_interrupt(self) -> None:
         self.tool_interrupt_controller.clear_last_interrupt()
+
+    def resolve_last_tool_interrupt(
+        self,
+        *,
+        content: str,
+        ephemeral_context: Any = None,
+        commit_pending_step: bool = True,
+    ) -> dict[str, Any]:
+        payload = self.get_last_tool_interrupt()
+        if payload is None:
+            raise ToolExecutionError("当前没有待处理的工具中断。")
+        tool_name = str(payload.get("tool_name") or "")
+        tool_id = str(payload.get("tool_id") or "")
+        if not tool_name or not tool_id:
+            raise ToolExecutionError("待处理中断缺少 tool_name 或 tool_id。")
+        tool_canonical = self.llm.tool_result_to_canonical(content, tool_id, tool_name)
+        tool_replay = self.llm.tool_result_to_replay(content, tool_id, tool_name)
+        if self._pending_step_state is not None:
+            self._pending_step_state["tool_results_canonical"] = list(tool_canonical)
+            self._pending_step_state["tool_results_replay"] = list(tool_replay)
+            if ephemeral_context is not None:
+                self._pending_step_state["tool_ephemeral_contexts"] = [
+                    {
+                        "tool_name": tool_name,
+                        "context": self._make_json_safe(ephemeral_context),
+                    }
+                ]
+            else:
+                self._pending_step_state["tool_ephemeral_contexts"] = []
+            committed = self._commit_pending_step_state() if commit_pending_step else False
+        else:
+            self._append_dual_history(tool_canonical, tool_replay)
+            committed = True
+        self._clear_last_tool_interrupt()
+        return {
+            "tool_name": tool_name,
+            "tool_id": tool_id,
+            "status": payload.get("status"),
+            "error_type": payload.get("error_type"),
+            "committed": committed,
+        }
 
     def _finalize_tool_interrupt(
         self,
