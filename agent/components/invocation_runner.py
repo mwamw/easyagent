@@ -127,6 +127,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 agent._clear_ephemeral_skill_state()
 
         logger.info("使用普通模式调用智能体")
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="plain",
+            stream=False,
+            metadata={"entrypoint": "invoke"},
+        )
         try:
             agent._raise_if_stop_requested()
             agent._append_query_history(query)
@@ -143,23 +149,46 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 tools_enabled=False,
                 kwargs=kwargs,
             )
-            agent.callback_manager.on_llm_start(messages)
-            response_obj = agent.llm.invoke_raw(
-                messages,
-                temperature=request_temperature,
-                reasoning=request_reasoning,
-                **llm_kwargs,
-            )
-            response_obj = agent._run_after_llm_response(
-                response_obj,
-                messages=messages,
+            llm_observation_id = agent._observe_llm_request_start(
+                turn_id=turn_id,
                 request_kind="plain_invoke",
+                messages=messages,
+                reasoning=request_reasoning,
                 stream=False,
                 tools_enabled=False,
-                hook_audit=llm_hook_audit,
             )
+            agent.callback_manager.on_llm_start(messages)
+            try:
+                response_obj = agent.llm.invoke_raw(
+                    messages,
+                    temperature=request_temperature,
+                    reasoning=request_reasoning,
+                    **llm_kwargs,
+                )
+            except Exception as exc:
+                agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                raise
+            try:
+                response_obj = agent._run_after_llm_response(
+                    response_obj,
+                    messages=messages,
+                    request_kind="plain_invoke",
+                    stream=False,
+                    tools_enabled=False,
+                    hook_audit=llm_hook_audit,
+                )
+            except Exception as exc:
+                agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                raise
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
+            agent._observe_llm_request_end(
+                llm_observation_id,
+                response=response_obj,
+                success=True,
+                final_text=provider_content,
+                final_thinking=agent.llm.get_thinking_content(response_obj),
+            )
             agent.callback_manager.on_llm_end(response_obj)
             agent._raise_if_stop_requested()
 
@@ -195,13 +224,16 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=False,
             )
             agent.callback_manager.on_agent_end(agent.name, response, success=True)
+            agent._observe_agent_run_end(agent_run_id, output=response, success=True, turn_id=turn_id)
             return response
         except LLMInvokeError as e:
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise
         except Exception as e:
             logger.error(f"LLM 调用失败: {e}")
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise LLMInvokeError(f"LLM 调用失败: {e}") from e
         finally:
             agent._clear_ephemeral_skill_state()
@@ -244,6 +276,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         agent._validate_invoke_params(query, 1, temperature)
         original_query = query
         query = agent.skill_manager.on_before_invoke(query)
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="plain",
+            stream=True,
+            metadata={"entrypoint": "stream_invoke"},
+        )
         agent.callback_manager.on_agent_start(agent.name, query)
         agent._append_query_history(query)
         agent.compact_persistent_history_if_needed()
@@ -251,7 +289,9 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         final_results = []
         streamed_thinking = ""
         final_content = ""
+        final_event_payload: dict[str, Any] | None = None
         display_state = agent._new_stream_display_state()
+        llm_observation_id: str | None = None
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
             messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
@@ -262,6 +302,14 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=True,
                 tools_enabled=False,
                 kwargs=kwargs,
+            )
+            llm_observation_id = agent._observe_llm_request_start(
+                turn_id=turn_id,
+                request_kind="plain_stream_invoke",
+                messages=messages,
+                reasoning=request_reasoning,
+                stream=True,
+                tools_enabled=False,
             )
             agent.callback_manager.on_llm_start(messages)
             for event in agent.llm.stream_events(
@@ -281,15 +329,16 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                     agent._display_stream_event(display_state, event)
                     continue
                 if event_type == "final_response":
+                    final_event_payload = dict(event)
                     final_content = event.get("content", "") or final_content
                     streamed_thinking = event.get("thinking", "") or streamed_thinking
             result = "".join(final_results) or final_content
+            response_event = dict(final_event_payload or {})
+            response_event.setdefault("type", "final_response")
+            response_event["content"] = result
+            response_event["thinking"] = streamed_thinking
             stream_response = agent._run_after_llm_response(
-                {
-                    "type": "final_response",
-                    "content": result,
-                    "thinking": streamed_thinking,
-                },
+                response_event,
                 messages=messages,
                 request_kind="plain_stream_invoke",
                 stream=True,
@@ -299,6 +348,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             if isinstance(stream_response, dict):
                 result = str(stream_response.get("content", result) or result)
                 streamed_thinking = str(stream_response.get("thinking", streamed_thinking) or streamed_thinking)
+            agent._observe_llm_request_end(
+                llm_observation_id,
+                response=stream_response,
+                success=True,
+                final_text=result,
+                final_thinking=streamed_thinking,
+            )
             agent.callback_manager.on_llm_end(stream_response)
             result = agent.skill_manager.on_after_invoke(query, result)
             agent._append_assistant_message_history(
@@ -330,10 +386,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=True,
             )
             agent.callback_manager.on_agent_end(agent.name, result, success=True)
+            agent._observe_agent_run_end(agent_run_id, output=result, success=True, turn_id=turn_id)
             agent._print_stream_final(display_state, result)
             return result
         except Exception as e:
+            agent._observe_llm_request_end(llm_observation_id, success=False, error=e)
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise
         finally:
             agent._clear_ephemeral_skill_state()
@@ -430,6 +489,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 agent._clear_ephemeral_skill_state()
 
         logger.info("使用异步普通模式调用智能体")
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="plain",
+            stream=False,
+            metadata={"entrypoint": "ainvoke"},
+        )
         try:
             agent._raise_if_stop_requested()
             agent._append_query_history(query)
@@ -446,23 +511,46 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 tools_enabled=False,
                 kwargs=kwargs,
             )
-            agent.callback_manager.on_llm_start(messages)
-            response_obj = await agent.llm.ainvoke_raw(
-                messages,
-                temperature=request_temperature,
-                reasoning=request_reasoning,
-                **llm_kwargs,
-            )
-            response_obj = agent._run_after_llm_response(
-                response_obj,
-                messages=messages,
+            llm_observation_id = agent._observe_llm_request_start(
+                turn_id=turn_id,
                 request_kind="plain_ainvoke",
+                messages=messages,
+                reasoning=request_reasoning,
                 stream=False,
                 tools_enabled=False,
-                hook_audit=llm_hook_audit,
             )
+            agent.callback_manager.on_llm_start(messages)
+            try:
+                response_obj = await agent.llm.ainvoke_raw(
+                    messages,
+                    temperature=request_temperature,
+                    reasoning=request_reasoning,
+                    **llm_kwargs,
+                )
+            except Exception as exc:
+                agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                raise
+            try:
+                response_obj = agent._run_after_llm_response(
+                    response_obj,
+                    messages=messages,
+                    request_kind="plain_ainvoke",
+                    stream=False,
+                    tools_enabled=False,
+                    hook_audit=llm_hook_audit,
+                )
+            except Exception as exc:
+                agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                raise
             provider_content = agent.llm.get_response_content(response_obj)
             response = provider_content
+            agent._observe_llm_request_end(
+                llm_observation_id,
+                response=response_obj,
+                success=True,
+                final_text=provider_content,
+                final_thinking=agent.llm.get_thinking_content(response_obj),
+            )
             agent.callback_manager.on_llm_end(response_obj)
             agent._raise_if_stop_requested()
 
@@ -498,13 +586,16 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=False,
             )
             agent.callback_manager.on_agent_end(agent.name, response, success=True)
+            agent._observe_agent_run_end(agent_run_id, output=response, success=True, turn_id=turn_id)
             return response
         except LLMInvokeError as e:
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise
         except Exception as e:
             logger.error(f"LLM 异步调用失败: {e}")
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise LLMInvokeError(f"LLM 异步调用失败: {e}") from e
         finally:
             agent._clear_ephemeral_skill_state()
@@ -543,6 +634,12 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         agent._validate_invoke_params(query, 1, temperature)
         original_query = query
         query = agent.skill_manager.on_before_invoke(query)
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="plain",
+            stream=True,
+            metadata={"entrypoint": "astream_invoke"},
+        )
         agent.callback_manager.on_agent_start(agent.name, query)
         agent._append_query_history(query)
         await agent.acompact_persistent_history_if_needed()
@@ -550,7 +647,9 @@ class DefaultInvocationRunner(BaseInvocationRunner):
         final_results = []
         streamed_thinking = ""
         final_content = ""
+        final_event_payload: dict[str, Any] | None = None
         display_state = agent._new_stream_display_state()
+        llm_observation_id: str | None = None
         try:
             turn_id, last_trace_event_id = agent._begin_trace_turn(original_query)
             messages, request_temperature, request_reasoning, llm_kwargs, llm_hook_audit = agent._run_before_llm_request(
@@ -561,6 +660,14 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=True,
                 tools_enabled=False,
                 kwargs=kwargs,
+            )
+            llm_observation_id = agent._observe_llm_request_start(
+                turn_id=turn_id,
+                request_kind="plain_astream_invoke",
+                messages=messages,
+                reasoning=request_reasoning,
+                stream=True,
+                tools_enabled=False,
             )
             agent.callback_manager.on_llm_start(messages)
             async for event in agent.llm.astream_events(
@@ -580,16 +687,17 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                     agent._display_stream_event(display_state, event)
                     continue
                 if event_type == "final_response":
+                    final_event_payload = dict(event)
                     final_content = event.get("content", "") or final_content
                     streamed_thinking = event.get("thinking", "") or streamed_thinking
 
             result = "".join(final_results) or final_content
+            response_event = dict(final_event_payload or {})
+            response_event.setdefault("type", "final_response")
+            response_event["content"] = result
+            response_event["thinking"] = streamed_thinking
             stream_response = agent._run_after_llm_response(
-                {
-                    "type": "final_response",
-                    "content": result,
-                    "thinking": streamed_thinking,
-                },
+                response_event,
                 messages=messages,
                 request_kind="plain_astream_invoke",
                 stream=True,
@@ -599,6 +707,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
             if isinstance(stream_response, dict):
                 result = str(stream_response.get("content", result) or result)
                 streamed_thinking = str(stream_response.get("thinking", streamed_thinking) or streamed_thinking)
+            agent._observe_llm_request_end(
+                llm_observation_id,
+                response=stream_response,
+                success=True,
+                final_text=result,
+                final_thinking=streamed_thinking,
+            )
             agent.callback_manager.on_llm_end(stream_response)
             result = agent.skill_manager.on_after_invoke(query, result)
             agent._append_assistant_message_history(
@@ -630,10 +745,13 @@ class DefaultInvocationRunner(BaseInvocationRunner):
                 stream=True,
             )
             agent.callback_manager.on_agent_end(agent.name, result, success=True)
+            agent._observe_agent_run_end(agent_run_id, output=result, success=True, turn_id=turn_id)
             agent._print_stream_final(display_state, result)
             return result
         except Exception as e:
+            agent._observe_llm_request_end(llm_observation_id, success=False, error=e)
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e)
             raise
         finally:
             agent._clear_ephemeral_skill_state()

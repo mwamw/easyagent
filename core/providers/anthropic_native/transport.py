@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..base import BaseProvider
+from ..base import BaseProvider, _usage_field, _usage_float, _usage_int
 
 
 class AnthropicNativeProvider(BaseProvider):
@@ -129,3 +129,24 @@ class AnthropicNativeProvider(BaseProvider):
             return stream_method(**params)
         params["stream"] = True
         return await async_client.messages.create(**params)
+
+    def get_usage_from_response(self, response: Any) -> dict[str, Any]:
+        usage = _usage_field(response, "usage")
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage")
+        if usage is None:
+            return {}
+
+        payload = {
+            "inputTokens": _usage_int(usage, "input_tokens"),
+            "outputTokens": _usage_int(usage, "output_tokens"),
+            "totalTokens": _usage_int(usage, "total_tokens"),
+            "cacheReadTokens": _usage_int(usage, "cache_read_input_tokens"),
+            "cacheCreationTokens": _usage_int(usage, "cache_creation_input_tokens"),
+            "cachedInputTokens": _usage_int(usage, "cache_read_input_tokens"),
+            "costUsd": _usage_float(usage, "cost_usd", "total_cost", "total_cost_usd"),
+            "usageSource": "provider",
+        }
+        if payload["totalTokens"] is None and payload["inputTokens"] is not None and payload["outputTokens"] is not None:
+            payload["totalTokens"] = payload["inputTokens"] + payload["outputTokens"]
+        return {key: value for key, value in payload.items() if value is not None}

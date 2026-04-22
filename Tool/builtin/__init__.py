@@ -56,6 +56,8 @@ from .worktree_tools import (
     register_worktree_tools,
 )
 from .codeintel_tools import (
+    CodeIntelCacheStatusTool,
+    CodeIntelPrewarmWorkspaceTool,
     CodeIntelStatusTool,
     FindDefinitionTool,
     FindReferencesTool,
@@ -112,6 +114,8 @@ __all__ = [
     "EnterWorktreeTool",
     "ExitWorktreeTool",
     "CodeIntelStatusTool",
+    "CodeIntelCacheStatusTool",
+    "CodeIntelPrewarmWorkspaceTool",
     "FindDefinitionTool",
     "FindReferencesTool",
     "GetDocumentSymbolsTool",

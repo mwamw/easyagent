@@ -154,6 +154,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         response: Any = None
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="tool",
+            stream=False,
+            metadata={"entrypoint": "tool_loop_engine.invoke"},
+        )
 
         try:
             while max_iter > 0:
@@ -178,21 +184,46 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         tools_enabled=True,
                         kwargs=kwargs,
                     )
-                    agent.callback_manager.on_llm_start(messages)
-                    response = agent.llm.invoke_with_tools(
-                        messages,
-                        agent.get_provider_tools(),
-                        temperature=request_temperature,
-                        reasoning=request_reasoning,
-                        **llm_kwargs,
-                    )
-                    response = agent._run_after_llm_response(
-                        response,
-                        messages=messages,
+                    llm_observation_id = agent._observe_llm_request_start(
+                        turn_id=turn_id,
                         request_kind="tool_invoke",
+                        messages=messages,
+                        reasoning=request_reasoning,
                         stream=False,
                         tools_enabled=True,
-                        hook_audit=llm_hook_audit,
+                        metadata={"round": iteration_count},
+                    )
+                    agent.callback_manager.on_llm_start(messages)
+                    try:
+                        response = agent.llm.invoke_with_tools(
+                            messages,
+                            agent.get_provider_tools(),
+                            temperature=request_temperature,
+                            reasoning=request_reasoning,
+                            **llm_kwargs,
+                        )
+                    except Exception as exc:
+                        agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                        raise
+                    try:
+                        response = agent._run_after_llm_response(
+                            response,
+                            messages=messages,
+                            request_kind="tool_invoke",
+                            stream=False,
+                            tools_enabled=True,
+                            hook_audit=llm_hook_audit,
+                        )
+                    except Exception as exc:
+                        agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                        raise
+                    agent._observe_llm_request_end(
+                        llm_observation_id,
+                        response=response,
+                        success=True,
+                        final_text=agent.llm.get_response_content(response),
+                        final_thinking=agent.llm.get_thinking_content(response),
+                        metadata={"round": iteration_count},
                     )
                     agent.callback_manager.on_llm_end(response)
                     agent._raise_if_stop_requested()
@@ -279,7 +310,14 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 mode="tool",
                                 stream=False,
                             )
-                            tool_result_obj = agent._safe_execute_tool_result(tool_name, tool_args)
+                            tool_result_obj = agent._safe_execute_tool_result(
+                                tool_name,
+                                tool_args,
+                                turn_id=turn_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
+                            )
                             tool_result = tool_result_obj.to_display_string()
                             tool_canonical = agent.llm.tool_result_to_canonical(tool_result, tool_id, tool_name)
                             tool_replay = agent.llm.tool_result_to_replay(tool_result, tool_id, tool_name)
@@ -424,7 +462,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 mode="tool",
                 stream=False,
             )
+            agent._observe_agent_run_end(
+                agent_run_id,
+                output=final_response,
+                success=True,
+                turn_id=turn_id,
+            )
             return final_response
+        except Exception as exc:
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=exc, turn_id=turn_id)
+            raise
         finally:
             agent._clear_ephemeral_skill_state()
 
@@ -459,6 +506,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         response: Any = None
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         iteration_count = 0
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="tool",
+            stream=False,
+            metadata={"entrypoint": "tool_loop_engine.ainvoke"},
+        )
 
         try:
             while max_iter > 0:
@@ -483,21 +536,46 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                         tools_enabled=True,
                         kwargs=kwargs,
                     )
-                    agent.callback_manager.on_llm_start(messages)
-                    response = await agent.llm.ainvoke_with_tools(
-                        messages,
-                        agent.get_provider_tools(),
-                        reasoning=request_reasoning,
-                        temperature=request_temperature,
-                        **llm_kwargs,
-                    )
-                    response = agent._run_after_llm_response(
-                        response,
-                        messages=messages,
+                    llm_observation_id = agent._observe_llm_request_start(
+                        turn_id=turn_id,
                         request_kind="tool_ainvoke",
+                        messages=messages,
+                        reasoning=request_reasoning,
                         stream=False,
                         tools_enabled=True,
-                        hook_audit=llm_hook_audit,
+                        metadata={"round": iteration_count},
+                    )
+                    agent.callback_manager.on_llm_start(messages)
+                    try:
+                        response = await agent.llm.ainvoke_with_tools(
+                            messages,
+                            agent.get_provider_tools(),
+                            reasoning=request_reasoning,
+                            temperature=request_temperature,
+                            **llm_kwargs,
+                        )
+                    except Exception as exc:
+                        agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                        raise
+                    try:
+                        response = agent._run_after_llm_response(
+                            response,
+                            messages=messages,
+                            request_kind="tool_ainvoke",
+                            stream=False,
+                            tools_enabled=True,
+                            hook_audit=llm_hook_audit,
+                        )
+                    except Exception as exc:
+                        agent._observe_llm_request_end(llm_observation_id, success=False, error=exc)
+                        raise
+                    agent._observe_llm_request_end(
+                        llm_observation_id,
+                        response=response,
+                        success=True,
+                        final_text=agent.llm.get_response_content(response),
+                        final_thinking=agent.llm.get_thinking_content(response),
+                        metadata={"round": iteration_count},
                     )
                     agent.callback_manager.on_llm_end(response)
                     agent._raise_if_stop_requested()
@@ -586,6 +664,10 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             tool_result_obj = await agent._async_safe_execute_tool_result(
                                 tool_name,
                                 tool_args,
+                                turn_id=turn_id,
+                                round_number=iteration_count,
+                                mode="tool",
+                                stream=False,
                             )
                             tool_result = tool_result_obj.to_display_string()
                             tool_canonical = agent.llm.tool_result_to_canonical(tool_result, tool_id, tool_name)
@@ -744,7 +826,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 mode="tool",
                 stream=False,
             )
+            agent._observe_agent_run_end(
+                agent_run_id,
+                output=final_response,
+                success=True,
+                turn_id=turn_id,
+            )
             return final_response
+        except Exception as exc:
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=exc, turn_id=turn_id)
+            raise
         finally:
             agent._clear_ephemeral_skill_state()
 
@@ -783,6 +874,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
         final_response = ""
         turn_id, turn_root_event_id = agent._begin_trace_turn(raw_query)
         round_index = 0
+        agent_run_id = agent._observe_agent_run_start(
+            query,
+            mode="tool",
+            stream=True,
+            metadata={"entrypoint": "tool_loop_engine.astream_invoke"},
+        )
 
         try:
             while max_iter > 0:
@@ -805,6 +902,16 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                     tools_enabled=True,
                     kwargs=kwargs,
                 )
+                llm_observation_id = agent._observe_llm_request_start(
+                    turn_id=turn_id,
+                    request_kind="tool_astream_invoke",
+                    messages=messages,
+                    reasoning=request_reasoning,
+                    stream=True,
+                    tools_enabled=True,
+                    metadata={"round": round_index},
+                )
+                llm_observation_closed = False
                 agent.callback_manager.on_llm_start(messages)
                 llm_stream = agent.llm.astream_with_tools(
                     messages,
@@ -816,6 +923,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 should_continue = False
                 streamed_thinking = ""
                 streamed_content = ""
+                llm_stream_error: Optional[BaseException] = None
                 try:
                     yield {
                         "type": "round_start",
@@ -857,6 +965,15 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
                             if not isinstance(event, dict):
                                 raise ToolExecutionError("after_llm_response 在流式工具轮次中必须返回 dict 事件。")
+                            agent._observe_llm_request_end(
+                                llm_observation_id,
+                                response=event,
+                                success=True,
+                                final_text=event.get("content"),
+                                final_thinking=event.get("thinking") or streamed_thinking,
+                                metadata={"round": round_index},
+                            )
+                            llm_observation_closed = True
                             thinking_suffix = agent._stream_snapshot_suffix(
                                 streamed_thinking,
                                 event.get("thinking", "") or "",
@@ -962,6 +1079,10 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                     tool_result_obj = await agent._async_safe_execute_tool_result(
                                         tool_name,
                                         tool_args,
+                                        turn_id=turn_id,
+                                        round_number=round_index,
+                                        mode="tool",
+                                        stream=True,
                                     )
                                     tool_result = tool_result_obj.to_display_string()
                                     tool_success = tool_result_obj.status == "success"
@@ -1002,6 +1123,13 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                         "",
                                         success=False,
                                         error=interrupt_error,
+                                    )
+                                    agent._observe_agent_run_end(
+                                        agent_run_id,
+                                        output="",
+                                        success=False,
+                                        error=interrupt_error,
+                                        turn_id=turn_id,
                                     )
                                     yield {
                                         "type": "interruption",
@@ -1069,6 +1197,15 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                             )
                             if not isinstance(event, dict):
                                 raise ToolExecutionError("after_llm_response 在流式最终响应中必须返回 dict 事件。")
+                            agent._observe_llm_request_end(
+                                llm_observation_id,
+                                response=event,
+                                success=True,
+                                final_text=event.get("content"),
+                                final_thinking=event.get("thinking") or streamed_thinking,
+                                metadata={"round": round_index},
+                            )
+                            llm_observation_closed = True
                             final_response = event.get("content", "") or ""
                             agent.callback_manager.on_llm_end(event)
                             if event.get("thinking"):
@@ -1118,13 +1255,38 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                                 final_response,
                                 success=True,
                             )
+                            agent._observe_agent_run_end(
+                                agent_run_id,
+                                output=final_response,
+                                success=True,
+                                turn_id=turn_id,
+                            )
                             yield {
                                 "type": "final",
                                 "content": final_response,
                                 "thinking": event.get("thinking", ""),
                             }
                             return
+                except Exception as exc:
+                    llm_stream_error = exc
+                    if not llm_observation_closed:
+                        agent._observe_llm_request_end(
+                            llm_observation_id,
+                            success=False,
+                            error=exc,
+                            metadata={"round": round_index},
+                        )
+                        llm_observation_closed = True
+                    raise
                 finally:
+                    if not llm_observation_closed and llm_stream_error is None:
+                        agent._observe_llm_request_end(
+                            llm_observation_id,
+                            success=True,
+                            final_text=streamed_content or None,
+                            final_thinking=streamed_thinking or None,
+                            metadata={"round": round_index, "terminatedWithoutFinalEvent": True},
+                        )
                     await llm_stream.aclose()
 
                 if should_continue:
@@ -1152,6 +1314,12 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 stream=True,
             )
             agent.callback_manager.on_agent_end(agent.name, final_response, success=True)
+            agent._observe_agent_run_end(
+                agent_run_id,
+                output=final_response,
+                success=True,
+                turn_id=turn_id,
+            )
             yield {
                 "type": "final",
                 "content": final_response,
@@ -1159,6 +1327,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
             }
         except Exception as e:
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
+            agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e, turn_id=turn_id)
             yield {
                 "type": "error",
                 "error": str(e),

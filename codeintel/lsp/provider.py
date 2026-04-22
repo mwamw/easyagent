@@ -180,6 +180,26 @@ class LSPCodeIntelProvider(CodeIntelProvider):
         self._lock = threading.RLock()
         self._sessions: dict[tuple[str, tuple[str, ...]], LSPClient] = {}
 
+    def export_state(self) -> dict[str, Any]:
+        return {
+            "kind": "lsp",
+            "providerName": self.provider_name,
+            "serverCommand": list(self.server_command),
+            "serverEnv": dict(self.server_env),
+            "requestTimeoutMs": int(self.request_timeout_ms),
+            "diagnosticsWaitMs": int(self.diagnostics_wait_ms),
+        }
+
+    @classmethod
+    def from_state(cls, payload: dict[str, Any] | None) -> "LSPCodeIntelProvider":
+        data = dict(payload or {})
+        return cls(
+            server_command=list(data.get("serverCommand") or []),
+            server_env=dict(data.get("serverEnv") or {}),
+            request_timeout_ms=int(data.get("requestTimeoutMs") or 5000),
+            diagnostics_wait_ms=int(data.get("diagnosticsWaitMs") or 800),
+        )
+
     def _resolve_server_command(self, *, file_path: Optional[str]) -> tuple[list[str], Optional[str], str]:
         language = _language_from_path(file_path or "") if file_path else "plaintext"
         if self.server_command:

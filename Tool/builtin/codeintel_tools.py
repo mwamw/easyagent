@@ -48,6 +48,22 @@ DIAGNOSTICS_PROMPT = """用于读取语言服务器为某个文件生成的 diag
 - 这不是编译器替代品；它反映的是当前 LSP server 能看到的诊断结果。
 - 若 diagnostics 不可用或为空，不代表代码绝对正确；必要时仍应结合测试、构建或 `FileRead` 继续分析。"""
 
+CACHE_STATUS_PROMPT = """用于检查当前工作区 codeintel cache / offline index 的状态。
+- 当你想知道当前会话是否已经做过 prewarm、缓存了多少文件、workspace symbol 离线索引是否可用时，先调用它。
+- 这不是查询源码定义的工具；它返回的是缓存层状态，而不是符号结果本身。
+- 如果 `offlineIndexAvailable=false`，说明当前缓存还不足以承担 workspace-level 的离线回退；这时不要假设 `GetWorkspaceSymbols` 在 provider 不可用时还能给出结果。
+- 如果你准备在同一仓库里做一连串 symbol/diagnostics 查询，先看它，再决定要不要运行 `CodeIntelPrewarmWorkspace`。"""
+
+PREWARM_WORKSPACE_PROMPT = """用于预热当前工作区的 codeintel cache / offline index。
+- 它会扫描代码文件，并把 document symbols（以及可选 diagnostics）写入内存缓存，供后续 `GetWorkspaceSymbols`、`GetDocumentSymbols`、`GetDiagnostics` 在 provider 不稳定或重启后离线回退。
+- 这是读操作，但代价可能不低；不要在超大仓库上无脑全量跑。优先结合 `path_prefix` 和 `max_files` 做局部预热。
+- 典型场景：
+  1. 你接下来要连续做很多代码查询；
+  2. 你怀疑 LSP server 可能不稳定；
+  3. 你想让 workspace symbol 检索具备离线快照。
+- `path_prefix` 应尽量指向具体子目录，比如 `src/`, `core/`, `api/`，不要传文件路径。
+- `force=false` 时，会复用仍然新鲜的缓存，避免重复扫同一批文件；只有在你明确知道代码树变化很大时，才考虑 `force=true`。"""
+
 
 class CodeIntelStatusInput(BaseModel):
     file_path: Optional[str] = Field(
@@ -82,6 +98,31 @@ class DiagnosticsInput(BaseModel):
     file_path: str = Field(description="要拉取 diagnostics 的源码文件路径，支持相对当前工作区的路径。")
 
 
+class CodeIntelCacheStatusInput(BaseModel):
+    pass
+
+
+class CodeIntelPrewarmWorkspaceInput(BaseModel):
+    path_prefix: Optional[str] = Field(
+        default=None,
+        description="可选。限制预热到当前工作区下的某个子目录，比如 `src` 或 `core/runtime`。",
+    )
+    max_files: int = Field(
+        default=200,
+        ge=1,
+        le=1000,
+        description="最多扫描多少个代码文件。仓库很大时应主动收紧，而不是默认全量扫描。",
+    )
+    include_diagnostics: bool = Field(
+        default=True,
+        description="是否在预热时同时拉取 diagnostics。开启后更完整，但也更慢。",
+    )
+    force: bool = Field(
+        default=False,
+        description="是否强制刷新已有缓存。默认仅在缓存缺失或文件变化时才重新扫描。",
+    )
+
+
 def _build_codeintel_manager(
     *,
     manager: Optional[CodeIntelManager] = None,
@@ -91,6 +132,9 @@ def _build_codeintel_manager(
     allowed_roots: Optional[tuple[str, ...]] = None,
 ) -> CodeIntelManager:
     if manager is not None:
+        bind_parent = getattr(manager, "bind_parent_agent", None)
+        if callable(bind_parent):
+            bind_parent(parent_agent)
         return manager
     resolved_provider = provider or LSPCodeIntelProvider()
     return CodeIntelManager(
@@ -359,6 +403,62 @@ class GetDiagnosticsTool(_CodeIntelTool):
             )
 
 
+class CodeIntelCacheStatusTool(_CodeIntelTool):
+    def __init__(self, manager: CodeIntelManager):
+        super().__init__(
+            name="CodeIntelCacheStatus",
+            description="查看当前工作区 codeintel cache / offline index 的状态，包括缓存文件数、symbol 索引可用性和最近一次预热摘要。",
+            parameters=CodeIntelCacheStatusInput,
+            manager=manager,
+            guidance="在大规模代码查询前先确认 cache 是否已预热；若离线索引还不可用，再决定是否执行 CodeIntelPrewarmWorkspace。",
+            prompt=CACHE_STATUS_PROMPT,
+        )
+
+    def run(self, parameters: dict) -> ToolResult:
+        try:
+            payload = self.codeintel_manager.get_cache_status()
+            return self._success_result(action="codeintel_cache_status", payload=payload)
+        except Exception as exc:
+            return self._tool_error(
+                f"读取 codeintel cache 状态失败: {exc}",
+                error_type="codeintel_cache_status_failed",
+            )
+
+
+class CodeIntelPrewarmWorkspaceTool(_CodeIntelTool):
+    def __init__(self, manager: CodeIntelManager):
+        super().__init__(
+            name="CodeIntelPrewarmWorkspace",
+            description="预热当前工作区的 codeintel cache / offline symbol index，适合在连续做很多代码查询前先建立离线快照。",
+            parameters=CodeIntelPrewarmWorkspaceInput,
+            manager=manager,
+            guidance="优先限定 path_prefix 和 max_files，不要默认对大仓库做无边界全量预热。",
+            prompt=PREWARM_WORKSPACE_PROMPT,
+        )
+
+    def run(self, parameters: dict) -> ToolResult:
+        try:
+            payload = self.codeintel_manager.prewarm_workspace(
+                path_prefix=str(parameters.get("path_prefix") or "").strip() or None,
+                max_files=int(parameters.get("max_files") or 200),
+                include_diagnostics=bool(parameters.get("include_diagnostics", True)),
+                force=bool(parameters.get("force", False)),
+            )
+            return self._success_result(action="codeintel_prewarm_workspace", payload=payload)
+        except PathResolutionError as exc:
+            return self._tool_error(
+                f"workspace 预热失败: {exc}",
+                error_type="invalid_path",
+                metadata={"path_prefix": parameters.get("path_prefix")},
+            )
+        except Exception as exc:
+            return self._tool_error(
+                f"workspace 预热失败: {exc}",
+                error_type="codeintel_prewarm_failed",
+                metadata=dict(parameters),
+            )
+
+
 def register_codeintel_tools(
     registry: ToolRegistry,
     *,
@@ -375,16 +475,23 @@ def register_codeintel_tools(
         workspace_root=workspace_root,
         allowed_roots=allowed_roots,
     )
+    register_surface = getattr(registry, "register_runtime_surface", None)
+    if callable(register_surface):
+        register_surface("codeintel_manager", "default", codeintel_manager)
     registry.register_tool(CodeIntelStatusTool(codeintel_manager))
     registry.register_tool(FindDefinitionTool(codeintel_manager))
     registry.register_tool(FindReferencesTool(codeintel_manager))
     registry.register_tool(GetDocumentSymbolsTool(codeintel_manager))
     registry.register_tool(GetWorkspaceSymbolsTool(codeintel_manager))
     registry.register_tool(GetDiagnosticsTool(codeintel_manager))
+    registry.register_tool(CodeIntelCacheStatusTool(codeintel_manager))
+    registry.register_tool(CodeIntelPrewarmWorkspaceTool(codeintel_manager))
     return codeintel_manager
 
 
 __all__ = [
+    "CodeIntelCacheStatusTool",
+    "CodeIntelPrewarmWorkspaceTool",
     "CodeIntelStatusTool",
     "FindDefinitionTool",
     "FindReferencesTool",

@@ -14,6 +14,20 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def _read_usage_value(payload: Any, *keys: str) -> Any:
+    for key in keys:
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            if key in payload and payload[key] is not None:
+                return payload[key]
+            continue
+        value = getattr(payload, key, None)
+        if value is not None:
+            return value
+    return None
+
+
 class EasyLLM:
     """
     统一的 LLM 接口类
@@ -810,6 +824,112 @@ class EasyLLM:
         if isinstance(response, str):
             return response
         return self._get_codec().response_text(response)
+
+    def extract_usage_metrics(self, response: Any) -> dict[str, Any]:
+        """Best-effort extraction of provider usage/cost metadata from a raw response."""
+        if response is None or isinstance(response, str):
+            return {}
+        provider = getattr(self, "_provider", None)
+        if provider is not None and hasattr(provider, "get_usage_from_response"):
+            try:
+                payload = provider.get_usage_from_response(response)
+            except Exception:
+                payload = {}
+            if payload:
+                return payload
+        usage = _read_usage_value(response, "usage", "usage_metadata")
+        if usage is None and hasattr(response, "model_dump"):
+            try:
+                payload = response.model_dump(mode="json")
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                usage = payload.get("usage") or payload.get("usage_metadata")
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage") or response.get("usage_metadata")
+        if usage is None:
+            return {}
+
+        input_tokens = _read_usage_value(
+            usage,
+            "prompt_tokens",
+            "input_tokens",
+            "inputTokens",
+            "promptTokenCount",
+            "inputTokenCount",
+        )
+        output_tokens = _read_usage_value(
+            usage,
+            "completion_tokens",
+            "output_tokens",
+            "outputTokens",
+            "candidatesTokenCount",
+            "outputTokenCount",
+        )
+        total_tokens = _read_usage_value(
+            usage,
+            "total_tokens",
+            "totalTokens",
+            "totalTokenCount",
+        )
+        reasoning_details = (
+            _read_usage_value(usage, "output_token_details", "completion_tokens_details")
+            or {}
+        )
+        reasoning_tokens = _read_usage_value(reasoning_details, "reasoning_tokens", "reasoningTokens")
+        cached_input_tokens = _read_usage_value(
+            _read_usage_value(usage, "input_token_details") or {},
+            "cached_tokens",
+            "cachedTokens",
+        )
+        cost_value = _read_usage_value(
+            usage,
+            "cost_usd",
+            "costUsd",
+            "total_cost",
+            "totalCost",
+            "total_cost_usd",
+            "totalCostUsd",
+        )
+
+        try:
+            input_tokens = int(input_tokens) if input_tokens is not None else None
+        except Exception:
+            input_tokens = None
+        try:
+            output_tokens = int(output_tokens) if output_tokens is not None else None
+        except Exception:
+            output_tokens = None
+        try:
+            total_tokens = int(total_tokens) if total_tokens is not None else None
+        except Exception:
+            total_tokens = None
+        try:
+            reasoning_tokens = int(reasoning_tokens) if reasoning_tokens is not None else None
+        except Exception:
+            reasoning_tokens = None
+        try:
+            cached_input_tokens = int(cached_input_tokens) if cached_input_tokens is not None else None
+        except Exception:
+            cached_input_tokens = None
+        try:
+            cost_value = float(cost_value) if cost_value is not None else None
+        except Exception:
+            cost_value = None
+
+        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+            total_tokens = input_tokens + output_tokens
+
+        payload = {
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
+            "totalTokens": total_tokens,
+            "reasoningTokens": reasoning_tokens,
+            "cachedInputTokens": cached_input_tokens,
+            "costUsd": cost_value,
+            "usageSource": "provider",
+        }
+        return {key: value for key, value in payload.items() if value is not None}
 
     def has_tool_calls(self, response: Any) -> bool:
         """检查是否有工具调用"""

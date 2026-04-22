@@ -714,7 +714,11 @@ class GoogleNativeCodec(BaseProviderCodec):
         function_calls: list[dict[str, Any]] = []
         assistant_blocks: list[dict[str, Any]] = []
         seen_block_keys: set[tuple[Any, ...]] = set()
+        usage = None
         for chunk in raw_stream:
+            chunk_usage = getattr(chunk, "usage_metadata", None) or getattr(chunk, "usageMetadata", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
             chunk_text = getattr(chunk, "text", None)
             if chunk_text:
                 text_parts.append(chunk_text)
@@ -749,6 +753,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                         raw_blocks=assistant_blocks,
                     )
                 ],
+                "usage": usage,
             }
             return
         yield {
@@ -762,6 +767,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                     raw_blocks=assistant_blocks,
                 )
             ],
+            "usage": usage,
         }
 
     async def astream_events(self, raw_stream: Any, *, tools: bool = False) -> AsyncGenerator[dict[str, Any], None]:
@@ -770,7 +776,11 @@ class GoogleNativeCodec(BaseProviderCodec):
         function_calls: list[dict[str, Any]] = []
         assistant_blocks: list[dict[str, Any]] = []
         seen_block_keys: set[tuple[Any, ...]] = set()
+        usage = None
         async for chunk in raw_stream:
+            chunk_usage = getattr(chunk, "usage_metadata", None) or getattr(chunk, "usageMetadata", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
             chunk_text = getattr(chunk, "text", None)
             if chunk_text:
                 text_parts.append(chunk_text)
@@ -805,6 +815,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                         raw_blocks=assistant_blocks,
                     )
                 ],
+                "usage": usage,
             }
             return
         yield {
@@ -818,4 +829,5 @@ class GoogleNativeCodec(BaseProviderCodec):
                     raw_blocks=assistant_blocks,
                 )
             ],
+            "usage": usage,
         }

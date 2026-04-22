@@ -1,23 +1,30 @@
-"""Public exports for EasyAgent code intelligence."""
+"""Stable public code intelligence exports."""
 
-from .cache import CachedFileEntry, CachedQueryEntry, WorkspaceCodeIntelCache
-from .manager import CodeIntelManager
-from .models import (
+from codeintel import (
+    CachedFileEntry,
+    CachedQueryEntry,
     CodeIntelAvailability,
+    CodeIntelManager,
+    CodeIntelProvider,
     CodeIntelQueryResult,
     CodeLocation,
     CodePosition,
     CodeRange,
+    DEFAULT_FALLBACK_TOOLS,
     DefinitionQuery,
     DiagnosticRecord,
     DiagnosticsQuery,
     DocumentSymbolsQuery,
+    LSPClient,
+    LSPClientError,
+    LSPCodeIntelProvider,
     ReferenceQuery,
     SymbolRecord,
+    WorkspaceCodeIntelCache,
     WorkspaceSymbolsQuery,
+    path_to_uri,
+    uri_to_path,
 )
-from .provider import CodeIntelProvider, DEFAULT_FALLBACK_TOOLS
-from .lsp import LSPClient, LSPClientError, LSPCodeIntelProvider, path_to_uri, uri_to_path
 
 __all__ = [
     "CachedFileEntry",

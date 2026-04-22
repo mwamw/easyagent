@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..openai_compat.transport import OpenAICompatibleProviderBase
+from ..base import _usage_field, _usage_float, _usage_int
 
 
 class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
@@ -66,3 +67,25 @@ class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
     async def async_stream_raw(self, request: Any) -> Any:
         async_client = self._get_async_client()
         return await async_client.responses.create(**request)
+
+    def get_usage_from_response(self, response: Any) -> dict[str, Any]:
+        usage = _usage_field(response, "usage")
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage")
+        if usage is None:
+            return {}
+
+        input_details = _usage_field(usage, "input_tokens_details", "input_token_details") or {}
+        output_details = _usage_field(usage, "output_tokens_details", "output_token_details") or {}
+        payload = {
+            "inputTokens": _usage_int(usage, "input_tokens"),
+            "outputTokens": _usage_int(usage, "output_tokens"),
+            "totalTokens": _usage_int(usage, "total_tokens"),
+            "cachedInputTokens": _usage_int(input_details, "cached_tokens"),
+            "reasoningTokens": _usage_int(output_details, "reasoning_tokens"),
+            "costUsd": _usage_float(usage, "cost_usd", "total_cost", "total_cost_usd"),
+            "usageSource": "provider",
+        }
+        if payload["totalTokens"] is None and payload["inputTokens"] is not None and payload["outputTokens"] is not None:
+            payload["totalTokens"] = payload["inputTokens"] + payload["outputTokens"]
+        return {key: value for key, value in payload.items() if value is not None}

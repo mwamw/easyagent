@@ -477,6 +477,7 @@ class OpenAIResponsesCodec(BaseProviderCodec):
             "output_items": [],
             "output_item_keys": {},
             "terminal_emitted": False,
+            "usage": None,
         }
 
     def _set_stream_output_item(self, state: dict[str, Any], item: Any, serialized_item: dict[str, Any]) -> None:
@@ -610,6 +611,10 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                     state["terminal_emitted"] = True
             return events
         if event_type == "response.completed":
+            response = getattr(event, "response", None)
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                state["usage"] = usage
             tool_calls = self._normalize_responses_tool_calls(state["tool_calls"])
             if tool_calls:
                 events.append(
@@ -619,10 +624,10 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                         "content": "".join(state["text_parts"]),
                         "thinking": "".join(state["thinking_parts"]),
                         "assistant_items": self._build_stream_assistant_items(state, tool_calls),
+                        "usage": state.get("usage"),
                     }
                 )
             else:
-                response = getattr(event, "response", None)
                 selected_message = self._select_message_item(state.get("output_items", []))
                 content = (
                     self._extract_output_message_text(selected_message) if selected_message is not None else ""
@@ -633,6 +638,7 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                         "content": content,
                         "thinking": "".join(state["thinking_parts"]),
                         "assistant_items": self._build_stream_assistant_items(state, tool_calls),
+                        "usage": state.get("usage"),
                     }
                 )
             state["terminal_emitted"] = True
@@ -650,12 +656,14 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
                 "assistant_items": self._build_stream_assistant_items(state, tool_calls),
+                "usage": state.get("usage"),
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
             "assistant_items": self._build_stream_assistant_items(state, tool_calls),
+            "usage": state.get("usage"),
         }
 
     def stream_events(self, raw_stream: Any, *, tools: bool = False) -> Generator[dict[str, Any], None, None]:

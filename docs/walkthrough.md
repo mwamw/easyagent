@@ -271,7 +271,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：让框架具备真正可用的 code agent 语义层。
 
-当前状态：`codeintel/`、LSP stdio provider、`CodeIntelStatus / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics` 已落地，说明见 `docs/phased_codeintel_lsp_v1.md`；后续还可以继续补离线索引层和更强的跨语言优化。
+当前状态：`codeintel/`、LSP stdio provider、`CodeIntelStatus / CodeIntelCacheStatus / CodeIntelPrewarmWorkspace / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics` 已落地；在 `docs/phased_codeintel_lsp_v1.md` 的基础上，workspace cache / offline snapshot 也已补齐，说明见 `docs/phaseh_codeintel_workspace_cache.md`；后续主要剩更强的跨语言优化和 provider 策略。
 
 - 落地 `codeintel/`，先以 LSP 为主，实现 definition、references、document/workspace symbols、diagnostics
 - 增加 `CodeIntelProvider` 抽象，避免直接把 LSP 细节压进工具层
@@ -296,7 +296,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：把框架从“能运行”升级到“能长期运行和恢复”。
 
-当前状态：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口，以及 `core/hooks/` / `core/guardrails/` 已落地，说明见 `docs/phasec_restore_report_lifecycle.md` 与 `docs/phasee_hooks_guardrails_tool_protocol_v2.md`；更完整的 observability、trace 聚合和 benchmark 仍待后续实现。
+当前状态：`SessionRestoreReport`、runtime/worktree restore report、`BaseAgent.close()` 生命周期收口，以及 `core/hooks/` / `core/guardrails/` 已落地；`observability/recorder.py`、`get_observability_summary()`、`get_recent_observability_events()`、`get_trace_summary()` 也已补齐，说明见 `docs/phasec_restore_report_lifecycle.md`、`docs/phasee_hooks_guardrails_tool_protocol_v2.md` 与 `docs/phasei_observability_metrics.md`；后续主要剩 benchmark exporter 与更细的观测导出能力。
 
 - 落地 `core/hooks/` 与 `core/guardrails/`，让内容级策略与规则级权限分层协作
 - session、compaction、interruption 恢复协议升级，覆盖 tool interruption、runtime mounts、missing tools、provider drift
@@ -347,7 +347,7 @@ EasyAgent 的最终形态定位为：**以 Code Agent 为一等公民的通用 A
 
 目标：把框架收口成“既支持 code agent，也支持通用 agent”的最终发布形态。
 
-当前状态：这是当前下一阶段主任务。
+当前状态：`pyproject.toml`、`easyagent/` 公共 SDK 门面、`docs/framework_api.md`、`example/README.md` 与阶段示例已落地，说明见 `docs/phaseg_sdk_release.md`；增强支线里，`codeintel` 的 workspace cache / offline snapshot 与 observability 主线都已补齐，说明见 `docs/phaseh_codeintel_workspace_cache.md` 与 `docs/phasei_observability_metrics.md`；下一步更适合继续做 benchmark/exporter 和更细的 codeintel provider strategy。
 
 - 重新整理 `memory / rag / multimodal` 接入方式，统一挂到 runtime、context、tool、skill 抽象下
 - 明确公共 API 边界，避免上层产品依赖内部文件布局

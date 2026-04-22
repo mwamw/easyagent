@@ -21,6 +21,14 @@ class CodePosition:
     line: int
     character: int
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "CodePosition":
+        data = dict(payload or {})
+        return cls(
+            line=int(data.get("line", 0)),
+            character=int(data.get("character", 0)),
+        )
+
     def to_dict(self) -> dict[str, int]:
         return {
             "line": int(self.line),
@@ -32,6 +40,14 @@ class CodePosition:
 class CodeRange:
     start: CodePosition
     end: CodePosition
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "CodeRange":
+        data = dict(payload or {})
+        return cls(
+            start=CodePosition.from_dict(data.get("start")),
+            end=CodePosition.from_dict(data.get("end")),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +66,20 @@ class CodeLocation:
     detail: Optional[str] = None
     preview: Optional[str] = None
     container_name: Optional[str] = None
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "CodeLocation":
+        data = dict(payload or {})
+        return cls(
+            path=str(data.get("path") or ""),
+            uri=str(data.get("uri") or ""),
+            range=CodeRange.from_dict(data.get("range")),
+            name=str(data.get("name") or "") or None,
+            kind=str(data.get("kind") or "") or None,
+            detail=str(data.get("detail") or "") or None,
+            preview=str(data.get("preview") or "") or None,
+            container_name=str(data.get("containerName") or data.get("container_name") or "") or None,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -82,6 +112,25 @@ class SymbolRecord:
     container_name: Optional[str] = None
     children: list["SymbolRecord"] = field(default_factory=list)
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "SymbolRecord":
+        data = dict(payload or {})
+        return cls(
+            name=str(data.get("name") or ""),
+            kind=str(data.get("kind") or ""),
+            path=str(data.get("path") or ""),
+            uri=str(data.get("uri") or ""),
+            range=CodeRange.from_dict(data.get("range")),
+            selection_range=(
+                CodeRange.from_dict(data.get("selectionRange") or data.get("selection_range"))
+                if (data.get("selectionRange") or data.get("selection_range")) is not None
+                else None
+            ),
+            detail=str(data.get("detail") or "") or None,
+            container_name=str(data.get("containerName") or data.get("container_name") or "") or None,
+            children=[cls.from_dict(item) for item in list(data.get("children") or []) if item is not None],
+        )
+
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "name": self.name,
@@ -111,6 +160,20 @@ class DiagnosticRecord:
     source: Optional[str] = None
     tags: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "DiagnosticRecord":
+        data = dict(payload or {})
+        return cls(
+            path=str(data.get("path") or ""),
+            uri=str(data.get("uri") or ""),
+            severity=str(data.get("severity") or ""),
+            message=str(data.get("message") or ""),
+            range=CodeRange.from_dict(data.get("range")),
+            code=str(data.get("code") or "") or None,
+            source=str(data.get("source") or "") or None,
+            tags=[str(item) for item in list(data.get("tags") or []) if item is not None],
+        )
+
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "path": self.path,
@@ -136,6 +199,18 @@ class CodeIntelAvailability:
     reason: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "CodeIntelAvailability":
+        data = dict(payload or {})
+        return cls(
+            available=bool(data.get("available")),
+            provider_name=str(data.get("providerName") or data.get("provider_name") or "codeintel"),
+            workspace_root=str(data.get("workspaceRoot") or data.get("workspace_root") or ""),
+            server_command=[str(item) for item in list(data.get("serverCommand") or data.get("server_command") or []) if item],
+            reason=str(data.get("reason") or "") or None,
+            metadata=dict(data.get("metadata") or {}),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         payload = {
             "available": bool(self.available),
@@ -158,6 +233,29 @@ class CodeIntelQueryResult:
     fallback_tools: list[str] = field(default_factory=lambda: ["FileRead", "Grep", "Glob"])
     error_message: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(
+        cls,
+        payload: dict[str, Any] | None,
+        *,
+        item_loader: Any | None = None,
+    ) -> "CodeIntelQueryResult":
+        data = dict(payload or {})
+        raw_items = list(data.get("items") or [])
+        if callable(item_loader):
+            items = [item_loader(item) for item in raw_items if item is not None]
+        else:
+            items = raw_items
+        return cls(
+            status=str(data.get("status") or "unknown"),
+            provider_name=str(data.get("providerName") or data.get("provider_name") or "codeintel"),
+            workspace_root=str(data.get("workspaceRoot") or data.get("workspace_root") or ""),
+            items=items,
+            fallback_tools=[str(item) for item in list(data.get("fallbackTools") or data.get("fallback_tools") or ["FileRead", "Grep", "Glob"]) if item],
+            error_message=str(data.get("errorMessage") or data.get("error_message") or "") or None,
+            metadata=dict(data.get("metadata") or {}),
+        )
 
     @classmethod
     def ok(

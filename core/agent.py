@@ -26,6 +26,7 @@ from .guardrails import build_default_hook_manager
 from .hooks import HookManager
 from .permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
 from .session import SessionRestoreReport
+from observability import InMemoryObservabilityRecorder
 from skill.manager import SkillManager
 from prompt import build_memory_prompt_section
 import json
@@ -203,6 +204,7 @@ class BaseAgent(ABC):
         self.execution_context = execution_context
         self.last_restore_report: Optional[SessionRestoreReport] = None
         self.last_close_report: Optional[dict[str, Any]] = None
+        self.observability_recorder = InMemoryObservabilityRecorder(agent_name=self.name)
 
         # 自动注册 V2 记忆系统工具
         if self.memory_manage and self.tool_registry:
@@ -435,8 +437,24 @@ class BaseAgent(ABC):
             return []
         managers: list[Any] = []
         seen: set[int] = set()
+        list_surfaces = getattr(tool_registry, "list_runtime_surfaces", None)
+        if callable(list_surfaces):
+            try:
+                surfaces = list_surfaces("codeintel_manager")
+                for manager in surfaces.values():
+                    marker = id(manager)
+                    if marker in seen:
+                        continue
+                    seen.add(marker)
+                    managers.append(manager)
+            except Exception:
+                pass
+        if managers:
+            return managers
         for tool_name in (
             "CodeIntelStatus",
+            "CodeIntelCacheStatus",
+            "CodeIntelPrewarmWorkspace",
             "FindDefinition",
             "FindReferences",
             "GetDocumentSymbols",
@@ -1382,6 +1400,7 @@ class BaseAgent(ABC):
                     for message in self.replay_history
                 ],
             ).to_dict(),
+            "observability_state": self.observability_recorder.export_state(),
         }
 
     def _restore_serializable_state(self, state: Optional[dict[str, Any]]) -> None:
@@ -1405,6 +1424,8 @@ class BaseAgent(ABC):
         else:
             self.replay_history = []
             self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self.observability_recorder.restore_state(state.get("observability_state"))
+        self.observability_recorder.set_agent_name(self.name)
         return None
 
     @classmethod
@@ -1508,6 +1529,20 @@ class BaseAgent(ABC):
             except Exception as exc:
                 logger.warning("导出 MCP manager 状态失败: %s", exc)
 
+        codeintel_runtime_snapshot = None
+        codeintel_managers = self._find_codeintel_managers(self.tool_registry)
+        if codeintel_managers:
+            try:
+                codeintel_runtime_snapshot = {
+                    "managers": [
+                        self._make_json_safe(manager.export_state())
+                        for manager in codeintel_managers
+                        if hasattr(manager, "export_state")
+                    ],
+                }
+            except Exception as exc:
+                logger.warning("导出 codeintel manager 状态失败: %s", exc)
+
         return {
             "schema_version": 1,
             "agent_type": self.__class__.__name__,
@@ -1535,6 +1570,7 @@ class BaseAgent(ABC):
             "collaboration_runtime": self._make_json_safe(collaboration_runtime_snapshot),
             "worktree_runtime": self._make_json_safe(worktree_runtime_snapshot),
             "mcp_runtime": self._make_json_safe(mcp_runtime_snapshot),
+            "codeintel_runtime": self._make_json_safe(codeintel_runtime_snapshot),
             "state": self._make_json_safe(self._get_serializable_state()),
         }
 
@@ -1700,6 +1736,7 @@ class BaseAgent(ABC):
                 register_ask_user_question_tool,
                 register_bash_tool,
                 register_calculator_tool,
+                register_codeintel_tools,
                 register_config_tool,
                 register_enter_plan_mode_tool,
                 register_enter_worktree_tool,
@@ -1852,6 +1889,38 @@ class BaseAgent(ABC):
                         logger.warning("自动恢复 MCP manager '%s' 失败: %s", server_name, exc)
             except Exception as exc:
                 logger.warning("自动恢复 MCP runtime 失败: %s", exc)
+
+        codeintel_runtime_snapshot = snapshot.get("codeintel_runtime") or {}
+        expected_codeintel_tools = {
+            "CodeIntelStatus",
+            "CodeIntelCacheStatus",
+            "CodeIntelPrewarmWorkspace",
+            "FindDefinition",
+            "FindReferences",
+            "GetDocumentSymbols",
+            "GetWorkspaceSymbols",
+            "GetDiagnostics",
+        }
+        if codeintel_runtime_snapshot or any(name in expected_tools for name in expected_codeintel_tools):
+            try:
+                from codeintel import CodeIntelManager
+
+                manager_payloads = list(codeintel_runtime_snapshot.get("managers") or [])
+                manager = None
+                if manager_payloads:
+                    manager = CodeIntelManager.from_state(
+                        manager_payloads[0],
+                        workspace_root=workspace_root,
+                        allowed_roots=allowed_roots,
+                    )
+                register_codeintel_tools(
+                    registry,
+                    manager=manager,
+                    workspace_root=workspace_root,
+                    allowed_roots=tuple(allowed_roots or (workspace_root,)),
+                )
+            except Exception as exc:
+                logger.warning("自动恢复 codeintel runtime 失败: %s", exc)
 
         if not registry.get_tool_names():
             if expected_tools:
@@ -2147,6 +2216,63 @@ class BaseAgent(ABC):
                     code="mcp_runtime_partial_restore",
                     message=f"MCP runtime 仅部分恢复，缺少 server: {missing_servers}",
                     metadata={"missingServers": missing_servers},
+                )
+
+        codeintel_runtime_snapshot = snapshot.get("codeintel_runtime") or {}
+        expected_codeintel_tools = {
+            "CodeIntelStatus",
+            "CodeIntelCacheStatus",
+            "CodeIntelPrewarmWorkspace",
+            "FindDefinition",
+            "FindReferences",
+            "GetDocumentSymbols",
+            "GetWorkspaceSymbols",
+            "GetDiagnostics",
+        }
+        if codeintel_runtime_snapshot or any(name in expected_tools for name in expected_codeintel_tools):
+            codeintel_managers = cls._find_codeintel_managers(agent.tool_registry)
+            for manager in codeintel_managers:
+                bind_parent = getattr(manager, "bind_parent_agent", None)
+                if callable(bind_parent):
+                    try:
+                        bind_parent(agent)
+                    except Exception as exc:
+                        logger.warning("绑定 codeintel manager 的 parent_agent 失败: %s", exc)
+            manager_payloads = list(codeintel_runtime_snapshot.get("managers") or [])
+            current_workspace_roots: list[str] = []
+            cache_workspace_roots: list[str] = []
+            for manager in codeintel_managers:
+                workspace_root = str(getattr(manager, "workspace_root", "") or "").strip()
+                if workspace_root:
+                    current_workspace_roots.append(workspace_root)
+                get_cache_status = getattr(manager, "get_cache_status", None)
+                if callable(get_cache_status):
+                    try:
+                        cache_status = dict(get_cache_status() or {})
+                        cache_workspace_root = str(cache_status.get("workspaceRoot") or "").strip()
+                        if cache_workspace_root:
+                            cache_workspace_roots.append(cache_workspace_root)
+                    except Exception:
+                        pass
+            missing_managers = max(0, len(manager_payloads) - len(codeintel_managers))
+            restore_report.extend_component(
+                "codeintel_runtime",
+                {
+                    "status": "restored" if missing_managers == 0 else "degraded",
+                    "restoredItems": current_workspace_roots or cache_workspace_roots,
+                    "degradedItems": ["codeintel_manager"] * missing_managers if missing_managers else [],
+                    "metadata": {
+                        "managerCount": len(codeintel_managers),
+                        "workspaceRoots": sorted(set(current_workspace_roots or cache_workspace_roots)),
+                    },
+                },
+            )
+            if missing_managers:
+                restore_report.add_issue(
+                    component="codeintel_runtime",
+                    code="codeintel_runtime_partial_restore",
+                    message=f"codeintel runtime 仅部分恢复，缺少 {missing_managers} 个 manager。",
+                    metadata={"expectedManagerCount": len(manager_payloads), "actualManagerCount": len(codeintel_managers)},
                 )
 
     @classmethod
@@ -2719,6 +2845,228 @@ class BaseAgent(ABC):
         )
         return self._make_json_safe(usage)
 
+    def _estimate_llm_request_tokens(
+        self,
+        messages: Any,
+        *,
+        reasoning: Optional[dict[str, Any]] = None,
+        tools_enabled: bool = False,
+    ) -> Optional[int]:
+        try:
+            request_input = self.llm._prepare_request_input(messages)
+            tools = self.tool_registry if tools_enabled and self.tool_registry is not None else None
+            return self.llm.count_request_tokens(
+                self._context_usage_counter,
+                request_input.replay_history,
+                system_prompt=request_input.system_prompt,
+                tools=tools,
+                reasoning=reasoning,
+            )
+        except Exception:
+            return None
+
+    def _estimate_llm_output_tokens(
+        self,
+        *,
+        response: Any = None,
+        final_text: Optional[str] = None,
+        final_thinking: Optional[str] = None,
+    ) -> dict[str, Any]:
+        usage = self.llm.extract_usage_metrics(response)
+        text = final_text
+        thinking = final_thinking
+        if text is None:
+            text = self.llm.get_response_content(response) if response is not None else None
+        if thinking is None:
+            thinking = self.llm.get_thinking_content(response) if response is not None else None
+        if text is None and response is not None and self.llm.has_tool_calls(response):
+            try:
+                text = json.dumps(self._make_json_safe(self.llm.get_tool_calls(response)), ensure_ascii=False)
+            except Exception:
+                text = None
+        if usage.get("outputTokens") is None:
+            estimated_text = str(text or "")
+            estimated_thinking = str(thinking or "")
+            usage["outputTokens"] = self._context_usage_counter.count(estimated_text) + self._context_usage_counter.count(estimated_thinking)
+            usage.setdefault("usageSource", "estimated")
+        if usage.get("totalTokens") is None and usage.get("inputTokens") is not None and usage.get("outputTokens") is not None:
+            usage["totalTokens"] = int(usage["inputTokens"]) + int(usage["outputTokens"])
+        return usage
+
+    def _observe_agent_run_start(
+        self,
+        query: str,
+        *,
+        mode: str,
+        stream: bool,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        return self.observability_recorder.begin_agent_run(
+            query=query,
+            mode=mode,
+            stream=stream,
+            metadata=metadata,
+        )
+
+    def _observe_agent_run_end(
+        self,
+        event_id: Optional[str],
+        *,
+        output: str,
+        success: bool,
+        error: Optional[BaseException] = None,
+        turn_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not event_id:
+            return
+        self.observability_recorder.end_agent_run(
+            event_id,
+            output=output,
+            success=success,
+            error_type=type(error).__name__ if error is not None else None,
+            error_message=str(error) if error is not None else None,
+            turn_id=turn_id,
+            metadata=metadata,
+        )
+
+    def _observe_llm_request_start(
+        self,
+        *,
+        turn_id: Optional[str],
+        request_kind: str,
+        messages: Any,
+        reasoning: Optional[dict[str, Any]] = None,
+        stream: bool,
+        tools_enabled: bool,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        return self.observability_recorder.begin_llm_request(
+            turn_id=turn_id,
+            request_kind=request_kind,
+            stream=stream,
+            tools_enabled=tools_enabled,
+            provider_name=getattr(self.llm, "provider_name", None),
+            model=getattr(self.llm, "model", None),
+            input_tokens=self._estimate_llm_request_tokens(
+                messages,
+                reasoning=reasoning,
+                tools_enabled=tools_enabled,
+            ),
+            metadata=metadata,
+        )
+
+    def _observe_llm_request_end(
+        self,
+        event_id: Optional[str],
+        *,
+        response: Any = None,
+        success: bool,
+        error: Optional[BaseException] = None,
+        final_text: Optional[str] = None,
+        final_thinking: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not event_id:
+            return
+        usage = self._estimate_llm_output_tokens(
+            response=response,
+            final_text=final_text,
+            final_thinking=final_thinking,
+        )
+        self.observability_recorder.end_llm_request(
+            event_id,
+            input_tokens=usage.get("inputTokens"),
+            output_tokens=usage.get("outputTokens"),
+            total_tokens=usage.get("totalTokens"),
+            cached_input_tokens=usage.get("cachedInputTokens"),
+            reasoning_tokens=usage.get("reasoningTokens"),
+            cache_read_tokens=usage.get("cacheReadTokens"),
+            cache_creation_tokens=usage.get("cacheCreationTokens"),
+            tool_use_prompt_tokens=usage.get("toolUsePromptTokens"),
+            usage_source=usage.get("usageSource"),
+            success=success,
+            error_type=type(error).__name__ if error is not None else None,
+            error_message=str(error) if error is not None else None,
+            cost_usd=usage.get("costUsd"),
+            metadata={**dict(metadata or {}), **usage},
+        )
+
+    def _observe_tool_execution_start(
+        self,
+        *,
+        turn_id: Optional[str],
+        tool_name: str,
+        tool_args: dict[str, Any],
+        mode: Optional[str] = None,
+        stream: Optional[bool] = None,
+        round_number: Optional[int] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> str:
+        tool_spec = self.tool_registry.get_tool_spec(tool_name) if self.tool_registry is not None else None
+        spec_metadata = {}
+        if tool_spec is not None:
+            spec_metadata = {
+                "sideEffectLevel": tool_spec.side_effect_level,
+                "visibilityScope": tool_spec.visibility_scope,
+                "resourceScope": list(tool_spec.resource_scope or []),
+                "toolSource": tool_spec.source,
+            }
+        return self.observability_recorder.begin_tool_execution(
+            turn_id=turn_id,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            mode=mode,
+            stream=stream,
+            round_number=round_number,
+            metadata={**spec_metadata, **dict(metadata or {})},
+        )
+
+    def _observe_tool_execution_end(
+        self,
+        event_id: Optional[str],
+        *,
+        result: Optional[ToolResult] = None,
+        error: Optional[BaseException] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not event_id:
+            return
+        self.observability_recorder.end_tool_execution(
+            event_id,
+            success=(result.status == "success") if result is not None else False,
+            result_status=(result.status if result is not None else "error"),
+            error_type=type(error).__name__ if error is not None else None,
+            error_message=str(error) if error is not None else None,
+            metadata={
+                **dict(metadata or {}),
+                **(dict(result.metadata or {}) if result is not None else {}),
+            },
+        )
+
+    def get_observability_summary(self) -> dict[str, Any]:
+        return self._make_json_safe(self.observability_recorder.get_summary())
+
+    def get_recent_observability_events(
+        self,
+        *,
+        limit: int = 20,
+        event_type: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        return self._make_json_safe(
+            self.observability_recorder.get_recent_events(limit=limit, event_type=event_type)
+        )
+
+    def get_trace_summary(self, *, limit_turns: int = 5) -> list[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        return self._make_json_safe(
+            self.observability_recorder.get_trace_summary(trace_history, limit_turns=limit_turns)
+        )
+
+    def clear_observability(self) -> None:
+        self.observability_recorder.clear()
+
     def get_history_length(self) -> int:
         """
         获取对话历史长度
@@ -2914,7 +3262,16 @@ class BaseAgent(ABC):
         except Exception as e:
             raise ToolExecutionError(f"解析工具参数时发生错误: {e}") from e
 
-    def _safe_execute_tool_result(self, tool_name: str, tool_args: dict) -> ToolResult:
+    def _safe_execute_tool_result(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        *,
+        turn_id: Optional[str] = None,
+        round_number: Optional[int] = None,
+        mode: Optional[str] = None,
+        stream: Optional[bool] = None,
+    ) -> ToolResult:
         """
         安全执行工具并返回结构化结果。
         
@@ -2931,6 +3288,7 @@ class BaseAgent(ABC):
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
 
+        observe_id: Optional[str] = None
         try:
             effective_args, before_audit, tool_spec = self._run_before_tool_use(tool_name, tool_args)
         except HookExecutionError as exc:
@@ -2940,9 +3298,26 @@ class BaseAgent(ABC):
                 error_type=exc.error_type,
                 metadata=metadata,
             )
+            observe_id = self._observe_tool_execution_start(
+                turn_id=turn_id,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                mode=mode,
+                stream=stream,
+                round_number=round_number,
+            )
+            self._observe_tool_execution_end(observe_id, result=blocked_result, error=exc)
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=exc)
             return blocked_result
 
+        observe_id = self._observe_tool_execution_start(
+            turn_id=turn_id,
+            tool_name=tool_name,
+            tool_args=effective_args,
+            mode=mode,
+            stream=stream,
+            round_number=round_number,
+        )
         self.callback_manager.on_tool_start(tool_name, effective_args)
 
         try:
@@ -2966,17 +3341,28 @@ class BaseAgent(ABC):
                 display_result,
                 success=success,
             )
+            self._observe_tool_execution_end(observe_id, result=result)
             return result
             
         except Exception as e:
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
+            self._observe_tool_execution_end(observe_id, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
 
     def _safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:
         result = self._safe_execute_tool_result(tool_name, tool_args)
         return result.to_display_string()
 
-    async def _async_safe_execute_tool_result(self, tool_name: str, tool_args: dict) -> ToolResult:
+    async def _async_safe_execute_tool_result(
+        self,
+        tool_name: str,
+        tool_args: dict,
+        *,
+        turn_id: Optional[str] = None,
+        round_number: Optional[int] = None,
+        mode: Optional[str] = None,
+        stream: Optional[bool] = None,
+    ) -> ToolResult:
         """
         异步安全执行工具并返回结构化结果。
         
@@ -2986,6 +3372,7 @@ class BaseAgent(ABC):
         if self.tool_registry is None:
             raise ToolExecutionError("工具注册表未配置!")
 
+        observe_id: Optional[str] = None
         try:
             effective_args, before_audit, tool_spec = self._run_before_tool_use(tool_name, tool_args)
         except HookExecutionError as exc:
@@ -2995,9 +3382,26 @@ class BaseAgent(ABC):
                 error_type=exc.error_type,
                 metadata=metadata,
             )
+            observe_id = self._observe_tool_execution_start(
+                turn_id=turn_id,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                mode=mode,
+                stream=stream,
+                round_number=round_number,
+            )
+            self._observe_tool_execution_end(observe_id, result=blocked_result, error=exc)
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=exc)
             return blocked_result
 
+        observe_id = self._observe_tool_execution_start(
+            turn_id=turn_id,
+            tool_name=tool_name,
+            tool_args=effective_args,
+            mode=mode,
+            stream=stream,
+            round_number=round_number,
+        )
         self.callback_manager.on_tool_start(tool_name, effective_args)
 
         try:
@@ -3027,10 +3431,12 @@ class BaseAgent(ABC):
                 display_result,
                 success=success,
             )
+            self._observe_tool_execution_end(observe_id, result=result)
             return result
             
         except Exception as e:
             self.callback_manager.on_tool_end(tool_name, "", success=False, error=e)
+            self._observe_tool_execution_end(observe_id, error=e)
             raise ToolExecutionError(f"工具 '{tool_name}' 执行失败: {e}") from e
 
     async def _async_safe_execute_tool(self, tool_name: str, tool_args: dict) -> str:

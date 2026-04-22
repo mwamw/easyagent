@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ..base import BaseProvider
+from ..base import BaseProvider, _usage_field, _usage_float, _usage_int
 
 
 class GoogleNativeProvider(BaseProvider):
@@ -112,3 +112,24 @@ class GoogleNativeProvider(BaseProvider):
         if hasattr(stream, "__await__"):
             stream = await stream
         return stream
+
+    def get_usage_from_response(self, response: Any) -> dict[str, Any]:
+        usage = _usage_field(response, "usage_metadata", "usageMetadata", "usage")
+        if usage is None and isinstance(response, dict):
+            usage = response.get("usage_metadata") or response.get("usageMetadata") or response.get("usage")
+        if usage is None:
+            return {}
+
+        payload = {
+            "inputTokens": _usage_int(usage, "prompt_token_count", "promptTokenCount", "input_token_count", "inputTokenCount"),
+            "outputTokens": _usage_int(usage, "candidates_token_count", "candidatesTokenCount", "output_token_count", "outputTokenCount"),
+            "totalTokens": _usage_int(usage, "total_token_count", "totalTokenCount"),
+            "cachedInputTokens": _usage_int(usage, "cached_content_token_count", "cachedContentTokenCount"),
+            "reasoningTokens": _usage_int(usage, "thoughts_token_count", "thoughtsTokenCount"),
+            "toolUsePromptTokens": _usage_int(usage, "tool_use_prompt_token_count", "toolUsePromptTokenCount"),
+            "costUsd": _usage_float(usage, "cost_usd", "total_cost", "total_cost_usd"),
+            "usageSource": "provider",
+        }
+        if payload["totalTokens"] is None and payload["inputTokens"] is not None and payload["outputTokens"] is not None:
+            payload["totalTokens"] = payload["inputTokens"] + payload["outputTokens"]
+        return {key: value for key, value in payload.items() if value is not None}

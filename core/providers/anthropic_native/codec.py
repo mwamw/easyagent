@@ -536,7 +536,16 @@ class AnthropicNativeCodec(BaseProviderCodec):
             "tool_calls": {},
             "assistant_blocks": {},
             "terminal_emitted": False,
+            "usage": None,
         }
+
+    def _extract_stream_usage(self, value: Any) -> Any:
+        payload = self._as_dict(value)
+        if isinstance(payload, dict) and payload.get("usage") is not None:
+            return payload.get("usage")
+        if hasattr(value, "usage"):
+            return getattr(value, "usage", None)
+        return None
 
     def _extract_stream_delta_text(self, delta: Any) -> Optional[str]:
         delta = self._as_dict(delta)
@@ -622,6 +631,12 @@ class AnthropicNativeCodec(BaseProviderCodec):
         events: list[dict[str, Any]] = []
         if not event_type:
             return events
+        if event_type == "message_start":
+            message = payload.get("message") if isinstance(payload, dict) else getattr(event, "message", None)
+            usage = self._extract_stream_usage(message)
+            if usage is not None:
+                state["usage"] = usage
+            return events
         if event_type == "content_block_start":
             index = payload.get("index", 0) if isinstance(payload, dict) else getattr(event, "index", 0)
             block = payload.get("content_block") if isinstance(payload, dict) else getattr(event, "content_block", None)
@@ -682,6 +697,11 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 current["input_json"] += json_fragment
             return events
         if event_type == "message_delta":
+            usage = self._extract_stream_usage(payload) or self._extract_stream_usage(
+                payload.get("delta") if isinstance(payload, dict) else getattr(event, "delta", None)
+            )
+            if usage is not None:
+                state["usage"] = usage
             delta = payload.get("delta") if isinstance(payload, dict) else getattr(event, "delta", None)
             stop_reason = delta.get("stop_reason") if isinstance(delta, dict) else getattr(delta, "stop_reason", None)
             if stop_reason == "tool_use":
@@ -692,6 +712,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                         "content": "".join(state["text_parts"]),
                         "thinking": "".join(state["thinking_parts"]),
                         "assistant_items": [self._build_stream_assistant_message(state)],
+                        "usage": state.get("usage"),
                     }
                 )
                 state["terminal_emitted"] = True
@@ -703,6 +724,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                     "content": "".join(state["text_parts"]),
                     "thinking": "".join(state["thinking_parts"]),
                     "assistant_items": [self._build_stream_assistant_message(state)],
+                    "usage": state.get("usage"),
                 }
             )
             state["terminal_emitted"] = True
@@ -720,12 +742,14 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
                 "assistant_items": [self._build_stream_assistant_message(state)],
+                "usage": state.get("usage"),
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
             "assistant_items": [self._build_stream_assistant_message(state)],
+            "usage": state.get("usage"),
         }
 
     def stream_events(self, raw_stream: Any, *, tools: bool = False) -> Generator[dict[str, Any], None, None]:

@@ -12,6 +12,78 @@ from abc import ABC, abstractmethod
 from typing import Any, Iterable, Optional
 
 
+def _usage_field(payload: Any, *keys: str) -> Any:
+    for key in keys:
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            value = payload.get(key)
+        else:
+            value = getattr(payload, key, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _usage_int(payload: Any, *keys: str) -> Optional[int]:
+    value = _usage_field(payload, *keys)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _usage_float(payload: Any, *keys: str) -> Optional[float]:
+    value = _usage_field(payload, *keys)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+class ProviderResponseEnvelope:
+    """Wrap a provider response/message while preserving usage metadata."""
+
+    def __init__(
+        self,
+        raw: Any,
+        *,
+        usage: Any = None,
+        usage_metadata: Any = None,
+    ):
+        self._raw = raw
+        self.usage = usage
+        self.usage_metadata = usage_metadata
+
+    def __getattr__(self, name: str) -> Any:
+        raw = object.__getattribute__(self, "_raw")
+        if isinstance(raw, dict) and name in raw:
+            return raw[name]
+        return getattr(raw, name)
+
+    def model_dump(self, *args: Any, **kwargs: Any) -> Any:
+        raw = object.__getattribute__(self, "_raw")
+        if hasattr(raw, "model_dump"):
+            payload = raw.model_dump(*args, **kwargs)
+        elif isinstance(raw, dict):
+            payload = dict(raw)
+        else:
+            raise AttributeError("wrapped response does not support model_dump")
+        if isinstance(payload, dict):
+            if self.usage is not None and payload.get("usage") is None:
+                payload["usage"] = self.usage
+            if self.usage_metadata is not None and payload.get("usage_metadata") is None:
+                payload["usage_metadata"] = self.usage_metadata
+        return payload
+
+    def unwrap(self) -> Any:
+        return self._raw
+
+
 class BaseProvider(ABC):
     def __init__(
         self,
@@ -87,6 +159,31 @@ class BaseProvider(ABC):
         if all(hasattr(item, "get_spec") and callable(getattr(item, "get_spec")) for item in items):
             return self.get_tool_schema_adapter().export_tools(items)
         return items
+
+    def wrap_response_with_usage(
+        self,
+        response: Any,
+        *,
+        usage: Any = None,
+        usage_metadata: Any = None,
+    ) -> Any:
+        if response is None:
+            return None
+        if isinstance(response, dict):
+            wrapped = dict(response)
+            if usage is not None:
+                wrapped["usage"] = usage
+            if usage_metadata is not None:
+                wrapped["usage_metadata"] = usage_metadata
+            return wrapped
+        return ProviderResponseEnvelope(
+            response,
+            usage=usage,
+            usage_metadata=usage_metadata,
+        )
+
+    def get_usage_from_response(self, response: Any) -> dict[str, Any]:
+        return {}
 
     def close(self) -> None:
         client = getattr(self, "client", None)

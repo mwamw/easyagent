@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "easyagent"
+version = "0.7.0"
+description = "A code-agent-first general agent framework with runtime, tools, tasks, MCP, and session lifecycle support."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "EasyAgent Contributors" }
+]
+dependencies = [
+  "openai>=1.0.0",
+  "anthropic>=0.25.0",
+  "google-genai>=1.0.0",
+  "pydantic>=2.0.0",
+  "typing_extensions>=4.0.0",
+  "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+rag = [
+  "numpy>=1.24.0",
+  "chromadb>=0.4.0",
+  "markitdown>=0.1.0",
+  "pypdf>=3.0.0",
+  "chardet>=5.0.0",
+  "tiktoken>=0.5.0",
+]
+memory = [
+  "sentence-transformers>=2.0.0",
+  "qdrant-client>=1.7.0",
+  "neo4j>=5.0.0",
+  "transformers>=4.0.0",
+  "torch>=2.0.0",
+  "jieba>=0.42.0",
+  "scikit-learn>=1.0.0",
+]
+mcp = [
+  "fastmcp>=2.0.0",
+]
+dev = [
+  "pytest>=8.0.0",
+  "pytest-asyncio>=0.23.0",
+  "google-search-results>=2.4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/easyagent/easyagent"
+Repository = "https://github.com/easyagent/easyagent"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "easyagent*",
+  "agent*",
+  "codeintel*",
+  "context*",
+  "core*",
+  "db*",
+  "mcp*",
+  "memory*",
+  "orchestrator*",
+  "output*",
+  "prompt*",
+  "rag*",
+  "runtime*",
+  "skill*",
+  "task*",
+  "Tool*",
+]
+exclude = [
+  "docs*",
+  "example*",
+  "test*",
+]
+
+[tool.setuptools.package-data]
+easyagent = ["py.typed"]

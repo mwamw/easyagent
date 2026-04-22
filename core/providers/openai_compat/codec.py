@@ -365,10 +365,31 @@ class OpenAIChatCodec(BaseProviderCodec):
         return list(getattr(response, "tool_calls", []) or [])
 
     def _init_chat_tool_stream_state(self) -> dict[str, Any]:
-        return {"text_parts": [], "thinking_parts": [], "tool_calls": {}, "terminal_emitted": False}
+        return {
+            "text_parts": [],
+            "thinking_parts": [],
+            "tool_calls": {},
+            "terminal_emitted": False,
+            "usage": None,
+            "finish_reason": None,
+        }
+
+    @staticmethod
+    def _extract_stream_usage(chunk: Any) -> Any:
+        if chunk is None:
+            return None
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            return usage
+        if isinstance(chunk, dict):
+            return chunk.get("usage")
+        return None
 
     def _extract_chat_stream_events(self, chunk: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        usage = self._extract_stream_usage(chunk)
+        if usage is not None:
+            state["usage"] = usage
         choices = getattr(chunk, "choices", None) or []
         if not choices:
             return events
@@ -404,25 +425,7 @@ class OpenAIChatCodec(BaseProviderCodec):
 
         finish_reason = getattr(choice, "finish_reason", None)
         if finish_reason in {"stop", "length", "content_filter"}:
-            tool_calls = self._normalize_chat_tool_calls(state["tool_calls"])
-            if tool_calls:
-                events.append(
-                    {
-                        "type": "tool_calls",
-                        "tool_calls": tool_calls,
-                        "content": "".join(state["text_parts"]),
-                        "thinking": "".join(state["thinking_parts"]),
-                    }
-                )
-            else:
-                events.append(
-                    {
-                        "type": "final_response",
-                        "content": "".join(state["text_parts"]),
-                        "thinking": "".join(state["thinking_parts"]),
-                    }
-                )
-            state["terminal_emitted"] = True
+            state["finish_reason"] = finish_reason
         return events
 
     def _normalize_chat_tool_calls(self, tool_calls_by_index: dict[Any, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -446,11 +449,13 @@ class OpenAIChatCodec(BaseProviderCodec):
                 "tool_calls": tool_calls,
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
+                "usage": state.get("usage"),
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
+            "usage": state.get("usage"),
         }
 
     def stream_events(self, raw_stream: Any, *, tools: bool = False) -> Generator[dict[str, Any], None, None]:

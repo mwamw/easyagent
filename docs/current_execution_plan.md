@@ -11,7 +11,7 @@
 - 优先补运行时闭环、恢复闭环、扩展协议，再补能力层
 - 不优先做 CLI/TUI/voice 这类产品层能力
 
-更新说明（2026-04-20）：
+更新说明（2026-04-22）：
 
 - `Phase A` 已完成：`AgentGet / AgentList / AgentWait / AgentStop`、后台 handle 语义、`completion records` 已补齐
 - `Phase B` 已完成：`MailboxRead / MailboxAck`、message 生命周期、mailbox 自动注入 prompt、协作消费闭环已补齐
@@ -19,7 +19,10 @@
 - `Phase D` 已完成：`codeintel/`、LSP stdio provider、codeintel tools、fallback 协议已补齐
 - `Phase E` 已完成：`core/hooks/`、`core/guardrails/`、Tool Protocol v2、registry 冲突策略、`ephemeral_context` trace/restore 接线已补齐
 - `Phase F` 已完成：`mcp/connection_manager.py`、`mcp/auth.py`、`mcp/cache.py`、`mcp/policy.py`、MCP runtime surface、session restore/close report 接线已补齐，说明见 `docs/phasef_mcp_engineering.md`
-- 当前下一阶段应进入 `Phase G：SDK 收口与通用 Agent 能力整理`
+- `Phase G` 已完成：`pyproject.toml`、`easyagent/` 公共 SDK 门面、`docs/framework_api.md`、`example/README.md`、SDK 示例已补齐，说明见 `docs/phaseg_sdk_release.md`
+- `Phase H` 已完成：`codeintel/cache.py`、workspace cache、offline symbol snapshot、`CodeIntelCacheStatus / CodeIntelPrewarmWorkspace`、codeintel runtime session restore 已补齐，说明见 `docs/phaseh_codeintel_workspace_cache.md`
+- `Phase I` 已完成：`observability/recorder.py`、agent/llm/tool 统一观测、summary/recent events/trace summary、session restore、`easyagent.observability` 已补齐，说明见 `docs/phasei_observability_metrics.md`
+- 当前下一阶段进入增强支线：`benchmark/exporter` 与更细的 `codeintel provider strategy`
 
 ## 当前状态对照
 
@@ -75,8 +78,9 @@
 - code intelligence 已具备 LSP v1：
   - `codeintel/`
   - `LSPCodeIntelProvider`
-  - `CodeIntelStatus / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics`
-  - unavailable 时会正式退回 `FileRead / Grep / Glob`
+  - `CodeIntelStatus / CodeIntelCacheStatus / CodeIntelPrewarmWorkspace / FindDefinition / FindReferences / GetDocumentSymbols / GetWorkspaceSymbols / GetDiagnostics`
+  - 已具备 workspace cache、offline symbol snapshot、query cache fallback
+  - session restore 后可重建 codeintel runtime 与 cache
 - provider schema adapter 已落地：`core/providers/tool_schema.py`
 
 ### 已完成但只到 MVP 的能力
@@ -87,45 +91,47 @@
 - `AgentRuntimeManager` 能保存 handle、mailbox、team assignment，并支持 export/restore
 - `SubagentManager` 能同步执行、后台执行、保存 output file
 - runtime/team 状态可以进入 session restore
-- codeintel 已能接入 LSP，但还没有离线索引层、workspace 级缓存和更强的跨语言优化
+- codeintel 已具备 LSP v1 + workspace cache/offline snapshot，但更强的跨语言优化和更细的 provider 策略还没做完
 
 ### 当前最明显的缺口
 
 这些缺口会直接限制 EasyAgent 继续长成 Claude Code 风格 code agent：
 
-1. code intelligence 还没到最终形态
+1. observability 主线已经补齐，但还可以继续增强
 
-- 已有 LSP v1，但还没有离线索引层
-- 还缺 workspace 级缓存、批量预热、跨语言更细策略
-- 目前的 fallback 是稳定的，但还没有更高层的“自动切换到索引器”能力
+- 统一的 token / cost / error / tool metrics 聚合已落地
+- `get_observability_summary()`、`get_recent_observability_events()`、`get_trace_summary()` 已可直接使用
+- 后续增强重点变成 benchmark exporter、外部 metrics sink 和更细的多 agent/MCP/codeintel 分桶
 
-2. SDK/package 边界还没收口
+2. SDK/package 边界已完成第一版收口，但后续仍可继续增强
 
-- 还没有 `pyproject.toml`
-- 公共 API 边界还没有正式冻结
-- `docs/` 和 `example/` 还没有按“框架示例 / 产品示例”重新整理
+- `pyproject.toml` 已落地
+- 公共 API 门面 `easyagent/` 已落地
+- `docs/framework_api.md` 和 `example/README.md` 已建立稳定入口索引
+- 后续主要是继续细化兼容边界，而不是从零收口
 
-3. observability 仍是轻量级
+3. code intelligence 还有增强空间
 
-- trace 已能记录更完整的 tool result 与 `ephemeral_context`
-- 但 token/cost/失败类型聚合、统一 metrics 和 benchmark 还没有成体系
+- 现在已具备 workspace cache 与 offline snapshot
+- 但跨语言优化、批量预热策略和更细的 provider 选择仍可继续增强
 
 ## 新的优先级原则
 
 `walkthrough.md` 里的旧顺序是合理的长期路线，但按当前代码状态，优先级需要调整成：
 
-1. 先做 `SDK/package/doc` 收口
-2. codeintel 增强与 observability 并行推进
-3. codeintel 后续增强放在并行支线：
-   - 离线索引层
-   - workspace 缓存
+1. 先继续增强 observability：
+   - benchmark exporter
+   - 外部 metrics sink
+2. codeintel 后续增强保留在并行支线：
    - 更细的跨语言优化
+   - 更细粒度的 provider 策略
+   - 更高效的批量预热
 
 原因很简单：
 
-- 现在多 agent 协作、runtime restore report、LSP v1、hooks/guardrails、Tool Protocol v2 和 MCP engineering 都已经跑通
-- 当前最阻塞框架继续长成最终版的，是 SDK 收口以及更强的 codeintel/observability
-- codeintel 已经有可用主干，后续更多是增强，而不是当前最先阻塞主线的缺口
+- 现在多 agent 协作、runtime restore report、LSP v1、hooks/guardrails、Tool Protocol v2、MCP engineering 和 SDK 收口都已经跑通
+- 当前最值得继续增强的是 observability exporter/benchmark 与更细粒度的 codeintel provider 策略
+- codeintel 现在已经进入“可持续增强”阶段，而不是当前主线上最阻塞的缺口
 
 ## 新执行计划
 
@@ -369,6 +375,8 @@
 
 目标：把框架正式收口成可发布 SDK。
 
+状态：已完成，阶段说明见 `docs/phaseg_sdk_release.md`
+
 #### 主要工作
 
 - 增加 `pyproject.toml`
@@ -398,26 +406,85 @@
 - 上层产品不必依赖内部文件布局
 - 关闭 codeintel/team/task 时，基础 agent 仍能工作
 
+### Phase H：CodeIntel Workspace Cache + Offline Snapshot
+
+目标：把 codeintel 从“只依赖实时 LSP”升级成“实时 provider + 离线 cache/snapshot”双层结构。
+
+状态：已完成，阶段说明见 `docs/phaseh_codeintel_workspace_cache.md`
+
+#### 主要工作
+
+- 新增 `codeintel/cache.py`
+- 增加 `WorkspaceCodeIntelCache`
+- 增加 `CodeIntelManager.prewarm_workspace()` 与 `get_cache_status()`
+- 增加 `CodeIntelCacheStatus`、`CodeIntelPrewarmWorkspace`
+- 为 `document symbols / diagnostics / definition / references` 增加 cache fallback
+- 为 `workspace symbols` 增加 offline symbol snapshot fallback
+- 让 `codeintel_runtime` 进入 session snapshot 与 restore report
+
+#### 建议落点
+
+- `codeintel/cache.py`
+- `codeintel/manager.py`
+- `Tool/builtin/codeintel_tools.py`
+- `core/agent.py`
+
+#### 验收标准
+
+- `prewarm -> cache status -> offline symbol fallback` 全链路可验证
+- provider 不可用时，已缓存的 `workspace symbols / document symbols / diagnostics / definition / references` 能按能力边界回退
+- session restore 后 codeintel cache 仍可用
+
+### Phase I：Observability Metrics + Trace Summary
+
+目标：把 EasyAgent 的观测层从零散 callback 指标升级成正式 runtime 能力。
+
+状态：已完成，阶段说明见 `docs/phasei_observability_metrics.md`
+
+#### 主要工作
+
+- 新增 `observability/recorder.py`
+- 增加 `BaseObservabilityRecorder` 与 `InMemoryObservabilityRecorder`
+- 为 plain / tool 的同步、异步、流式调用链补齐 agent run / llm request / tool execution 观测
+- 增加 `get_observability_summary()`、`get_recent_observability_events()`、`get_trace_summary()`
+- 让 `observability_state` 进入 session snapshot 与 restore
+- 增加 `easyagent.observability`
+
+#### 建议落点
+
+- `observability/recorder.py`
+- `core/agent.py`
+- `agent/components/invocation_runner.py`
+- `agent/components/tool_loop_engine.py`
+- `easyagent/observability.py`
+
+#### 验收标准
+
+- plain / tool 的同步、异步、流式主链都有统一观测
+- summary 能聚合 token / cost / error / tool metrics
+- trace summary 能按 turn 输出 llm/tool 概览
+- session restore 后 observability state 仍可读取
+
 ## 推荐执行顺序
 
 如果按当前代码状态推进，我建议严格按下面顺序做：
 
-1. `Phase G`
+1. observability 增强支线
+   - benchmark exporter
+   - 外部 metrics sink
 2. codeintel 增强支线
-   - 离线索引
-   - workspace 缓存
    - 更细粒度的 provider 策略
+   - 更高效的批量预热
 
-这比旧计划更贴近当前现实，因为协作闭环、runtime restore report、LSP v1、hooks/guardrails + Tool Protocol v2，以及 MCP engineering 都已经补齐，当前最阻塞框架继续演进的是 SDK 收口和更强的索引/观测层。
+这比旧计划更贴近当前现实，因为协作闭环、runtime restore report、LSP v1、workspace cache/offline snapshot、hooks/guardrails + Tool Protocol v2、MCP engineering，以及 observability 主线都已经补齐，接下来更适合做增强型支线。
 
 ## 本轮之后的最小任务包
 
 如果只做接下来一轮最有价值的工作，建议先完成下面这个最小任务包：
 
-1. 增加 `pyproject.toml` 与可发布安装入口
-2. 明确公共 API 边界
-3. 重整 `docs/` 与 `example/` 的 SDK/产品示例分层
-4. 整理 `memory / rag / multimodal` 的统一接入方式
-5. 补 SDK 收口阶段的契约测试与真实 example
+1. 增加 benchmark exporter
+2. 增加外部 metrics sink
+3. 继续增强 codeintel provider strategy
+4. 为增强支线补契约测试与真实 example
 
-这是当前阶段性价比最高的一步，因为当前框架已经有 runtime、restore、codeintel、hooks、Tool Protocol v2 和 MCP engineering，下一块真正阻塞发布形态的就是 SDK 收口。
+这是当前阶段性价比最高的一步，因为当前框架已经有 runtime、restore、codeintel cache、observability、hooks、Tool Protocol v2、MCP engineering 和 SDK 收口，下一步更适合做导出层和增强策略层。

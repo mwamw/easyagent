@@ -1,6 +1,11 @@
 # EasyAgent
 
-一个功能完整、可扩展的 AI Agent 开发框架，支持多种 Agent 类型、多层记忆系统、RAG、工具调用等。
+一个以 code agent 为一等公民、同时支持通用 agent 构建的 AI Agent 框架。当前仓库已经包含：
+
+- 稳定公共 SDK 入口：`easyagent`
+- 多 agent runtime / task / session restore
+- code intelligence、hooks / guardrails、MCP engineering
+- memory / rag / skill / tool 扩展面
 
 ## 📦 特性
 
@@ -16,6 +21,9 @@
 
 ## 📚 文档
 
+- [框架公共 API](./docs/framework_api.md)
+- [当前执行计划](./docs/current_execution_plan.md)
+- [示例索引](./example/README.md)
 - [Skill 使用指南](./skill/skill_guide.md)
 - [Tool 使用指南](./Tool/tool_guide.md)
 
@@ -28,11 +36,16 @@
 git clone https://github.com/your-repo/EasyAgent.git
 cd EasyAgent
 
-# 安装核心依赖
-pip install -r requirements/base.txt
+# 安装核心 SDK
+pip install -e .
 
-# 开发与测试依赖（可选）
-pip install -r requirements/dev.txt
+# 安装 MCP / RAG / Memory 扩展（按需）
+pip install -e ".[mcp]"
+pip install -e ".[rag]"
+pip install -e ".[memory]"
+
+# 开发依赖（可选）
+pip install -e ".[dev]"
 
 # 配置环境变量
 cp .env.example .env
@@ -42,8 +55,7 @@ cp .env.example .env
 ### 基础使用
 
 ```python
-from agent import BasicAgent
-from core.llm import EasyLLM
+from easyagent import BasicAgent, EasyLLM
 
 # 创建 LLM 和 Agent
 llm = EasyLLM(model="gemini-2.5-flash", provider="google")
@@ -57,9 +69,10 @@ print(response)
 ### 带工具调用
 
 ```python
-from agent import BasicAgent
-from Tool.ToolRegistry import ToolRegistry
+from easyagent import BasicAgent, EasyLLM, ToolRegistry
 from pydantic import BaseModel, Field
+
+llm = EasyLLM(model="gemini-2.5-flash", provider="google")
 
 # 创建工具注册表
 registry = ToolRegistry()
@@ -86,10 +99,7 @@ response = agent.invoke("帮我搜索最新的AI新闻")
 ### MCP 工具集成
 
 ```python
-from agent import BasicAgent
-from core.llm import EasyLLM
-from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin import register_mcp_tools
+from easyagent import BasicAgent, EasyLLM, ToolRegistry, register_mcp_tools
 
 llm = EasyLLM(model="gemini-2.5-flash", provider="google")
 registry = ToolRegistry()
@@ -97,7 +107,7 @@ registry = ToolRegistry()
 # 示例 1: 通过本地 Python MCP Server 脚本接入（stdio）
 mcp_manager = register_mcp_tools(
     registry=registry,
-    server_source=["python", "./examples/mcp_server.py"],
+    server_source=["python", "./mcp/examples/real_python_mcp_server.py"],
     tool_prefix="mcp_",
     include_resources=True,
 )
@@ -125,15 +135,16 @@ mcp_manager.close()
 如果你希望把 MCP prompts 也接入当前系统，推荐走 Skill 系统：
 
 ```python
-from skill.builtin import MCPSkill
-from skill.meta_tools import MetaSkill
-from skill.registry import SkillRegistry
+from easyagent import BasicAgent, EasyLLM
+from easyagent.skills import MCPSkill, MetaSkill, SkillRegistry
 
 skill_registry = SkillRegistry()
+llm = EasyLLM(model="gemini-2.5-flash", provider="google")
+agent = BasicAgent(name="mcp_skill_agent", llm=llm)
 agent.with_skill(MetaSkill(skill_registry, agent.skill_manager))
 agent.with_skill(
     MCPSkill(
-        server_source=["python", "./examples/mcp_server.py"],
+        server_source=["python", "./mcp/examples/real_python_mcp_server.py"],
         prompt_registry=skill_registry,
         register_prompt_skills=True,
     )
@@ -155,8 +166,8 @@ skill_tool(
 你也可以使用更简洁的语法糖写法：
 
 ```python
-from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin import mcptool
+from easyagent import ToolRegistry
+from easyagent.mcp import mcptool
 
 registry = ToolRegistry()
 
@@ -165,7 +176,7 @@ mcp_tool = mcptool(
         "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "/home/wxd/LLM/EasyAgent",
+        "/path/to/workspace",
     ],
     tool_prefix="fs_",
 )
