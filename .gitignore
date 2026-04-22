@@ -1,12 +1,49 @@
-# Python bytecode and caches
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Pytest and tooling caches
-.pytest_cache/
 *.pyc
-# Local env files
-.env
-.venv/
+*.pyo
+*.pyd
+.Python
+env/
 venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Distribution / Build
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases & Data
+*.db
+*.log
+.env
+
+# Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Temp files
+scratch.py
+fix_md.py
+test_openai.py
