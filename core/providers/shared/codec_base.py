@@ -14,6 +14,44 @@ class BaseProviderCodec(ABC):
     def __init__(self, provider_name: str):
         self.provider_name = provider_name
 
+    @staticmethod
+    def _provider_replay_scope(provider_name: Optional[str]) -> Optional[str]:
+        normalized = (provider_name or "").lower()
+        if normalized in {"google_native", "gemini_native"}:
+            return "google_native"
+        if normalized in {"anthropic_native", "claude_native"}:
+            return "anthropic_native"
+        if normalized in {"google", "gemini"}:
+            return "google"
+        if normalized in {"anthropic", "claude"}:
+            return "anthropic"
+        return normalized or None
+
+    def _canonical_origin_matches_current_provider(self, message: CanonicalMessage) -> bool:
+        """Whether provider-specific payload/signatures can be replayed as-is."""
+        return bool(
+            message.provider
+            and self._provider_replay_scope(message.provider) == self._provider_replay_scope(self.provider_name)
+        )
+
+    def _provider_payload_for_current_provider(
+        self,
+        message: CanonicalMessage,
+        block: CanonicalBlock,
+    ) -> Optional[dict[str, Any]]:
+        if not self._canonical_origin_matches_current_provider(message):
+            return None
+        return block.payload if isinstance(block.payload, dict) else None
+
+    def _signature_for_current_provider(
+        self,
+        message: CanonicalMessage,
+        block: CanonicalBlock,
+    ) -> Any:
+        if not self._canonical_origin_matches_current_provider(message):
+            return None
+        return block.signature
+
     def history_entry_to_canonical(self, message: Any) -> list[CanonicalMessage]:
         return _generic_canonical_messages_from_history_entry(message, provider_name=self.provider_name)
 

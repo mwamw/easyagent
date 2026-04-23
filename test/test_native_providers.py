@@ -103,6 +103,36 @@ class _FakeGoogleAsyncClient:
         self.models = _FakeAsyncGoogleModels()
 
 
+class _RetryingGoogleAsyncModels:
+    def __init__(self):
+        self.calls = []
+
+    async def generate_content_stream(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            raise RuntimeError("Unable to submit request because Thought signature is not valid.")
+
+        async def _stream():
+            yield SimpleNamespace(
+                text="fallback-ok",
+                candidates=[
+                    SimpleNamespace(
+                        content=SimpleNamespace(
+                            role="model",
+                            parts=[SimpleNamespace(text="fallback-ok")],
+                        )
+                    )
+                ],
+            )
+
+        return _stream()
+
+
+class _RetryingGoogleAsyncClient:
+    def __init__(self):
+        self.models = _RetryingGoogleAsyncModels()
+
+
 class _FakeGoogleStreamClient:
     def __init__(self):
         self.models = _FakeGoogleStreamModels()
@@ -402,18 +432,18 @@ class TestNativeProviders(unittest.TestCase):
 
         tool_event = events[-1]
         self.assertEqual(tool_event["type"], "tool_calls")
-        self.assertTrue(tool_event["assistant_items"]["parts"][0]["thought"])
-        self.assertEqual(tool_event["assistant_items"]["parts"][0]["thought_signature"], "sig-1")
-        self.assertIn("function_call", tool_event["assistant_items"]["parts"][1])
+        assistant_message = tool_event["assistant_items"][0]
+        self.assertTrue(assistant_message["parts"][0]["thought"])
+        self.assertEqual(assistant_message["parts"][0]["thought_signature"], "sig-1")
+        self.assertIn("function_call", assistant_message["parts"][1])
 
     def test_google_provider_request_buffer_encodes_binary_thought_signature(self):
         request_input = ReplayRequestInput(
             provider_name="google_native",
             replay_history=[{"role": "user", "parts": [{"text": "weather"}]}],
-            request_ready_checker=lambda message: isinstance(message, dict),
         )
         raw_signature = b"\n$\x01\x8f=k"
-        request_input.append(
+        request_input.append_replay(
             {
                 "role": "model",
                 "parts": [
@@ -427,6 +457,143 @@ class TestNativeProviders(unittest.TestCase):
         )
         signature = request_input.replay_history[-1]["parts"][0]["thought_signature"]
         self.assertEqual(signature, base64.b64encode(raw_signature).decode("ascii"))
+
+    def test_google_provider_builds_fallback_request_without_signed_model_turn(self):
+        provider = GoogleNativeProvider(
+            model="gemini-2.5-pro",
+            api_key="k",
+            base_url="",
+            client=_FakeGoogleClient(),
+        )
+        request = {
+            "model": "gemini-2.5-pro",
+            "contents": [
+                {"role": "user", "parts": [{"text": "使用工具计算3^22"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "function_call": {
+                                "id": "call_1",
+                                "name": "calculator",
+                                "args": {"expression": "3**22"},
+                            },
+                            "thought_signature": "sig-1",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "id": "call_1",
+                                "name": "calculator",
+                                "response": {"result": "31381059609"},
+                            }
+                        }
+                    ],
+                },
+            ],
+            "config": {"tools": []},
+        }
+
+        fallback = provider._build_invalid_signature_fallback_request(request)
+        self.assertIsNotNone(fallback)
+        self.assertEqual([item["role"] for item in fallback["contents"]], ["user", "user"])
+        self.assertEqual(
+            fallback["contents"][1]["parts"][0]["function_response"]["response"],
+            {"result": "31381059609"},
+        )
+
+    def test_google_provider_builds_fallback_request_by_stripping_stale_thought_signatures(self):
+        provider = GoogleNativeProvider(
+            model="gemini-2.5-pro",
+            api_key="k",
+            base_url="",
+            client=_FakeGoogleClient(),
+        )
+        request = {
+            "model": "gemini-2.5-pro",
+            "contents": [
+                {"role": "user", "parts": [{"text": "hello"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "text": "private plan",
+                            "thought": True,
+                            "thought_signature": "stale-anthropic-signature",
+                        },
+                        {"text": "visible answer"},
+                    ],
+                },
+            ],
+            "config": {},
+        }
+
+        fallback = provider._build_invalid_signature_fallback_request(request)
+        self.assertIsNotNone(fallback)
+        self.assertNotIn("thought_signature", repr(fallback))
+        self.assertIn("thought_signature", repr(request))
+        self.assertEqual(fallback["contents"][1]["parts"][0]["text"], "private plan")
+
+    def test_google_provider_async_stream_raw_retries_invalid_thought_signature(self):
+        async_client = _RetryingGoogleAsyncClient()
+        provider = GoogleNativeProvider(
+            model="gemini-2.5-pro",
+            api_key="k",
+            base_url="",
+            client=object(),
+            async_client=async_client,
+        )
+        request = {
+            "model": "gemini-2.5-pro",
+            "contents": [
+                {"role": "user", "parts": [{"text": "使用工具计算3^22"}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "function_call": {
+                                "id": "call_1",
+                                "name": "calculator",
+                                "args": {"expression": "3**22"},
+                            },
+                            "thought_signature": "sig-1",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "id": "call_1",
+                                "name": "calculator",
+                                "response": {"result": "31381059609"},
+                            }
+                        }
+                    ],
+                },
+            ],
+            "config": {"tools": []},
+        }
+
+        async def _collect():
+            stream = await provider.async_stream_raw(request)
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk.text)
+            return chunks
+
+        chunks = asyncio.run(_collect())
+        self.assertEqual(chunks, ["fallback-ok"])
+        self.assertEqual(len(async_client.models.calls), 2)
+        self.assertEqual(
+            [item["role"] for item in async_client.models.calls[1]["contents"]],
+            ["user", "user"],
+        )
 
     def test_google_provider_canonical_replay_preserves_function_call_signature(self):
         codec = create_codec("google_native")
@@ -450,6 +617,77 @@ class TestNativeProviders(unittest.TestCase):
             replay[0]["parts"][0]["thought_signature"],
             base64.b64encode(b"sig-call-1").decode("ascii"),
         )
+
+    def test_google_replay_preserves_anthropic_thinking_without_cross_provider_signature(self):
+        anthropic_codec = create_codec("anthropic_native")
+        google_codec = create_codec("google_native")
+        claude_alias_codec = create_codec("claude_native")
+        canonical = anthropic_codec.history_entry_to_canonical(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "private plan", "signature": "anthropic-sig"},
+                    {"type": "text", "text": "visible answer"},
+                ],
+            }
+        )
+
+        google_replay = google_codec.canonical_to_replay(canonical)
+        google_replay_text = repr(google_replay)
+        self.assertEqual(
+            google_replay,
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        {"text": "private plan", "thought": True},
+                        {"text": "visible answer"},
+                    ],
+                }
+            ],
+        )
+        self.assertNotIn("anthropic-sig", google_replay_text)
+        self.assertNotIn("thought_signature", google_replay_text)
+        self.assertIn("private plan", google_replay_text)
+
+        claude_replay = claude_alias_codec.canonical_to_replay(canonical)
+        self.assertEqual(claude_replay[0]["content"][0]["signature"], "anthropic-sig")
+        self.assertEqual(canonical[0].content[0].signature, "anthropic-sig")
+
+    def test_anthropic_replay_preserves_google_thinking_without_cross_provider_signature(self):
+        google_codec = create_codec("google_native")
+        anthropic_codec = create_codec("anthropic_native")
+        gemini_alias_codec = create_codec("gemini_native")
+        canonical = google_codec.history_entry_to_canonical(
+            {
+                "role": "model",
+                "parts": [
+                    {"text": "private plan", "thought": True, "thought_signature": "google-sig"},
+                    {"text": "visible answer"},
+                ],
+            }
+        )
+
+        anthropic_replay = anthropic_codec.canonical_to_replay(canonical)
+        anthropic_replay_text = repr(anthropic_replay)
+        self.assertEqual(
+            anthropic_replay,
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "private plan"},
+                        {"type": "text", "text": "visible answer"},
+                    ],
+                }
+            ],
+        )
+        self.assertNotIn("google-sig", anthropic_replay_text)
+        self.assertIn("private plan", anthropic_replay_text)
+
+        gemini_replay = gemini_alias_codec.canonical_to_replay(canonical)
+        self.assertEqual(gemini_replay[0]["parts"][0]["thought_signature"], "google-sig")
+        self.assertEqual(canonical[0].content[0].signature, "google-sig")
 
     def test_anthropic_provider_invoke_with_tools_builds_native_messages(self):
         client = _FakeAnthropicClient()

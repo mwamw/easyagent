@@ -6,12 +6,91 @@ Google Gemini native transport provider.
 
 from __future__ import annotations
 
+import copy
+import logging
 from typing import Any, Optional
 
 from ..base import BaseProvider, _usage_field, _usage_float, _usage_int
 
+logger = logging.getLogger(__name__)
+
 
 class GoogleNativeProvider(BaseProvider):
+    @staticmethod
+    def _message_has_function_response(message: Any) -> bool:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            return False
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            return False
+        return any(isinstance(part, dict) and isinstance(part.get("function_response"), dict) for part in parts)
+
+    @staticmethod
+    def _message_has_signed_function_call(message: Any) -> bool:
+        if not isinstance(message, dict) or message.get("role") != "model":
+            return False
+        parts = message.get("parts")
+        if not isinstance(parts, list):
+            return False
+        return any(
+            isinstance(part, dict)
+            and isinstance(part.get("function_call"), dict)
+            and part.get("thought_signature")
+            for part in parts
+        )
+
+    @staticmethod
+    def _is_invalid_thought_signature_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return "thought signature is not valid" in text or "corrupted thought signature" in text
+
+    def _build_invalid_signature_fallback_request(self, request: Any) -> Optional[dict[str, Any]]:
+        if not isinstance(request, dict):
+            return None
+        contents = request.get("contents")
+        if not isinstance(contents, list) or len(contents) < 2:
+            return None
+
+        fallback_index: Optional[int] = None
+        for index in range(len(contents) - 1):
+            current = contents[index]
+            nxt = contents[index + 1]
+            if self._message_has_signed_function_call(current) and self._message_has_function_response(nxt):
+                fallback_index = index
+
+        if fallback_index is None:
+            fallback_request = copy.deepcopy(request)
+            changed = False
+            for message in fallback_request.get("contents", []):
+                if not isinstance(message, dict):
+                    continue
+                parts = message.get("parts")
+                if not isinstance(parts, list):
+                    continue
+                for part in parts:
+                    if isinstance(part, dict) and "thought_signature" in part:
+                        part.pop("thought_signature", None)
+                        changed = True
+            return fallback_request if changed else None
+
+        fallback_request = copy.deepcopy(request)
+        fallback_request["contents"] = [
+            message
+            for index, message in enumerate(copy.deepcopy(contents))
+            if index != fallback_index
+        ]
+        return fallback_request
+
+    def _log_invalid_signature_retry(self, request: Any, fallback_request: Any) -> None:
+        original_len = len(request.get("contents", [])) if isinstance(request, dict) else None
+        fallback_len = len(fallback_request.get("contents", [])) if isinstance(fallback_request, dict) else None
+        logger.warning(
+            "google_native returned invalid thought signature; retrying with sanitized thought-signature history "
+            "(contents %s -> %s)",
+            original_len,
+            fallback_len,
+        )
+
     def _create_client(self) -> Any:
         injected = self.kwargs.get("client")
         if injected is not None:
@@ -97,21 +176,60 @@ class GoogleNativeProvider(BaseProvider):
         }
 
     def invoke_raw(self, request: Any) -> Any:
-        return self.client.models.generate_content(**self._request_kwargs(request))
+        try:
+            return self.client.models.generate_content(**self._request_kwargs(request))
+        except Exception as exc:
+            if not self._is_invalid_thought_signature_error(exc):
+                raise
+            fallback_request = self._build_invalid_signature_fallback_request(request)
+            if fallback_request is None:
+                raise
+            self._log_invalid_signature_retry(request, fallback_request)
+            return self.client.models.generate_content(**self._request_kwargs(fallback_request))
 
     def stream_raw(self, request: Any) -> Any:
-        return self.client.models.generate_content_stream(**self._request_kwargs(request))
+        try:
+            return self.client.models.generate_content_stream(**self._request_kwargs(request))
+        except Exception as exc:
+            if not self._is_invalid_thought_signature_error(exc):
+                raise
+            fallback_request = self._build_invalid_signature_fallback_request(request)
+            if fallback_request is None:
+                raise
+            self._log_invalid_signature_retry(request, fallback_request)
+            return self.client.models.generate_content_stream(**self._request_kwargs(fallback_request))
 
     async def async_invoke_raw(self, request: Any) -> Any:
         async_client = self._get_async_client()
-        return await async_client.models.generate_content(**self._request_kwargs(request))
+        try:
+            return await async_client.models.generate_content(**self._request_kwargs(request))
+        except Exception as exc:
+            if not self._is_invalid_thought_signature_error(exc):
+                raise
+            fallback_request = self._build_invalid_signature_fallback_request(request)
+            if fallback_request is None:
+                raise
+            self._log_invalid_signature_retry(request, fallback_request)
+            return await async_client.models.generate_content(**self._request_kwargs(fallback_request))
 
     async def async_stream_raw(self, request: Any) -> Any:
         async_client = self._get_async_client()
-        stream = async_client.models.generate_content_stream(**self._request_kwargs(request))
-        if hasattr(stream, "__await__"):
-            stream = await stream
-        return stream
+        try:
+            stream = async_client.models.generate_content_stream(**self._request_kwargs(request))
+            if hasattr(stream, "__await__"):
+                stream = await stream
+            return stream
+        except Exception as exc:
+            if not self._is_invalid_thought_signature_error(exc):
+                raise
+            fallback_request = self._build_invalid_signature_fallback_request(request)
+            if fallback_request is None:
+                raise
+            self._log_invalid_signature_retry(request, fallback_request)
+            stream = async_client.models.generate_content_stream(**self._request_kwargs(fallback_request))
+            if hasattr(stream, "__await__"):
+                stream = await stream
+            return stream
 
     def get_usage_from_response(self, response: Any) -> dict[str, Any]:
         usage = _usage_field(response, "usage_metadata", "usageMetadata", "usage")

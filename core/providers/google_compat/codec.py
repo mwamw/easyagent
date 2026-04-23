@@ -18,7 +18,12 @@ class GoogleCompatCodec(OpenAIChatCodec):
             return entries
         from ..openai_compat.codec import _canonical_to_openai_like_message
 
-        return _canonical_to_openai_like_message(coerced, tool_role="function", preserve_reasoning=True)
+        return _canonical_to_openai_like_message(
+            coerced,
+            tool_role="function",
+            preserve_reasoning=True,
+            provider_payload_allowed=self._canonical_origin_matches_current_provider(coerced),
+        )
 
     def build_tool_result(self, content: str, tool_id: str, tool_name: str) -> dict[str, object]:
         return {

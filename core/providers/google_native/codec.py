@@ -229,6 +229,30 @@ class GoogleNativeCodec(BaseProviderCodec):
                 if part.get("thought_signature") is not None:
                     block["thought_signature"] = part["thought_signature"]
                 return block
+            if isinstance(part.get("functionCall"), dict):
+                function_call = part["functionCall"]
+                block = {
+                    "type": "function_call",
+                    "id": function_call.get("id"),
+                    "name": function_call.get("name", ""),
+                    "args": function_call.get("args", {}) or {},
+                }
+                thought_signature = part.get("thought_signature") or part.get("thoughtSignature")
+                if thought_signature is not None:
+                    block["thought_signature"] = thought_signature
+                return block
+            if isinstance(part.get("functionResponse"), dict):
+                function_response = part["functionResponse"]
+                block = {
+                    "type": "function_response",
+                    "id": function_response.get("id"),
+                    "name": function_response.get("name", ""),
+                    "response": function_response.get("response", {}) or {},
+                }
+                thought_signature = part.get("thought_signature") or part.get("thoughtSignature")
+                if thought_signature is not None:
+                    block["thought_signature"] = thought_signature
+                return block
         function_call = getattr(part, "function_call", None)
         if function_call is not None:
             block = {
@@ -314,23 +338,84 @@ class GoogleNativeCodec(BaseProviderCodec):
         return (block_type, json.dumps(block, ensure_ascii=False, sort_keys=True))
 
     @classmethod
-    def _append_stream_block(cls, blocks: list[dict[str, Any]], seen: set[tuple[Any, ...]], block: dict[str, Any]) -> None:
+    def _append_stream_block(
+        cls,
+        blocks: list[dict[str, Any]],
+        seen: set[tuple[Any, ...]],
+        block: dict[str, Any],
+    ) -> bool:
         key = cls._part_key(block)
         if key in seen:
-            return
+            return False
         seen.add(key)
         blocks.append(block)
+        return True
+
+    @staticmethod
+    def _provider_payload_from_part(part: Any) -> Optional[dict[str, Any]]:
+        if isinstance(part, dict):
+            return _json_safe(part)
+        if hasattr(part, "to_dict"):
+            try:
+                payload = part.to_dict()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                return _json_safe(payload)
+        if hasattr(part, "model_dump"):
+            try:
+                payload = part.model_dump()
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                return _json_safe(payload)
+        block = GoogleNativeCodec._serialize_gemini_part(part)
+        provider_payload = GoogleNativeCodec._google_part_from_provider_payload(block)
+        if isinstance(provider_payload, dict):
+            return provider_payload
+        return None
+
+    @classmethod
+    def _stream_block_from_part(cls, part: Any) -> dict[str, Any]:
+        block = cls._serialize_gemini_part(part)
+        provider_payload = cls._provider_payload_from_part(part)
+        if provider_payload is not None:
+            block = dict(block)
+            block["provider_payload"] = provider_payload
+        return block
+
+    @staticmethod
+    def _tool_call_event_from_block(block: dict[str, Any]) -> dict[str, Any]:
+        provider_part = None
+        provider_payload = block.get("provider_payload")
+        if isinstance(provider_payload, dict):
+            provider_part = GoogleNativeCodec._google_part_from_provider_payload(provider_payload)
+        if isinstance(provider_part, dict):
+            function_call = provider_part.get("function_call")
+            if isinstance(function_call, dict):
+                return {
+                    "id": function_call.get("id"),
+                    "name": function_call.get("name", ""),
+                    "arguments": function_call.get("args", {}) or {},
+                }
+        return {
+            "id": block.get("id"),
+            "name": block.get("name", ""),
+            "arguments": block.get("args", {}) or {},
+        }
 
     def build_tool_result(self, content: str, tool_id: str, tool_name: str) -> dict[str, Any]:
+        response_payload: dict[str, Any] = {
+            "name": tool_name,
+            "response": {"result": content},
+        }
+        if tool_id not in {None, "", "unknown"}:
+            response_payload["id"] = tool_id
         return {
             "role": "user",
             "parts": [
                 {
-                    "function_response": {
-                        "id": tool_id,
-                        "name": tool_name,
-                        "response": {"result": content},
-                    }
+                    "function_response": response_payload
                 }
             ],
         }
@@ -345,12 +430,14 @@ class GoogleNativeCodec(BaseProviderCodec):
                         call_id=tool_id,
                         name=tool_name,
                         output={"result": content},
-                        payload={
-                            "type": "function_response",
-                            "id": tool_id,
-                            "name": tool_name,
-                            "response": {"result": content},
-                        },
+                        payload=(
+                            {
+                                "type": "function_response",
+                                "name": tool_name,
+                                "response": {"result": content},
+                            }
+                            | ({"id": tool_id} if tool_id not in {None, "", "unknown"} else {})
+                        ),
                         metadata={"provider_block_type": "function_response"},
                     )
                 ],
@@ -503,7 +590,7 @@ class GoogleNativeCodec(BaseProviderCodec):
 
         parts: list[dict[str, Any]] = []
         for block in canonical.content:
-            payload = block.payload if isinstance(block.payload, dict) else None
+            payload = self._provider_payload_for_current_provider(canonical, block)
             if block.type == "text":
                 if block.text:
                     parts.append({"text": block.text})
@@ -511,7 +598,7 @@ class GoogleNativeCodec(BaseProviderCodec):
             if block.type == "reasoning":
                 text = block.text or _reasoning_text(block.summary or block.payload)
                 part = {"text": text, "thought": True}
-                signature = block.signature
+                signature = self._signature_for_current_provider(canonical, block)
                 if signature is None and isinstance(payload, dict):
                     signature = payload.get("thought_signature") or payload.get("thoughtSignature")
                 if signature is not None:
@@ -524,6 +611,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                     if provider_part is not None:
                         parts.append(provider_part)
                         continue
+                signature = self._signature_for_current_provider(canonical, block)
                 parts.append(
                     {
                         "function_call": {
@@ -531,7 +619,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                             "name": block.name or "",
                             "args": self._dict_arguments(block.arguments),
                         },
-                        **({"thought_signature": block.signature} if block.signature is not None else {}),
+                        **({"thought_signature": signature} if signature is not None else {}),
                     }
                 )
                 continue
@@ -541,6 +629,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                     if provider_part is not None:
                         parts.append(provider_part)
                         continue
+                signature = self._signature_for_current_provider(canonical, block)
                 parts.append(
                     {
                         "function_response": {
@@ -548,7 +637,7 @@ class GoogleNativeCodec(BaseProviderCodec):
                             "name": block.name or "",
                             "response": self._function_response_payload(block.output),
                         },
-                        **({"thought_signature": block.signature} if block.signature is not None else {}),
+                        **({"thought_signature": signature} if signature is not None else {}),
                     }
                 )
                 continue
@@ -557,6 +646,8 @@ class GoogleNativeCodec(BaseProviderCodec):
                 if provider_part is not None:
                     parts.append(provider_part)
 
+        if not parts:
+            return []
         if canonical.role == "system":
             return [{"role": "system", "parts": parts}]
         if canonical.role == "assistant":
@@ -585,8 +676,6 @@ class GoogleNativeCodec(BaseProviderCodec):
 
     @staticmethod
     def _google_part_from_provider_payload(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
-        if "text" in payload or "function_call" in payload or "function_response" in payload or "inline_data" in payload:
-            return dict(payload)
         block_type = payload.get("type")
         if block_type == "text":
             return {"text": payload.get("text", "")}
@@ -616,6 +705,82 @@ class GoogleNativeCodec(BaseProviderCodec):
                     "response": payload.get("response", {}) or {},
                 }
             }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if isinstance(payload.get("function_call"), dict):
+            function_call = payload["function_call"]
+            part = {
+                "function_call": {
+                    "id": function_call.get("id"),
+                    "name": function_call.get("name", ""),
+                    "args": function_call.get("args", {}) or {},
+                }
+            }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if isinstance(payload.get("function_response"), dict):
+            function_response = payload["function_response"]
+            part = {
+                "function_response": {
+                    "id": function_response.get("id"),
+                    "name": function_response.get("name", ""),
+                    "response": function_response.get("response", {}) or {},
+                }
+            }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if payload.get("thought") is not None or payload.get("text") is not None:
+            text = payload.get("text", "") or ""
+            if not payload.get("thought") and text == "":
+                return None
+            part = {
+                "text": text,
+                "thought": bool(payload.get("thought")),
+            }
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            if not part["thought"]:
+                part.pop("thought")
+            return part
+        if payload.get("inline_data") is not None:
+            return {"inline_data": payload.get("inline_data")}
+        if payload.get("file_data") is not None:
+            return {"file_data": payload.get("file_data")}
+        if "text" in payload or "function_call" in payload or "function_response" in payload or "inline_data" in payload:
+            return dict(payload)
+        if "functionCall" in payload:
+            function_call = payload.get("functionCall")
+            if not isinstance(function_call, dict):
+                return None
+            part = {"function_call": dict(function_call)}
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if "functionResponse" in payload:
+            function_response = payload.get("functionResponse")
+            if not isinstance(function_response, dict):
+                return None
+            part = {"function_response": dict(function_response)}
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if "inlineData" in payload:
+            part = {"inline_data": payload.get("inlineData")}
+            signature = payload.get("thought_signature") or payload.get("thoughtSignature")
+            if signature is not None:
+                part["thought_signature"] = signature
+            return part
+        if "fileData" in payload:
+            part = {"file_data": payload.get("fileData")}
             signature = payload.get("thought_signature") or payload.get("thoughtSignature")
             if signature is not None:
                 part["thought_signature"] = signature
@@ -650,13 +815,13 @@ class GoogleNativeCodec(BaseProviderCodec):
 
     def get_tool_calls(self, response: Any) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
-        for index, part in enumerate(self._content_parts(self._candidate_content(response))):
+        for part in self._content_parts(self._candidate_content(response)):
             block = self._serialize_gemini_part(part)
             if block["type"] != "function_call":
                 continue
             tool_calls.append(
                 {
-                    "id": block.get("id") or f"tool_call_{index}",
+                    "id": block.get("id"),
                     "name": block.get("name", ""),
                     "arguments": block.get("args", {}) or {},
                 }
@@ -673,6 +838,12 @@ class GoogleNativeCodec(BaseProviderCodec):
         parts: list[dict[str, Any]] = []
         if raw_blocks:
             for block in raw_blocks:
+                provider_payload = block.get("provider_payload")
+                if isinstance(provider_payload, dict):
+                    provider_part = self._google_part_from_provider_payload(provider_payload)
+                    if provider_part is not None:
+                        parts.append(provider_part)
+                        continue
                 if block["type"] == "thinking":
                     payload = {"text": block.get("text", ""), "thought": True}
                     if block.get("thought_signature"):
@@ -724,22 +895,19 @@ class GoogleNativeCodec(BaseProviderCodec):
                 text_parts.append(chunk_text)
                 yield {"type": "text_delta", "delta": chunk_text}
             for part in self._content_parts(self._candidate_content(chunk)):
-                block = self._serialize_gemini_part(part)
+                block = self._stream_block_from_part(part)
                 if block["type"] == "thinking":
                     thinking_text = block.get("text", "")
                     if thinking_text:
                         thinking_parts.append(thinking_text)
                         yield {"type": "thinking_delta", "delta": thinking_text}
                     self._append_stream_block(assistant_blocks, seen_block_keys, block)
+                elif block["type"] == "text":
+                    if block.get("text", "") != "":
+                        self._append_stream_block(assistant_blocks, seen_block_keys, block)
                 elif block["type"] == "function_call":
-                    self._append_stream_block(assistant_blocks, seen_block_keys, block)
-                    function_calls.append(
-                        {
-                            "id": block.get("id"),
-                            "name": block.get("name", ""),
-                            "arguments": block.get("args", {}) or {},
-                        }
-                    )
+                    if self._append_stream_block(assistant_blocks, seen_block_keys, block):
+                        function_calls.append(self._tool_call_event_from_block(block))
         if function_calls:
             yield {
                 "type": "tool_calls",
@@ -786,22 +954,19 @@ class GoogleNativeCodec(BaseProviderCodec):
                 text_parts.append(chunk_text)
                 yield {"type": "text_delta", "delta": chunk_text}
             for part in self._content_parts(self._candidate_content(chunk)):
-                block = self._serialize_gemini_part(part)
+                block = self._stream_block_from_part(part)
                 if block["type"] == "thinking":
                     thinking_text = block.get("text", "")
                     if thinking_text:
                         thinking_parts.append(thinking_text)
                         yield {"type": "thinking_delta", "delta": thinking_text}
                     self._append_stream_block(assistant_blocks, seen_block_keys, block)
+                elif block["type"] == "text":
+                    if block.get("text", "") != "":
+                        self._append_stream_block(assistant_blocks, seen_block_keys, block)
                 elif block["type"] == "function_call":
-                    self._append_stream_block(assistant_blocks, seen_block_keys, block)
-                    function_calls.append(
-                        {
-                            "id": block.get("id"),
-                            "name": block.get("name", ""),
-                            "arguments": block.get("args", {}) or {},
-                        }
-                    )
+                    if self._append_stream_block(assistant_blocks, seen_block_keys, block):
+                        function_calls.append(self._tool_call_event_from_block(block))
         if function_calls:
             yield {
                 "type": "tool_calls",

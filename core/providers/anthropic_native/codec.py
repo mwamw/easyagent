@@ -424,7 +424,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
 
         blocks: list[dict[str, Any]] = []
         for block in canonical.content:
-            payload = block.payload if isinstance(block.payload, dict) else None
+            payload = self._provider_payload_for_current_provider(canonical, block)
             provider_block_type = block.metadata.get("provider_block_type") if isinstance(block.metadata, dict) else None
             if block.type == "text":
                 if block.text:
@@ -439,8 +439,9 @@ class AnthropicNativeCodec(BaseProviderCodec):
                     blocks.append(dict(payload))
                     continue
                 thinking_block: dict[str, Any] = {"type": "thinking", "thinking": text}
-                if block.signature:
-                    thinking_block["signature"] = block.signature
+                signature = self._signature_for_current_provider(canonical, block)
+                if signature:
+                    thinking_block["signature"] = signature
                 blocks.append(thinking_block)
                 continue
             if block.type == "function_call":
@@ -474,6 +475,9 @@ class AnthropicNativeCodec(BaseProviderCodec):
 
         if canonical.role == "tool":
             return [{"role": "user", "content": blocks or [{"type": "tool_result", "tool_use_id": None, "content": ""}]}]
+
+        if not blocks:
+            return []
 
         if canonical.role == "system":
             text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")

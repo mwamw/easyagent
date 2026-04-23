@@ -365,6 +365,45 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(replay_history[1]["content"], "world")
         self.assertEqual(agent.replay_history_provider_name, "anthropic_native")
 
+    def test_change_model_preserves_cross_provider_thinking_but_filters_signatures(self):
+        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="anthropic_native"))
+        agent.add_message(
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "private plan", "signature": "anthropic-sig"},
+                    {"type": "text", "text": "visible answer"},
+                ],
+            }
+        )
+
+        self.assertIn("anthropic-sig", repr(agent.get_history()))
+        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="google_native", model="gemini-3-flash"))
+
+        google_replay = agent.get_history()
+        google_replay_text = repr(google_replay)
+        self.assertEqual(
+            google_replay,
+            [
+                {
+                    "role": "model",
+                    "parts": [
+                        {"text": "private plan", "thought": True},
+                        {"text": "visible answer"},
+                    ],
+                }
+            ],
+        )
+        self.assertNotIn("anthropic-sig", google_replay_text)
+        self.assertNotIn("thought_signature", google_replay_text)
+        self.assertIn("private plan", google_replay_text)
+        self.assertEqual(agent.get_canonical_history()[0].content[0].signature, "anthropic-sig")
+
+        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="claude_native", model="claude-4.5-sonnet"))
+        claude_replay = agent.get_history()
+        self.assertEqual(claude_replay[0]["content"][0]["signature"], "anthropic-sig")
+        self.assertEqual(agent.replay_history_provider_name, "claude_native")
+
     def test_direct_provider_mutation_requires_change_model(self):
         agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="openai"))
         agent.add_message(UserMessage("hello"))

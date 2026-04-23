@@ -183,7 +183,7 @@ class OpenAIResponsesCodec(BaseProviderCodec):
         text_fragments: list[str] = []
 
         for block in canonical.content:
-            payload = block.payload if isinstance(block.payload, dict) else None
+            payload = self._provider_payload_for_current_provider(canonical, block)
             if block.type == "text" and block.text:
                 text_fragments.append(block.text)
                 continue
@@ -194,8 +194,9 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                     item: dict[str, Any] = {"type": "reasoning"}
                     if block.text:
                         item["summary"] = [{"type": "summary_text", "text": block.text}]
-                    if block.signature:
-                        item["signature"] = block.signature
+                    signature = self._signature_for_current_provider(canonical, block)
+                    if signature:
+                        item["signature"] = signature
                     items.append(item)
                 continue
             if block.type == "function_call":
@@ -240,7 +241,7 @@ class OpenAIResponsesCodec(BaseProviderCodec):
                 items.append({"role": canonical.role, "content": text})
 
         if not items:
-            items.append({"role": canonical.role, "content": ""})
+            return []
         return items
 
     def is_request_ready_message(self, message: Any) -> bool:

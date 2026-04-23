@@ -108,6 +108,7 @@ def _canonical_to_openai_like_message(
     *,
     tool_role: str = "tool",
     preserve_reasoning: bool = True,
+    provider_payload_allowed: bool = True,
 ) -> list[Any]:
     text_parts: list[str] = []
     thinking_parts: list[str] = []
@@ -125,7 +126,7 @@ def _canonical_to_openai_like_message(
             continue
         if block.type == "function_call":
             payload = block.payload if isinstance(block.payload, dict) else None
-            if isinstance(payload, dict) and payload.get("type") == "function":
+            if provider_payload_allowed and isinstance(payload, dict) and payload.get("type") == "function":
                 tool_calls.append(dict(payload))
                 continue
             tool_calls.append(
@@ -296,7 +297,12 @@ class OpenAIChatCodec(BaseProviderCodec):
             for entry in self.history_entry_to_canonical(message):
                 entries.extend(self.canonical_message_to_replay(entry))
             return entries
-        return _canonical_to_openai_like_message(canonical, tool_role="tool", preserve_reasoning=True)
+        return _canonical_to_openai_like_message(
+            canonical,
+            tool_role="tool",
+            preserve_reasoning=True,
+            provider_payload_allowed=self._canonical_origin_matches_current_provider(canonical),
+        )
 
     def is_request_ready_message(self, message: Any) -> bool:
         return isinstance(message, dict) and "role" in message and (

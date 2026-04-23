@@ -139,7 +139,7 @@ class AnthropicCompatCodec(OpenAIChatCodec):
         blocks: list[dict[str, Any]] = []
         thinking_parts: list[str] = []
         for block in canonical.content:
-            payload = block.payload if isinstance(block.payload, dict) else None
+            payload = self._provider_payload_for_current_provider(canonical, block)
             provider_block_type = block.metadata.get("provider_block_type") if isinstance(block.metadata, dict) else None
             if block.type == "text":
                 if block.text:
@@ -191,6 +191,8 @@ class AnthropicCompatCodec(OpenAIChatCodec):
 
         if canonical.role == "tool":
             return [{"role": "user", "content": blocks or [{"type": "tool_result", "tool_use_id": None, "content": ""}]}]
+        if not blocks and not thinking_parts:
+            return []
         if canonical.role == "system":
             text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
             if not text:
