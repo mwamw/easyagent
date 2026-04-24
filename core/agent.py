@@ -1322,7 +1322,7 @@ class BaseAgent(ABC):
             compaction_possible=result.compaction_possible,
             tokens_before=result.tokens_before,
             tokens_after=result.tokens_after,
-            max_tokens=result.budget,
+            max_tokens=result.budget, 
             metadata=getattr(result, "metadata", None),
         )
         if not result.was_compacted:
@@ -1954,7 +1954,7 @@ class BaseAgent(ABC):
         if mcp_runtime_snapshot:
             try:
                 from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_resource_hub_tools
-                from mcp import MCPHub
+                from Emcp import MCPHub
 
                 overrides = dict(mcp_client_overrides or {})
                 hub_payload = mcp_runtime_snapshot.get("hub")

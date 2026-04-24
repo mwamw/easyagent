@@ -15,7 +15,7 @@ from .claude_compat import (
     ClaudeToolDefinition,
     get_claude_tool_definition,
 )
-from mcp import MCPClient, MCPHub
+from Emcp import MCPClient, MCPHub
 from .runtime import (
     FileVersionSnapshot,
     FilesystemAccessError,

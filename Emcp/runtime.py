@@ -6,7 +6,7 @@ import asyncio
 import threading
 from typing import Any, Dict, List, Optional, Protocol
 
-from mcp import MCPClient
+from Emcp import MCPClient
 
 from .auth import MCPAuthConfig
 from .cache import MCPCapabilitySnapshot, MCPServerCache

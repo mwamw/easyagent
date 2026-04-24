@@ -1,6 +1,6 @@
 """Stable public MCP exports."""
 
-from mcp import (
+from Emcp import (
     MCPAuthConfig,
     MCPCapabilitySnapshot,
     MCPClient,

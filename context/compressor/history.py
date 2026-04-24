@@ -42,7 +42,6 @@ class BaseHistoryCompactor(ABC):
     def compact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
         """压缩 history，返回新的 history 消息列表。"""
         ...
@@ -50,17 +49,17 @@ class BaseHistoryCompactor(ABC):
     async def acompact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self.compact, history, max_tokens)
+        return await asyncio.to_thread(self.compact, history)
 
     def _message_token_count(self, message: Any) -> int:
+        import json
         canonical = coerce_canonical_message(message)
         if canonical is not None:
-            return 4 + self._counter.count(canonical.text_content())
+            return 4 + self._counter.count(json.dumps(canonical.to_dict(), ensure_ascii=False))
         if isinstance(message, dict):
-            return 4 + self._counter.count(message.get("content", ""))
-        return 4 + self._counter.count(message)
+            return 4 + self._counter.count(json.dumps(message, ensure_ascii=False))
+        return 4 + self._counter.count(str(message))
 
     def _messages_token_count(self, messages: List[Any]) -> int:
         if not messages:
@@ -87,62 +86,25 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
     def compact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
-        if not normalized or max_tokens <= 0:
-            self._set_last_run_info(
-                {
-                    "compactor": self.__class__.__name__,
-                    "status": "skipped",
-                    "fallback_used": False,
-                }
-            )
-            return []
-        if not all(is_canonical_message(message) for message in normalized):
-            raise ValueError("RuleBasedHistoryCompactor 只接受 canonical history。")
-        turns = self._group_turns(normalized)
-        total_tokens = sum(turn["token_count"] for turn in turns)
-        if total_tokens <= max_tokens:
-            return normalized
-        logger.info("Compact History")
 
-        target_recent_turns = min(self.recent_turns, len(turns))
-        compacted_turn_count = max(0, len(turns) - target_recent_turns)
-        summary_messages: List[Dict[str, Any]] = []
-        recent_messages: List[Dict[str, Any]] = normalized
+        logger.info("Compact History by truncating tool messages")
 
-        while True:
-            summary_messages = self._summarize_turns(turns[:compacted_turn_count])
-            recent_turns = turns[compacted_turn_count:]
-            recent_messages = self._flatten_turns(recent_turns)
-            combined_messages = [*summary_messages, *recent_messages]
-
-            if self._messages_token_count(combined_messages) <= max_tokens:
-                break
-
-            if compacted_turn_count < len(turns) - self.min_recent_turns:
-                compacted_turn_count += 1
+        result = []
+        for msg_dict in normalized:
+            msg = coerce_canonical_message(msg_dict)
+            if not msg:
+                result.append(msg_dict)
                 continue
+                
+            for block in msg.content:
+                if block.type == "function_response":
+                    text = self._extract_text(block.output)
+                    block.output = self._compact_text(text, limit=500)
+                    
+            result.append(msg.to_dict())
 
-            summary_budget = max(0, max_tokens - self._messages_token_count(recent_messages))
-            if summary_budget <= 0:
-                summary_messages = []
-            else:
-                summary_messages = self._fit_summary_messages(summary_messages, summary_budget)
-
-            while len(recent_turns) > self.min_recent_turns and self._messages_token_count([*summary_messages, *recent_messages]) > max_tokens:
-                recent_turns = recent_turns[1:]
-                recent_messages = self._flatten_turns(recent_turns)
-
-            if self._messages_token_count([*summary_messages, *recent_messages]) > max_tokens:
-                summary_messages = []
-
-            if self._messages_token_count([*summary_messages, *recent_messages]) > max_tokens:
-                recent_messages = self._drop_oldest_messages_to_fit(recent_messages, summary_messages, max_tokens)
-            break
-
-        result = [*summary_messages, *recent_messages]
         self._set_last_run_info(
             {
                 "compactor": self.__class__.__name__,
@@ -158,9 +120,8 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
     async def acompact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
-        return self.compact(history, max_tokens)
+        return self.compact(history)
 
     def _group_turns(self, history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         turns: List[Dict[str, Any]] = []
@@ -184,22 +145,6 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             "token_count": self._messages_token_count(messages),
         }
 
-    def _flatten_turns(self, turns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        messages: List[Dict[str, Any]] = []
-        for turn in turns:
-            messages.extend([self._clone_message(message) for message in turn["messages"]])
-        return messages
-
-    def _drop_oldest_messages_to_fit(
-        self,
-        messages: List[Dict[str, Any]],
-        summary_messages: List[Dict[str, Any]],
-        max_tokens: int,
-    ) -> List[Dict[str, Any]]:
-        kept = [self._clone_message(message) for message in messages]
-        while kept and self._messages_token_count([*summary_messages, *kept]) > max_tokens:
-            kept.pop(0)
-        return kept
 
     def _summarize_turns(
         self,
@@ -228,40 +173,40 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
                     continue
                 block_type = block.get("type")
                 if block_type == "text":
-                    text = self._compact_text(self._extract_text(block), limit=18)
+                    text = self._compact_text(self._extract_text(block), limit=100)
                     if text:
                         parts.append(text)
                 elif block_type == "reasoning":
-                    text = self._compact_text(self._extract_text(block), limit=18)
+                    text = self._compact_text(self._extract_text(block), limit=100)
                     if text:
                         parts.append(f"thinking:{text}")
                 elif block_type == "function_call":
                     name = block.get("name", "unknown_tool")
-                    arguments = self._compact_text(self._stringify(block.get("arguments", "")), limit=16)
+                    arguments = self._compact_text(self._stringify(block.get("arguments", "")), limit=100)
                     parts.append(f"调用工具 {name}({arguments})")
                 elif block_type == "function_response":
                     name = block.get("name") or block.get("call_id") or "tool"
-                    output = self._compact_text(self._extract_text(block.get("output")), limit=16)
+                    output = self._compact_text(self._extract_text(block.get("output")), limit=100)
                     parts.append(f"工具结果 {name}: {output}")
             if parts:
                 return f"{role}: {' | '.join(parts)}"
-            return f"{role}: {self._compact_text(self._extract_text(message.get('content')), limit=18)}"
+            return f"{role}: {self._compact_text(self._extract_text(message.get('content')), limit=100)}"
 
         msg_type = message.get("type")
         role = message.get("role")
 
         if msg_type == "function_call":
             name = message.get("name", "unknown_tool")
-            arguments = self._compact_text(self._stringify(message.get("arguments", "")), limit=16)
+            arguments = self._compact_text(self._stringify(message.get("arguments", "")), limit=100)
             return f"调用工具 {name}({arguments})"
 
         if msg_type == "function_call_output":
-            output = self._compact_text(self._stringify(message.get("output", "")), limit=16)
+            output = self._compact_text(self._stringify(message.get("output", "")), limit=100)
             call_id = message.get("call_id", "")
             return f"工具结果[{call_id}]: {output}"
 
         if role == "assistant" and message.get("tool_calls"):
-            text = self._compact_text(self._extract_text(message.get("content")), limit=18)
+            text = self._compact_text(self._extract_text(message.get("content")), limit=100)
             tool_names = []
             for tool_call in message.get("tool_calls", []):
                 function = tool_call.get("function", {}) if isinstance(tool_call, dict) else {}
@@ -271,27 +216,27 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
 
         if role in {"tool", "function"}:
             tool_name = message.get("name") or message.get("tool_call_id") or "tool"
-            content = self._compact_text(self._extract_text(message.get("content")), limit=16)
+            content = self._compact_text(self._extract_text(message.get("content")), limit=100)
             return f"工具 {tool_name}: {content}"
 
         if msg_type == "message":
             phase = message.get("phase")
-            content = self._compact_text(self._extract_text(message.get("content")), limit=18)
+            content = self._compact_text(self._extract_text(message.get("content")), limit=100)
             message_role = message.get("role", "assistant")
             if phase:
                 return f"{message_role}[{phase}]: {content}"
             return f"{message_role}: {content}"
 
         if msg_type == "reasoning":
-            summary = self._compact_text(self._extract_text(message.get("summary")), limit=18)
+            summary = self._compact_text(self._extract_text(message.get("summary")), limit=100)
             if summary:
                 return f"assistant[thinking]: {summary}"
-            content = self._compact_text(self._extract_text(message.get("content")), limit=18)
+            content = self._compact_text(self._extract_text(message.get("content")), limit=100)
             if content:
                 return f"assistant[thinking]: {content}"
             return ""
 
-        content = self._compact_text(self._extract_text(message.get("content")), limit=18)
+        content = self._compact_text(self._extract_text(message.get("content")), limit=100)
         if role:
             return f"{role}: {content}"
         return self._stringify(message)
@@ -358,7 +303,7 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             return value.strip()
         return json.dumps(value, ensure_ascii=False, default=str)
 
-    def _compact_text(self, text: str, limit: int = 32) -> str:
+    def _compact_text(self, text: str, limit: int = 500) -> str:
         text = (text or "").strip()
         if len(text) <= limit:
             return text
@@ -403,38 +348,6 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
             "metadata": {"compacted_summary": True},
         }
 
-    def _fit_summary_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        max_tokens: int,
-    ) -> List[Dict[str, Any]]:
-        if not messages or max_tokens <= 0:
-            return []
-
-        fitted = [self._clone_message(message) for message in messages]
-        while fitted and self._messages_token_count(fitted) > max_tokens:
-            last = fitted[-1]
-            canonical = coerce_canonical_message(last)
-            if canonical is None or not canonical.content:
-                fitted.pop()
-                continue
-            first_block = canonical.content[0]
-            content = str(first_block.text or "")
-            allowed = max(0, max_tokens - self._messages_token_count(fitted[:-1]))
-            if allowed <= 0:
-                fitted.pop()
-                continue
-            truncated = self._counter.truncate(content, allowed)
-            if not truncated:
-                fitted.pop()
-                continue
-            first_block.text = truncated
-            last = canonical.to_dict()
-            fitted[-1] = last
-            if self._messages_token_count(fitted) <= max_tokens:
-                break
-            fitted.pop()
-        return fitted
 
     def _clone_message(self, message: Any) -> Dict[str, Any]:
         canonical = coerce_canonical_message(message)
@@ -452,25 +365,23 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         token_counter: Optional[TokenCounter] = None,
         language: str = "zh",
         recent_turns: int = 4,
-        fallback: Optional[BaseHistoryCompactor] = None,
     ):
         super().__init__(token_counter=token_counter)
         self.llm = llm
         self.language = language
         self.recent_turns = max(1, recent_turns)
-        self.fallback = fallback or RuleBasedHistoryCompactor(token_counter=token_counter)
+        self._formatter = RuleBasedHistoryCompactor(token_counter=token_counter)
 
     def set_token_counter(self, token_counter: TokenCounter) -> None:
         super().set_token_counter(token_counter)
-        self.fallback.set_token_counter(token_counter)
+        self._formatter.set_token_counter(token_counter)
 
     def compact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
-        if not normalized or max_tokens <= 0:
+        if not normalized:
             self._set_last_run_info(
                 {
                     "compactor": self.__class__.__name__,
@@ -483,9 +394,8 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
 
         logger.info("Compact History by LLM")
 
-        prompt = self._build_prompt(normalized, max_tokens=max_tokens)
+        prompt = self._build_prompt(normalized)
 
-        prompt = self._build_prompt(normalized, max_tokens=max_tokens)
         if self.language == "zh":
             system_prompt = """你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。\n
                             要求：\n
@@ -526,31 +436,15 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
             )
             return messages
         except Exception as exc:
-            logger.warning("LLMHistoryCompactor 压缩失败，回退规则压缩: %s", exc)
-            fallback_messages = self.fallback.compact(normalized, max_tokens)
-            self._set_last_run_info(
-                {
-                    "compactor": self.__class__.__name__,
-                    "status": "fallback",
-                    "fallback_used": True,
-                    "mode": "sync",
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "fallback_compactor": self.fallback.__class__.__name__,
-                    "input_messages": len(normalized),
-                    "output_messages": len(fallback_messages),
-                    "fallback_details": self.fallback.get_last_run_info(),
-                }
-            )
-            return fallback_messages
+            logger.warning("LLMHistoryCompactor 压缩失败: %s", exc)
+            raise exc
 
     async def acompact(
         self,
         history: Optional[List[Any]],
-        max_tokens: int,
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
-        if not normalized or max_tokens <= 0:
+        if not normalized :
             self._set_last_run_info(
                 {
                     "compactor": self.__class__.__name__,
@@ -563,7 +457,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
             
         logger.info("Compact History")
 
-        prompt = self._build_prompt(normalized, max_tokens=max_tokens)
+        prompt = self._build_prompt(normalized)
         if self.language == "zh":
             system_prompt = """你是一个历史压缩器。你只输出 JSON 数组，不要输出解释、Markdown 或代码块。\n
                             要求：\n
@@ -601,45 +495,18 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
                     }
                 )
                 return messages
+            else:
+                raise Exception("LLMHistoryCompactor 异步压缩失败: %s")
         except Exception as exc:
-            logger.warning("LLMHistoryCompactor 异步压缩失败，回退规则压缩: %s", exc)
-            fallback_messages = await self.fallback.acompact(normalized, max_tokens)
-            self._set_last_run_info(
-                {
-                    "compactor": self.__class__.__name__,
-                    "status": "fallback",
-                    "fallback_used": True,
-                    "mode": "async",
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "fallback_compactor": self.fallback.__class__.__name__,
-                    "input_messages": len(normalized),
-                    "output_messages": len(fallback_messages),
-                    "fallback_details": self.fallback.get_last_run_info(),
-                }
-            )
-            return fallback_messages
-        fallback_messages = await self.fallback.acompact(normalized, max_tokens)
-        self._set_last_run_info(
-            {
-                "compactor": self.__class__.__name__,
-                "status": "fallback",
-                "fallback_used": True,
-                "mode": "async",
-                "error": "llm_compactor_returned_empty_result",
-                "error_type": "EmptyCompactionResult",
-                "fallback_compactor": self.fallback.__class__.__name__,
-                "input_messages": len(normalized),
-                "output_messages": len(fallback_messages),
-                "fallback_details": self.fallback.get_last_run_info(),
-            }
-        )
-        return fallback_messages
+            logger.warning("LLMHistoryCompactor 异步压缩失败: %s", exc)
+            raise exc
 
-    def _build_prompt(self, history: List[Dict[str, Any]], max_tokens: int) -> str:
+
+
+    def _build_prompt(self, history: List[Dict[str, Any]]) -> str:
         transcript_lines = []
         for index, message in enumerate(history, start=1):
-            summary = self.fallback._summarize_message(message)
+            summary = self._formatter._summarize_message(message)
             if summary:
                 transcript_lines.append(f"{index}. {summary}")
         transcript = "\n".join(transcript_lines)
@@ -674,7 +541,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
             content = str(content or "").strip()
             if not content:
                 continue
-            messages.append(self.fallback._build_summary_message(content))
+            messages.append(self._formatter._build_summary_message(content))
         return messages
 
     def _clone_message(self, message: Any) -> Dict[str, Any]:
@@ -684,4 +551,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         raise ValueError("LLMHistoryCompactor 只接受 canonical history。")
 
 
-HistoryCompactor = RuleBasedHistoryCompactor
+
+
+
+HistoryCompactor = LLMHistoryCompactor

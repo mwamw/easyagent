@@ -18,7 +18,7 @@ from skill import SkillRegistry
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeListMcpResourcesInput, ClaudeReadMcpResourceInput
-from mcp.runtime import MCPClientProtocol, MCPHub, MCPRuntimeManager
+from Emcp.runtime import MCPClientProtocol, MCPHub, MCPRuntimeManager
 
 logger = logging.getLogger(__name__)
 

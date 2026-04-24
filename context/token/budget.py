@@ -14,9 +14,9 @@ class TokenBudget:
     max_tokens: int = 8000
     default_allocation: float = 0.10
     allocations: Dict[str, float] = field(default_factory=lambda: {
-        "history": 0.70,
-        "rag": 0.15,
-        "memory": 0.15,
+        "history": 0.80,
+        "rag": 0.10,
+        "memory": 0.10,
     })
 
     def get_budget(self, source: str) -> int:

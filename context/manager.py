@@ -230,17 +230,22 @@ class ContextManager:
                 metadata={},
             )
 
-        replay_tail = codec.canonical_to_replay(canonical_tail)
-        tail_tokens = codec.count_request_tokens(
-            token_counter,
-            replay_tail,
-            system_prompt=system_prompt,
-            tools=tools,
-            reasoning=reasoning,
-        )
-        prefix_budget = max(0, max_tokens - tail_tokens)
-        compacted_prefix = self.history_compactor.compact(canonical_prefix, max_tokens=prefix_budget)
-        compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
+        try:
+            compacted_prefix = self.history_compactor.compact(canonical_prefix)
+            compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
+        except Exception as exc:
+            logger.warning("历史压缩器运行失败，回退到规则截断: %s", exc)
+            from context.compressor.history import RuleBasedHistoryCompactor
+            fallback_compactor = RuleBasedHistoryCompactor(token_counter=token_counter)
+            compacted_prefix = fallback_compactor.compact(canonical_prefix)
+            compactor_metadata = self._merge_compactor_metadata(
+                {},
+                {
+                    "error": str(exc),
+                    "fallback_used": True,
+                    "fallback_compactor": "RuleBasedHistoryCompactor",
+                }
+            )
         compacted_canonical = [*compacted_prefix, *canonical_tail]
         compacted_replay = codec.canonical_to_replay(compacted_canonical)
         tokens_after = codec.count_request_tokens(
@@ -250,26 +255,6 @@ class ContextManager:
             tools=tools,
             reasoning=reasoning,
         )
-
-        if tokens_after > max_tokens and compacted_prefix:
-            overflow = tokens_after - max_tokens
-            reduced_budget = max(0, prefix_budget - overflow)
-            if reduced_budget < prefix_budget:
-                compacted_prefix = self.history_compactor.compact(canonical_prefix, max_tokens=reduced_budget)
-                compactor_metadata = self._merge_compactor_metadata(
-                    compactor_metadata,
-                    self._history_compactor_metadata(),
-                )
-                compacted_canonical = [*compacted_prefix, *canonical_tail]
-                compacted_replay = codec.canonical_to_replay(compacted_canonical)
-                tokens_after = codec.count_request_tokens(
-                    token_counter,
-                    compacted_replay,
-                    system_prompt=system_prompt,
-                    tools=tools,
-                    reasoning=reasoning,
-                )
-
         return _result(
             canonical_history=compacted_canonical,
             replay_history=compacted_replay,
@@ -330,17 +315,22 @@ class ContextManager:
             )
 
         codec = create_codec(provider_name)
-        replay_tail = codec.canonical_to_replay(canonical_tail)
-        tail_tokens = codec.count_request_tokens(
-            token_counter,
-            replay_tail,
-            system_prompt=system_prompt,
-            tools=tools,
-            reasoning=reasoning,
-        )
-        prefix_budget = max(0, max_tokens - tail_tokens)
-        compacted_prefix = await self.history_compactor.acompact(canonical_prefix, max_tokens=prefix_budget)
-        compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
+        try:
+            compacted_prefix = await self.history_compactor.acompact(canonical_prefix)
+            compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
+        except Exception as exc:
+            logger.warning("历史异步压缩器运行失败，回退到规则截断: %s", exc)
+            from context.compressor.history import RuleBasedHistoryCompactor
+            fallback_compactor = RuleBasedHistoryCompactor(token_counter=token_counter)
+            compacted_prefix = await fallback_compactor.acompact(canonical_prefix)
+            compactor_metadata = self._merge_compactor_metadata(
+                {},
+                {
+                    "error": str(exc),
+                    "fallback_used": True,
+                    "fallback_compactor": "RuleBasedHistoryCompactor",
+                }
+            )
         compacted_canonical = [*compacted_prefix, *canonical_tail]
         compacted_replay = codec.canonical_to_replay(compacted_canonical)
         tokens_after = codec.count_request_tokens(
@@ -350,25 +340,6 @@ class ContextManager:
             tools=tools,
             reasoning=reasoning,
         )
-
-        if tokens_after > max_tokens and compacted_prefix:
-            overflow = tokens_after - max_tokens
-            reduced_budget = max(0, prefix_budget - overflow)
-            if reduced_budget < prefix_budget:
-                compacted_prefix = await self.history_compactor.acompact(canonical_prefix, max_tokens=reduced_budget)
-                compactor_metadata = self._merge_compactor_metadata(
-                    compactor_metadata,
-                    self._history_compactor_metadata(),
-                )
-                compacted_canonical = [*compacted_prefix, *canonical_tail]
-                compacted_replay = codec.canonical_to_replay(compacted_canonical)
-                tokens_after = codec.count_request_tokens(
-                    token_counter,
-                    compacted_replay,
-                    system_prompt=system_prompt,
-                    tools=tools,
-                    reasoning=reasoning,
-                )
 
         return _result(
             canonical_history=compacted_canonical,

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class TokenCounter:
     """Token 计数器，支持多种后端"""
 
-    def __init__(self, model: str = "gpt-4", chars_per_token: float = 3.5):
+    def __init__(self, model: str = "gpt-5", chars_per_token: float = 3.5):
         """
         Args:
             model: tiktoken 编码对应的模型名
