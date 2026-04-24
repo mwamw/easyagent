@@ -486,6 +486,59 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertIn("used_tokens", usage)
         self.assertFalse(hasattr(manager, "last_usage"))
 
+    def test_get_context_usage_exposes_split_token_metrics(self):
+        manager = ContextManager(max_tokens=128, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            system_prompt="test prompt",
+            context_manager=manager,
+        )
+        agent.add_message(UserMessage("hello"))
+        agent.add_message(AssistantMessage("world"))
+
+        usage = agent.get_context_usage()
+
+        self.assertIn("history_tokens", usage)
+        self.assertIn("system_tokens", usage)
+        self.assertIn("tool_tokens", usage)
+        self.assertIn("reasoning_tokens", usage)
+        self.assertIn("estimated_request_tokens", usage)
+        self.assertEqual(usage["estimated_request_tokens"], usage["stable_context_tokens"])
+        self.assertEqual(usage["used_tokens"], usage["estimated_request_tokens"])
+        self.assertEqual(
+            usage["estimated_request_tokens"],
+            usage["history_tokens"] + usage["system_tokens"] + usage["tool_tokens"] + usage["reasoning_tokens"],
+        )
+
+    def test_reasoning_history_persistence_can_be_disabled(self):
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+            config=Config(persist_reasoning_history=False),
+        )
+
+        agent._append_assistant_message_history(content="world", thinking="hidden chain")
+
+        last_canonical = agent.history[-1]
+        last_replay = agent.raw_history[-1]
+        self.assertTrue(all(block.type != "reasoning" for block in last_canonical.content))
+        self.assertEqual(last_replay["role"], "assistant")
+        self.assertNotIn("reasoning_content", last_replay)
+
+    def test_reasoning_history_persistence_defaults_to_enabled(self):
+        agent = BasicAgent(
+            name="assistant",
+            llm=self.llm,
+        )
+
+        agent._append_assistant_message_history(content="world", thinking="visible chain")
+
+        last_canonical = agent.history[-1]
+        last_replay = agent.raw_history[-1]
+        self.assertTrue(any(block.type == "reasoning" for block in last_canonical.content))
+        self.assertEqual(last_replay.get("reasoning_content"), "visible chain")
+
     def test_basic_agent_restores_mode_permissions_and_current_task(self):
         registry = build_registry()
         task_service = TaskService(InMemoryTaskStore())

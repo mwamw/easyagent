@@ -65,6 +65,14 @@ class ContextBuilder:
         Returns:
             self（链式调用）
         """
+        if source.source_name == "memory":
+            for index, (existing_source, _) in enumerate(self._sources):
+                if existing_source.source_name == source.source_name:
+                    self._sources[index] = (source, weight)
+                    if compressor:
+                        self._compressors[source.source_name] = compressor
+                    return self
+
         self._sources.append((source, weight))
         if compressor:
             self._compressors[source.source_name] = compressor

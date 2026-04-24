@@ -3,6 +3,7 @@ Agent 基类模块
 """
 from core.Exception import ToolExecutionError
 from .history import (
+    CanonicalBlock,
     CanonicalMessage,
     ReplayHistoryState,
     _json_safe,
@@ -49,26 +50,31 @@ def _build_history_context_usage_payload(
     max_tokens: Optional[int],
     history_budget_tokens: Optional[int],
     history_tokens: int,
-    system_prompt_tokens: int,
-    tool_schema_tokens: int,
-    stable_context_tokens: int,
+    system_tokens: int,
+    tool_tokens: int,
+    reasoning_tokens: int,
+    estimated_request_tokens: int,
     canonical_history_messages: int,
     replay_history_messages: int,
     compaction: Optional[dict[str, Any]] = None,
     pending_step_active: bool = False,
 ) -> dict[str, Any]:
-    remaining = (max_tokens - stable_context_tokens) if max_tokens is not None else None
-    history_remaining = (history_budget_tokens - stable_context_tokens) if history_budget_tokens is not None else None
+    remaining = (max_tokens - estimated_request_tokens) if max_tokens is not None else None
+    history_remaining = (history_budget_tokens - estimated_request_tokens) if history_budget_tokens is not None else None
     remaining_legacy = max(remaining, 0) if remaining is not None else None
     compaction = dict(compaction or {})
     return {
         "max_tokens": max_tokens,
         "history_budget_tokens": history_budget_tokens,
         "history_tokens": history_tokens,
-        "system_prompt_tokens": system_prompt_tokens,
-        "tool_schema_tokens": tool_schema_tokens,
-        "stable_context_tokens": stable_context_tokens,
-        "used_tokens": stable_context_tokens,
+        "system_tokens": system_tokens,
+        "tool_tokens": tool_tokens,
+        "reasoning_tokens": reasoning_tokens,
+        "estimated_request_tokens": estimated_request_tokens,
+        "system_prompt_tokens": system_tokens,
+        "tool_schema_tokens": tool_tokens,
+        "stable_context_tokens": estimated_request_tokens,
+        "used_tokens": estimated_request_tokens,
         "remaining_tokens_for_sources_and_query": remaining,
         "remaining_tokens": remaining_legacy,
         "history_budget_remaining_tokens": history_remaining,
@@ -88,6 +94,7 @@ def _build_history_compaction_state(
     tokens_before: int,
     tokens_after: int,
     max_tokens: Optional[int],
+    metadata: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     return {
         "was_compacted": was_compacted,
@@ -95,6 +102,7 @@ def _build_history_compaction_state(
         "tokens_before": tokens_before,
         "tokens_after": tokens_after,
         "budget": max_tokens,
+        "metadata": dict(metadata or {}),
         "tracked_at": datetime.now().isoformat(),
     }
 
@@ -207,9 +215,8 @@ class BaseAgent(ABC):
         self.last_close_report: Optional[dict[str, Any]] = None
         self.observability_recorder = InMemoryObservabilityRecorder(agent_name=self.name)
 
-        # 自动注册 V2 记忆系统工具
-        if self.memory_manage and self.tool_registry:
-            self._register_v2_memory_tools()
+        if self.memory_manage:
+            self._install_memory_runtime(self.memory_manage)
         if self.task_service and self.tool_registry:
             self._register_task_tools()
         self._refresh_execution_context()
@@ -222,6 +229,39 @@ class BaseAgent(ABC):
                 logger.info("已自动注册 V2 记忆系统工具")
             except ImportError as e:
                 logger.warning(f"未能导入 register_memory_tools: {e}")
+
+    def _ensure_memory_context_source(self, memory_manage: "MemoryManage") -> None:
+        if self.context_manager is None:
+            self.context_manager = ContextManager()
+        try:
+            from context.source.memory_source import MemoryContextSource
+
+            self.context_manager.add_source(MemoryContextSource(memory_manage=memory_manage))
+        except ImportError as exc:
+            logger.warning("未能导入 MemoryContextSource: %s", exc)
+
+    def _install_memory_runtime(self, memory_manage: "MemoryManage") -> None:
+        """Bind memory as tools plus request context, without dynamic system-prompt injection."""
+        self.memory_manage = memory_manage
+        self._ensure_memory_context_source(memory_manage)
+        if self.skill_manager.has_skill("memory"):
+            try:
+                if not self.skill_manager.is_active("memory"):
+                    self.skill_manager.activate("memory")
+            except Exception as exc:
+                logger.warning("激活已注册的 MemorySkill 失败: %s", exc)
+            return
+        try:
+            from skill.builtin.memory_skill import MemorySkill
+
+            self.skill_manager.register(
+                MemorySkill(memory_manage=memory_manage, include_context_source=True)
+            )
+            logger.info("已通过 MemorySkill 注册 V2 记忆系统")
+        except ImportError:
+            logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
+            if self.tool_registry is not None:
+                self._register_v2_memory_tools()
     
     def enable_multi_agent_system(
         self, 
@@ -291,33 +331,10 @@ class BaseAgent(ABC):
         """
         方便地将 V2 版本的 MemoryManage 记忆系统绑定到 Agent。
 
-        内部会自动创建 MemorySkill 并注册到 SkillManager。
+        内部会自动创建 MemorySkill 并注册到 SkillManager，同时挂载 MemoryContextSource。
         如果已经通过 with_skill 手动注册了 MemorySkill，则跳过自动注册。
         """
-        self.memory_manage = memory_manage
-        
-        # 通过 MemorySkill 实现（新路径）
-        if not self.skill_manager.has_skill("memory"):
-            try:
-                from skill.builtin.memory_skill import MemorySkill
-                # 如果有 context_manager，MemorySkill 会自动提供 context_source
-                include_ctx = self.context_manager is not None
-                skill = MemorySkill(
-                    memory_manage=memory_manage,
-                    include_context_source=include_ctx,
-                )
-                self.skill_manager.register(skill)
-                logger.info("已通过 MemorySkill 注册 V2 记忆系统")
-            except ImportError:
-                # 回退到旧方式
-                logger.warning("MemorySkill 导入失败，使用旧方式注册记忆工具")
-                if self.tool_registry is not None:
-                    self._register_v2_memory_tools()
-                if self.context_manager is not None:
-                    from context.source.memory_source import MemoryContextSource
-                    memory_source = MemoryContextSource(memory_manage=memory_manage)
-                    self.context_manager.add_source(memory_source)
-
+        self._install_memory_runtime(memory_manage)
         return self
 
     def _register_task_tools(self) -> None:
@@ -928,6 +945,10 @@ class BaseAgent(ABC):
         replay_entries: list[Any],
     ) -> None:
         self._assert_replay_history_ready_for_current_provider()
+        canonical_entries, replay_entries = self._prepare_history_entries_for_persistence(
+            canonical_entries,
+            replay_entries,
+        )
         provider_name = getattr(self.llm, "provider_name", None)
         for entry in canonical_entries:
             self._history.append(entry)
@@ -940,6 +961,64 @@ class BaseAgent(ABC):
             self.replay_history.pop(0)
         self.replay_history_provider_name = provider_name
         self._check_and_trigger_background_memory()
+
+    def _should_persist_reasoning_history(self) -> bool:
+        return bool(getattr(self.config, "persist_reasoning_history", True))
+
+    @staticmethod
+    def _strip_signature_metadata(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: BaseAgent._strip_signature_metadata(item)
+                for key, item in value.items()
+                if key not in {"signature", "thought_signature", "thoughtSignature"}
+            }
+        if isinstance(value, list):
+            return [BaseAgent._strip_signature_metadata(item) for item in value]
+        if isinstance(value, tuple):
+            return [BaseAgent._strip_signature_metadata(item) for item in value]
+        return value
+
+    def _sanitize_canonical_entry_for_persistence(self, entry: Any) -> Any:
+        canonical = coerce_canonical_message(entry)
+        if canonical is None:
+            return entry
+        blocks: list[CanonicalBlock] = []
+        for block in canonical.content:
+            if block.type == "reasoning":
+                continue
+            blocks.append(
+                block.model_copy(
+                    update={
+                        "signature": None,
+                        "payload": self._strip_signature_metadata(block.payload),
+                        "metadata": self._strip_signature_metadata(block.metadata),
+                    }
+                )
+            )
+        return canonical.model_copy(
+            update={
+                "content": blocks,
+                "metadata": self._strip_signature_metadata(canonical.metadata),
+            }
+        )
+
+    def _prepare_history_entries_for_persistence(
+        self,
+        canonical_entries: list[Any],
+        replay_entries: list[Any],
+    ) -> tuple[list[Any], list[Any]]:
+        if self._should_persist_reasoning_history():
+            return list(canonical_entries or []), list(replay_entries or [])
+        sanitized_canonical = [
+            self._sanitize_canonical_entry_for_persistence(entry)
+            for entry in list(canonical_entries or [])
+        ]
+        sanitized_replay = self.llm.canonical_to_replay_history(
+            sanitized_canonical,
+            getattr(self.llm, "provider_name", None),
+        )
+        return sanitized_canonical, sanitized_replay
 
     def _append_query_history(self, query: str) -> None:
         self._append_dual_history(
@@ -1171,15 +1250,7 @@ class BaseAgent(ABC):
                 logger.error(f"后台记忆提炼失败: {e}")
     
     def _build_memory_prompt(self) -> str:
-        """构建记忆系统相关的 prompt 片段（供子类在 get_enhanced_prompt 中调用）
-        
-        包含：
-        1. 记忆系统使用说明
-        2. Working Memory 便签本内容全量注入
-        
-        Returns:
-            记忆相关的 prompt 文本，无记忆系统时返回空字符串
-        """
+        """构建记忆系统静态策略提示，不在 system prompt 中注入动态记忆内容。"""
         memory_manage = getattr(self, "memory_manage", None)
         memory_skill = self._get_active_memory_skill()
         if memory_manage is None and memory_skill is not None:
@@ -1188,41 +1259,15 @@ class BaseAgent(ABC):
         if not memory_manage:
             return ""
 
-        # 若 context_manager 已挂载 memory source，避免重复注入 Working Memory 全量文本
-        context_has_memory_source = False
-        if getattr(self, "context_manager", None) is not None:
-            try:
-                source_names = set(self.context_manager.builder.source_names) #type: ignore
-                context_has_memory_source = "memory" in source_names
-            except Exception:
-                context_has_memory_source = False
-
         supported_memory_types: list[str] | None = None
         try:
             supported_memory_types = list(getattr(memory_manage, "memory_types", {}).keys())
         except Exception:
             supported_memory_types = None
 
-        working_memory_entries: list[str] = []
-        has_working_memory = False
-        try:
-            if "working" in memory_manage.memory_types: #type: ignore[attr-defined]
-                has_working_memory = True
-                if not context_has_memory_source:
-                    working_memories = memory_manage.memory_types["working"].get_all_memories() #type: ignore[index]
-                    working_memory_entries = [
-                        f"- id:{memory.id}: {memory.content}"
-                        for memory in working_memories
-                    ]
-        except Exception:
-            working_memory_entries = ["(读取失败)"]
-            has_working_memory = True
-
         return build_memory_prompt_section(
             supported_memory_types=supported_memory_types,
-            working_memory_entries=working_memory_entries,
-            working_memory_managed_by_context=context_has_memory_source,
-            include_working_memory=has_working_memory,
+            include_working_memory=False,
         )
     
     def add_user_message(self, content: str) -> None:
@@ -1278,6 +1323,7 @@ class BaseAgent(ABC):
             tokens_before=result.tokens_before,
             tokens_after=result.tokens_after,
             max_tokens=result.budget,
+            metadata=getattr(result, "metadata", None),
         )
         if not result.was_compacted:
             return False
@@ -2884,13 +2930,8 @@ class BaseAgent(ABC):
         history_budget = self._history_budget_max_tokens()
         system_prompt = self._stable_system_prompt()
         tools = self._stable_tools()
-        history_tokens = self.llm.count_request_tokens(
-            self._context_usage_counter,
-            self.replay_history,
-        )
-        stable_context_tokens = self.llm.count_request_tokens(
-            self._context_usage_counter,
-            self.replay_history,
+        breakdown = self._estimate_request_token_breakdown(
+            replay_history=self.replay_history,
             system_prompt=system_prompt,
             tools=tools,
             reasoning=self.reasoning,
@@ -2898,16 +2939,58 @@ class BaseAgent(ABC):
         usage = _build_history_context_usage_payload(
             max_tokens=max_tokens,
             history_budget_tokens=history_budget,
-            history_tokens=history_tokens,
-            system_prompt_tokens=self._context_usage_counter.count(system_prompt or ""),
-            tool_schema_tokens=self._context_usage_counter.count(tools or []),
-            stable_context_tokens=stable_context_tokens,
+            history_tokens=breakdown["history_tokens"],
+            system_tokens=breakdown["system_tokens"],
+            tool_tokens=breakdown["tool_tokens"],
+            reasoning_tokens=breakdown["reasoning_tokens"],
+            estimated_request_tokens=breakdown["estimated_request_tokens"],
             canonical_history_messages=len(self._history),
             replay_history_messages=len(self.replay_history),
             compaction=self._last_history_compaction,
             pending_step_active=self._pending_step_state is not None,
         )
         return self._make_json_safe(usage)
+
+    def _estimate_request_token_breakdown(
+        self,
+        *,
+        replay_history: list[Any],
+        system_prompt: Optional[str] = None,
+        tools: Optional[Any] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+    ) -> dict[str, int]:
+        history_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            replay_history,
+        )
+        history_plus_system_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            replay_history,
+            system_prompt=system_prompt,
+        )
+        history_plus_system_plus_tools_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            replay_history,
+            system_prompt=system_prompt,
+            tools=tools,
+        )
+        estimated_request_tokens = self.llm.count_request_tokens(
+            self._context_usage_counter,
+            replay_history,
+            system_prompt=system_prompt,
+            tools=tools,
+            reasoning=reasoning,
+        )
+        system_tokens = max(0, history_plus_system_tokens - history_tokens)
+        tool_tokens = max(0, history_plus_system_plus_tools_tokens - history_plus_system_tokens)
+        reasoning_tokens = max(0, estimated_request_tokens - history_plus_system_plus_tools_tokens)
+        return {
+            "history_tokens": int(history_tokens),
+            "system_tokens": int(system_tokens),
+            "tool_tokens": int(tool_tokens),
+            "reasoning_tokens": int(reasoning_tokens),
+            "estimated_request_tokens": int(estimated_request_tokens),
+        }
 
     def _estimate_llm_request_tokens(
         self,

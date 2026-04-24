@@ -121,6 +121,19 @@ class TestNotebookEditTool(unittest.TestCase):
         self.assertEqual("".join(notebook["cells"][0]["source"]), "# Updated\nmore text\n")
         self.assertEqual(len(notebook["cells"]), 2)
 
+    def test_notebook_edit_normalizes_wrapped_path(self):
+        self.reader.run({"file_path": self.notebook_path})
+        result = self.tool.run(
+            {
+                "notebook_path": f"`{self.notebook_path}`",
+                "cell_id": "intro",
+                "new_source": "# Wrapped\n",
+                "edit_mode": "replace",
+            }
+        )
+
+        self.assertEqual(result.status, "success")
+
 
 class TestInteractionTools(unittest.TestCase):
     def test_ask_user_question_interrupts(self):

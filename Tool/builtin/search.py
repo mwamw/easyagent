@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
+from .input_normalization import normalize_domain_filter, normalize_generic_input
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +47,9 @@ def _format_search_output(query: str, results: list[dict[str, str]]) -> str:
 def _normalize_domain_filters(domains: list[str] | None) -> list[str]:
     normalized: list[str] = []
     for domain in domains or []:
-        value = str(domain).strip().lower()
+        value = normalize_domain_filter(domain)
         if not value:
             continue
-        if value.startswith("*."):
-            value = value[2:]
         normalized.append(value)
     return normalized
 
@@ -151,7 +150,7 @@ class WebSearchTool(Tool):
     
     def run(self, parameters: dict) -> ToolResult:
         """执行搜索"""
-        query = parameters.get("query", "")
+        query = normalize_generic_input(parameters.get("query", ""))
         num_results = parameters.get("num_results", 5)
         allowed_domains = list(parameters.get("allowed_domains") or [])
         blocked_domains = list(parameters.get("blocked_domains") or [])

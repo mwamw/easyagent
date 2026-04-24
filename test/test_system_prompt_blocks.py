@@ -141,11 +141,11 @@ class TestSystemPromptBlocks(unittest.TestCase):
         self.assertEqual(prompt.count("## 记忆系统"), 1)
         self.assertIn("### 1. 记忆的目的", prompt)
         self.assertIn("### 2. 何时访问记忆", prompt)
-        self.assertIn("### 7. 当前 Working Memory 展示", prompt)
+        self.assertNotIn("### 7. 当前 Working Memory 展示", prompt)
         self.assertIn("`working` (Working Memory): 已启用", prompt)
         self.assertIn("`semantic` (Semantic Memory): 未启用", prompt)
         self.assertNotIn("dict_keys", prompt)
-        self.assertIn("预算上限 5000 元", prompt)
+        self.assertNotIn("预算上限 5000 元", prompt)
 
     def test_non_memory_skills_still_render_after_memory_block(self):
         llm = SpyEasyLLM()

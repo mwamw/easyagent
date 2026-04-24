@@ -639,6 +639,27 @@ registry.discover_from_directory("skills/")
 
 ## 内置 Skill
 
+当前内置 Skill 一览：
+
+| Skill | 作用 |
+|------|------|
+| `calculator` | 精确数学计算 |
+| `web_search` | 联网搜索候选来源 |
+| `web_research` | 搜索 + 抓取网页正文的研究工作流 |
+| `file_manager` | 本地文件读取、搜索、精确编辑、整文件写入 |
+| `linux_ops` | 本地 shell / Linux 运维命令执行 |
+| `task_planning` | 结构化任务拆分与状态跟踪 |
+| `code_review` | 结构化代码审查方法 |
+| `debug` | 假设驱动的系统化调试方法 |
+| `agent_teams` | 多 Agent 团队编排方法 |
+| `frontend_design` | 提升前端设计审美与界面完成度 |
+| `writing` | 提升通用写作的结构和表达质量 |
+| `research_synthesis` | 对多来源资料做综述、比较与证据收敛 |
+| `product_strategy` | 从用户价值、约束和取舍角度做产品分析 |
+| `teaching` | 分层、循序渐进地讲清复杂概念 |
+| `memory` | V2 记忆系统 |
+| `mcp` | MCP 远程工具技能 |
+
 ### CalculatorSkill
 
 数学计算技能，封装 `CalculatorTool`。
@@ -716,8 +737,8 @@ agent.with_skill(skill)
 
 **Prompt 特性**:
 - 自动注入记忆系统使用指南
-- 自动注入 Working Memory 便签本内容（实时）
-- 当 `include_context_source=True` 时，还会提供 `MemoryContextSource`
+- 动态记忆内容通过 `MemoryContextSource` / context pipeline 注入
+- 当 `include_context_source=True` 时，会提供 `MemoryContextSource`
 
 ---
 

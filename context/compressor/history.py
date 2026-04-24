@@ -27,9 +27,16 @@ class BaseHistoryCompactor(ABC):
 
     def __init__(self, token_counter: Optional[TokenCounter] = None):
         self._counter = token_counter or TokenCounter()
+        self._last_run_info: dict[str, Any] = {}
 
     def set_token_counter(self, token_counter: TokenCounter) -> None:
         self._counter = token_counter
+
+    def get_last_run_info(self) -> dict[str, Any]:
+        return dict(self._last_run_info)
+
+    def _set_last_run_info(self, info: Optional[dict[str, Any]]) -> None:
+        self._last_run_info = dict(info or {})
 
     @abstractmethod
     def compact(
@@ -84,6 +91,13 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
         if not normalized or max_tokens <= 0:
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "skipped",
+                    "fallback_used": False,
+                }
+            )
             return []
         if not all(is_canonical_message(message) for message in normalized):
             raise ValueError("RuleBasedHistoryCompactor 只接受 canonical history。")
@@ -128,7 +142,18 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
                 recent_messages = self._drop_oldest_messages_to_fit(recent_messages, summary_messages, max_tokens)
             break
 
-        return [*summary_messages, *recent_messages]
+        result = [*summary_messages, *recent_messages]
+        self._set_last_run_info(
+            {
+                "compactor": self.__class__.__name__,
+                "status": "success",
+                "fallback_used": False,
+                "recent_turns": self.recent_turns,
+                "input_messages": len(normalized),
+                "output_messages": len(result),
+            }
+        )
+        return result
 
     async def acompact(
         self,
@@ -446,6 +471,14 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
         if not normalized or max_tokens <= 0:
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "skipped",
+                    "fallback_used": False,
+                    "mode": "sync",
+                }
+            )
             return []
 
         logger.info("Compact History by LLM")
@@ -481,11 +514,35 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
                 ]
             )
             messages = self._parse_response(response)
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "success",
+                    "fallback_used": False,
+                    "mode": "sync",
+                    "input_messages": len(normalized),
+                    "output_messages": len(messages),
+                }
+            )
             return messages
         except Exception as exc:
             logger.warning("LLMHistoryCompactor 压缩失败，回退规则压缩: %s", exc)
-
-        return self.fallback.compact(normalized, max_tokens)
+            fallback_messages = self.fallback.compact(normalized, max_tokens)
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "fallback",
+                    "fallback_used": True,
+                    "mode": "sync",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "fallback_compactor": self.fallback.__class__.__name__,
+                    "input_messages": len(normalized),
+                    "output_messages": len(fallback_messages),
+                    "fallback_details": self.fallback.get_last_run_info(),
+                }
+            )
+            return fallback_messages
 
     async def acompact(
         self,
@@ -494,6 +551,14 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
     ) -> List[Dict[str, Any]]:
         normalized = [self._clone_message(message) for message in history or []]
         if not normalized or max_tokens <= 0:
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "skipped",
+                    "fallback_used": False,
+                    "mode": "async",
+                }
+            )
             return []
             
         logger.info("Compact History")
@@ -525,11 +590,51 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
             )
             messages = self._parse_response(response)
             if messages:
+                self._set_last_run_info(
+                    {
+                        "compactor": self.__class__.__name__,
+                        "status": "success",
+                        "fallback_used": False,
+                        "mode": "async",
+                        "input_messages": len(normalized),
+                        "output_messages": len(messages),
+                    }
+                )
                 return messages
         except Exception as exc:
             logger.warning("LLMHistoryCompactor 异步压缩失败，回退规则压缩: %s", exc)
-
-        return await self.fallback.acompact(normalized, max_tokens)
+            fallback_messages = await self.fallback.acompact(normalized, max_tokens)
+            self._set_last_run_info(
+                {
+                    "compactor": self.__class__.__name__,
+                    "status": "fallback",
+                    "fallback_used": True,
+                    "mode": "async",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "fallback_compactor": self.fallback.__class__.__name__,
+                    "input_messages": len(normalized),
+                    "output_messages": len(fallback_messages),
+                    "fallback_details": self.fallback.get_last_run_info(),
+                }
+            )
+            return fallback_messages
+        fallback_messages = await self.fallback.acompact(normalized, max_tokens)
+        self._set_last_run_info(
+            {
+                "compactor": self.__class__.__name__,
+                "status": "fallback",
+                "fallback_used": True,
+                "mode": "async",
+                "error": "llm_compactor_returned_empty_result",
+                "error_type": "EmptyCompactionResult",
+                "fallback_compactor": self.fallback.__class__.__name__,
+                "input_messages": len(normalized),
+                "output_messages": len(fallback_messages),
+                "fallback_details": self.fallback.get_last_run_info(),
+            }
+        )
+        return fallback_messages
 
     def _build_prompt(self, history: List[Dict[str, Any]], max_tokens: int) -> str:
         transcript_lines = []

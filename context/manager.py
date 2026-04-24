@@ -31,6 +31,7 @@ class HistoryCompactionResult:
     tokens_before: int
     tokens_after: int
     budget: int
+    metadata: dict[str, Any]
 def _copy_entry(value: Any) -> Any:
     if isinstance(value, dict):
         return _json_safe(value)
@@ -80,6 +81,7 @@ def _result(
     tokens_before: int,
     tokens_after: int,
     budget: int,
+    metadata: Optional[dict[str, Any]] = None,
 ) -> HistoryCompactionResult:
     return HistoryCompactionResult(
         canonical_history=canonical_history,
@@ -89,10 +91,31 @@ def _result(
         tokens_before=tokens_before,
         tokens_after=tokens_after,
         budget=budget,
+        metadata=dict(metadata or {}),
     )
 
 
 class ContextManager:
+    def _history_compactor_metadata(self) -> dict[str, Any]:
+        info = {}
+        if hasattr(self.history_compactor, "get_last_run_info"):
+            try:
+                info = self.history_compactor.get_last_run_info()
+            except Exception:
+                info = {}
+        return {"compactor": _json_safe(info)} if info else {}
+
+    @staticmethod
+    def _merge_compactor_metadata(current: dict[str, Any], latest: dict[str, Any]) -> dict[str, Any]:
+        if not latest:
+            return current
+        if not current:
+            return latest
+        latest_compactor = latest.get("compactor") if isinstance(latest, dict) else None
+        if isinstance(latest_compactor, dict) and latest_compactor.get("status") == "skipped":
+            return current
+        return latest
+
     def __init__(
         self,
         builder: Optional[ContextBuilder] = None,
@@ -188,6 +211,7 @@ class ContextManager:
                 tokens_before=tokens_before,
                 tokens_after=tokens_before,
                 budget=max_tokens,
+                metadata={},
             )
 
         preserve_tail_turns = _compactor_recent_turns(self.history_compactor)
@@ -203,6 +227,7 @@ class ContextManager:
                 tokens_before=tokens_before,
                 tokens_after=tokens_before,
                 budget=max_tokens,
+                metadata={},
             )
 
         replay_tail = codec.canonical_to_replay(canonical_tail)
@@ -215,6 +240,7 @@ class ContextManager:
         )
         prefix_budget = max(0, max_tokens - tail_tokens)
         compacted_prefix = self.history_compactor.compact(canonical_prefix, max_tokens=prefix_budget)
+        compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
         compacted_canonical = [*compacted_prefix, *canonical_tail]
         compacted_replay = codec.canonical_to_replay(compacted_canonical)
         tokens_after = codec.count_request_tokens(
@@ -230,6 +256,10 @@ class ContextManager:
             reduced_budget = max(0, prefix_budget - overflow)
             if reduced_budget < prefix_budget:
                 compacted_prefix = self.history_compactor.compact(canonical_prefix, max_tokens=reduced_budget)
+                compactor_metadata = self._merge_compactor_metadata(
+                    compactor_metadata,
+                    self._history_compactor_metadata(),
+                )
                 compacted_canonical = [*compacted_prefix, *canonical_tail]
                 compacted_replay = codec.canonical_to_replay(compacted_canonical)
                 tokens_after = codec.count_request_tokens(
@@ -248,6 +278,7 @@ class ContextManager:
             tokens_before=tokens_before,
             tokens_after=tokens_after,
             budget=max_tokens,
+            metadata=compactor_metadata,
         )
 
 
@@ -281,6 +312,7 @@ class ContextManager:
                 tokens_before=tokens_before,
                 tokens_after=tokens_before,
                 budget=max_tokens,
+                metadata={},
             )
 
         preserve_tail_turns = _compactor_recent_turns(self.history_compactor)
@@ -294,6 +326,7 @@ class ContextManager:
                 tokens_before=tokens_before,
                 tokens_after=tokens_before,
                 budget=max_tokens,
+                metadata={},
             )
 
         codec = create_codec(provider_name)
@@ -307,6 +340,7 @@ class ContextManager:
         )
         prefix_budget = max(0, max_tokens - tail_tokens)
         compacted_prefix = await self.history_compactor.acompact(canonical_prefix, max_tokens=prefix_budget)
+        compactor_metadata = self._merge_compactor_metadata({}, self._history_compactor_metadata())
         compacted_canonical = [*compacted_prefix, *canonical_tail]
         compacted_replay = codec.canonical_to_replay(compacted_canonical)
         tokens_after = codec.count_request_tokens(
@@ -322,6 +356,10 @@ class ContextManager:
             reduced_budget = max(0, prefix_budget - overflow)
             if reduced_budget < prefix_budget:
                 compacted_prefix = await self.history_compactor.acompact(canonical_prefix, max_tokens=reduced_budget)
+                compactor_metadata = self._merge_compactor_metadata(
+                    compactor_metadata,
+                    self._history_compactor_metadata(),
+                )
                 compacted_canonical = [*compacted_prefix, *canonical_tail]
                 compacted_replay = codec.canonical_to_replay(compacted_canonical)
                 tokens_after = codec.count_request_tokens(
@@ -340,6 +378,7 @@ class ContextManager:
             tokens_before=tokens_before,
             tokens_after=tokens_after,
             budget=max_tokens,
+            metadata=compactor_metadata,
         )
 
     @property

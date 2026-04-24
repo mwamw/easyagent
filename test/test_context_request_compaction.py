@@ -9,9 +9,11 @@ from context.compressor.history import LLMHistoryCompactor, RuleBasedHistoryComp
 from context.manager import ContextManager
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
-from core.Message import UserMessage
+from core.Message import AssistantMessage, UserMessage
+from core.llm import EasyLLM
 from core.providers import create_codec
 from core.request_input import ReplayRequestInput
+from agent import BasicAgent
 
 
 class MockHistoryLLM:
@@ -27,6 +29,32 @@ class MockHistoryLLM:
     async def ainvoke(self, messages, **kwargs):
         self.async_messages = messages
         return self.response
+
+
+class FailingHistoryLLM(MockHistoryLLM):
+    def __init__(self):
+        super().__init__(response="")
+
+    def invoke(self, messages, **kwargs):
+        raise RuntimeError("llm compaction failed")
+
+    async def ainvoke(self, messages, **kwargs):
+        raise RuntimeError("llm compaction failed")
+
+
+class DummyAgentLLM(EasyLLM):
+    def __init__(self):
+        self.provider_name = "openai"
+        self.model = "mock-model"
+        self.base_url = "http://mock.local/v1"
+        self.api_key = "mock-key"
+        self.max_tokens = 256
+
+    def invoke(self, messages, temperature=None, **kwargs):
+        return "ok"
+
+    def prepare_messages_for_request(self, messages):
+        return list(messages)
 
 
 class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
@@ -86,7 +114,7 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
     def test_usage_reports_negative_remaining_when_request_is_over_budget_but_not_compactable(self):
         manager = ContextManager(
             builder=ContextBuilder(
-                budget=TokenBudget(max_tokens=40),
+                budget=TokenBudget(max_tokens=120),
                 counter=TokenCounter(chars_per_token=1.0),
             )
         )
@@ -135,6 +163,41 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(compacted), 1)
         self.assertTrue(all(item["record_type"] == "canonical_message" for item in compacted))
         self.assertEqual(compacted[0]["content"][0]["type"], "text")
+
+    def test_llm_history_compactor_fallback_metadata_propagates_to_agent_usage(self):
+        manager = ContextManager(
+            builder=ContextBuilder(
+                budget=TokenBudget(max_tokens=40),
+                counter=TokenCounter(chars_per_token=1.0),
+            )
+        )
+        manager.set_history_compactor(
+            LLMHistoryCompactor(
+                llm=FailingHistoryLLM(),
+                token_counter=manager.counter,
+                recent_turns=1,
+            )
+        )
+        agent = BasicAgent(
+            name="assistant",
+            llm=DummyAgentLLM(),
+            context_manager=manager,
+        )
+        agent.get_enhanced_prompt = lambda: ""
+        agent.add_message(UserMessage("第一轮问题非常长" * 4))
+        agent.add_message(AssistantMessage("第一轮回答非常长" * 4))
+        agent.add_message(UserMessage("最后一轮问题"))
+        agent.add_message(AssistantMessage("最后一轮回答"))
+
+        compacted = agent.compact_history(max_tokens=120)
+
+        self.assertTrue(compacted)
+        usage = agent.get_context_usage()
+        compactor_info = usage["last_history_compaction"]["metadata"]["compactor"]
+        self.assertTrue(compactor_info["fallback_used"])
+        self.assertEqual(compactor_info["status"], "fallback")
+        self.assertEqual(compactor_info["fallback_compactor"], "RuleBasedHistoryCompactor")
+        self.assertEqual(compactor_info["error_type"], "RuntimeError")
 
 
 if __name__ == "__main__":

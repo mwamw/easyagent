@@ -29,6 +29,7 @@ class Config(BaseModel):
     git_binary: str = "git"
     enable_worktree: bool = False
     interrupt_on_confirmation: bool = True
+    persist_reasoning_history: bool = True
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -56,6 +57,7 @@ class Config(BaseModel):
             git_binary=os.getenv("GIT_BINARY", "git"),
             enable_worktree=os.getenv("ENABLE_WORKTREE", "false").lower() == "true",
             interrupt_on_confirmation=os.getenv("INTERRUPT_ON_CONFIRMATION", "true").lower() == "true",
+            persist_reasoning_history=os.getenv("PERSIST_REASONING_HISTORY", "true").lower() == "true",
         )
 
     def get_allowed_roots(self) -> list[str]:

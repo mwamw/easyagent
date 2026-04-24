@@ -11,8 +11,28 @@ from ...history import (
 
 
 class BaseProviderCodec(ABC):
+    _TOKEN_ESTIMATE_SIGNATURE_KEYS = {
+        "signature",
+        "thought_signature",
+        "thoughtSignature",
+    }
+
     def __init__(self, provider_name: str):
         self.provider_name = provider_name
+
+    @classmethod
+    def _strip_token_estimate_metadata(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: cls._strip_token_estimate_metadata(item)
+                for key, item in value.items()
+                if key not in cls._TOKEN_ESTIMATE_SIGNATURE_KEYS
+            }
+        if isinstance(value, list):
+            return [cls._strip_token_estimate_metadata(item) for item in value]
+        if isinstance(value, tuple):
+            return [cls._strip_token_estimate_metadata(item) for item in value]
+        return value
 
     @staticmethod
     def _provider_replay_scope(provider_name: Optional[str]) -> Optional[str]:
@@ -206,7 +226,7 @@ class BaseProviderCodec(ABC):
             pending_messages=pending_messages,
             reasoning=reasoning,
         )
-        return counter.count(payload)
+        return counter.count(self._strip_token_estimate_metadata(payload))
 
     @abstractmethod
     def is_request_ready_message(self, message: Any) -> bool:

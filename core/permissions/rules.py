@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, TYPE_CHECKING
+from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from Tool.BaseTool import Tool
@@ -20,6 +21,7 @@ PATH_PARAM_NAMES = {
     "workspace_root",
 }
 COMMAND_PARAM_NAMES = {"command", "cmd"}
+HOST_PARAM_NAMES = {"url", "uri", "host", "hostname", "base_url", "final_url"}
 
 
 def _normalize_str_list(value: Any) -> list[str]:
@@ -44,6 +46,26 @@ def extract_command_values(parameters: dict[str, Any]) -> list[str]:
         if key in COMMAND_PARAM_NAMES and isinstance(value, str) and value.strip():
             values.append(value.strip())
     return values
+
+
+def extract_host_values(parameters: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key, value in parameters.items():
+        if key not in HOST_PARAM_NAMES or not isinstance(value, str) or not value.strip():
+            continue
+        raw = value.strip().lower()
+        values.append(raw)
+        parsed = urlparse(raw)
+        hostname = (parsed.hostname or "").lower()
+        if hostname:
+            values.append(hostname)
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def extract_mcp_server_values(tool: Tool, parameters: dict[str, Any]) -> list[str]:
@@ -131,6 +153,30 @@ def _rule_matches_command(rule: PermissionRule, parameters: dict[str, Any]) -> b
     return any(any(value.startswith(prefix) for prefix in prefixes) for value in values)
 
 
+def _domain_matches(hostname: str, expected: str) -> bool:
+    normalized_hostname = hostname.lower().strip()
+    normalized_expected = expected.lower().strip()
+    if not normalized_hostname or not normalized_expected:
+        return False
+    return (
+        normalized_hostname == normalized_expected
+        or normalized_hostname.endswith(f".{normalized_expected}")
+        or normalized_expected in normalized_hostname
+    )
+
+
+def _rule_matches_host(rule: PermissionRule, parameters: dict[str, Any]) -> bool:
+    expected = _normalize_str_list(
+        rule.matcher.get("hosts")
+        or rule.matcher.get("hostnames")
+        or rule.matcher.get("domains")
+    )
+    if not expected:
+        return True
+    values = extract_host_values(parameters)
+    return any(_domain_matches(value, item) for value in values for item in expected)
+
+
 def _rule_matches_mcp_server(rule: PermissionRule, tool: Tool, parameters: dict[str, Any]) -> bool:
     expected = _normalize_str_list(
         rule.matcher.get("mcp_servers")
@@ -179,6 +225,8 @@ def find_matching_rule(
         if not _rule_matches_path(rule, parameters):
             continue
         if not _rule_matches_command(rule, parameters):
+            continue
+        if not _rule_matches_host(rule, parameters):
             continue
         if not _rule_matches_mcp_server(rule, tool, parameters):
             continue

@@ -43,6 +43,10 @@ class NoopParams(BaseModel):
     pass
 
 
+class UrlParams(BaseModel):
+    url: str
+
+
 class ConfirmingTool(Tool):
     def __init__(self):
         super().__init__(
@@ -83,6 +87,20 @@ class EditableFileTool(Tool):
 
     def run(self, parameters: dict):
         return "edited"
+
+
+class NetworkTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="NetworkTool",
+            description="模拟网络访问工具",
+            parameters=UrlParams,
+            requires_confirmation=True,
+            risk_categories=["network"],
+        )
+
+    def run(self, parameters: dict):
+        return parameters["url"]
 
 
 class PermissionAndTaskTests(unittest.TestCase):
@@ -199,6 +217,37 @@ class PermissionAndTaskTests(unittest.TestCase):
 
         self.assertEqual(result.status, "success")
         self.assertEqual(result.content, "edited")
+
+    def test_permission_rule_matches_url_hosts(self):
+        registry = ToolRegistry()
+        registry.register_tool(NetworkTool())
+        context = PermissionContext(
+            rules=[
+                PermissionRule(
+                    tool_name="NetworkTool",
+                    behavior=PermissionBehavior.ALLOW,
+                    matcher={"hosts": ["example.com"]},
+                    source="test",
+                    description="允许 example.com",
+                )
+            ]
+        )
+
+        allowed = registry.execute_tool_result(
+            "NetworkTool",
+            {"url": "https://docs.example.com/path"},
+            permission_context=context,
+            permission_engine=PermissionEngine(),
+        )
+        blocked = registry.execute_tool_result(
+            "NetworkTool",
+            {"url": "https://other.invalid/path"},
+            permission_context=context,
+            permission_engine=PermissionEngine(),
+        )
+
+        self.assertEqual(allowed.status, "success")
+        self.assertEqual(blocked.status, "needs_confirmation")
 
     def test_task_tools_crud_flow(self):
         registry = ToolRegistry()

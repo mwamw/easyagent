@@ -66,7 +66,7 @@ class FilesystemGuard:
         self.ensure_parent_writable(path)
 
     def validate_glob_root(self, path: Optional[str], *, cwd: Optional[str] = None) -> str:
-        target = path or self.workspace_root
+        target = path or cwd or self.workspace_root
         return self.resolve_directory(target, cwd=cwd, must_exist=True)
 
     def safe_join(self, *parts: str) -> str:

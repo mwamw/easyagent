@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeWebFetchInput
+from .input_normalization import normalize_generic_input, normalize_url_input
 
 logger = logging.getLogger(__name__)
 
@@ -243,8 +244,8 @@ class WebFetchTool(Tool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        url = str(parameters.get("url", "")).strip()
-        prompt = str(parameters.get("prompt", "")).strip()
+        url = normalize_url_input(parameters.get("url", ""))
+        prompt = normalize_generic_input(parameters.get("prompt", ""))
 
         if not url:
             return ToolResult.error("错误：URL 不能为空。", error_type="invalid_parameters")

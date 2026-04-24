@@ -48,6 +48,13 @@ class ShellToolsTestCase(unittest.TestCase):
         self.assertEqual(result.structured_data["return_code"], 0)
         self.assertIn("hello", result.structured_data["stdout"])
 
+    def test_bash_normalizes_code_fenced_command(self):
+        result = self.bash.run({"command": "```bash\nprintf 'wrapped\\n'\n```"})
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.structured_data["return_code"], 0)
+        self.assertIn("wrapped", result.structured_data["stdout"])
+
     def test_bash_foreground_non_zero_exit_is_reported(self):
         result = self.bash.run({"command": "printf 'oops\\n' 1>&2; exit 7"})
 

@@ -12,6 +12,7 @@ from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeNotebookEditInput
 from ..runtime import FilesystemAccessError, PathResolutionError, remember_file_version
 from .file_write import _WorkspaceWriteTool
+from .input_normalization import normalize_path_input
 
 
 NOTEBOOK_EDIT_PROMPT = """用于编辑 Jupyter Notebook 的单元格内容。
@@ -113,7 +114,7 @@ class NotebookEditTool(_WorkspaceWriteTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        notebook_path = str(parameters.get("notebook_path", "")).strip()
+        notebook_path = normalize_path_input(parameters.get("notebook_path", ""))
         cell_id = parameters.get("cell_id")
         new_source = str(parameters.get("new_source", ""))
         cell_type = parameters.get("cell_type")

@@ -11,6 +11,7 @@ from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeBashInput
 from ..runtime import BackgroundTaskSnapshot, FilesystemAccessError, FilesystemGuard, PathResolutionError, ProcessManager
+from .input_normalization import normalize_generic_input
 
 
 DEFAULT_BASH_OUTPUT_CHARS = 120000
@@ -202,7 +203,7 @@ class BashTool(_ShellToolBase):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        command = str(parameters.get("command", "")).strip()
+        command = normalize_generic_input(parameters.get("command", ""))
         description = parameters.get("description")
         run_in_background = bool(parameters.get("run_in_background", False))
         dangerously_disable_sandbox = bool(parameters.get("dangerouslyDisableSandbox", False))

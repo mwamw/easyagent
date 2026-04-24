@@ -10,6 +10,7 @@ if ROOT not in sys.path:
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.filesystem import (
     FileReadTool,
+    ListTool,
     GlobTool,
     GrepTool,
     register_filesystem_tools,
@@ -50,6 +51,9 @@ class FilesystemToolsTestCase(unittest.TestCase):
         with open(os.path.join(self.root, "docs", "README.md"), "w", encoding="utf-8") as handle:
             handle.write("# EasyAgent\n\nTODO: document tools.\n")
 
+        with open(os.path.join(self.root, ".env.example"), "w", encoding="utf-8") as handle:
+            handle.write("DEBUG=false\n")
+
         with open(os.path.join(self.outside.name, "outside.txt"), "w", encoding="utf-8") as handle:
             handle.write("secret\n")
 
@@ -64,6 +68,14 @@ class FilesystemToolsTestCase(unittest.TestCase):
         self.assertEqual(result.structured_data["returned_lines"], 2)
         self.assertEqual(result.metadata["file_path"], os.path.join(self.root, "notes.txt"))
         self.assertIsNotNone(get_recorded_file_version(os.path.join(self.root, "notes.txt")))
+
+    def test_file_read_normalizes_line_suffix_path(self):
+        tool = FileReadTool(workspace_root=self.root)
+        result = tool.run({"file_path": "notes.txt:2", "limit": 1})
+
+        self.assertEqual(result.status, "success")
+        self.assertIn("2 | beta", result.to_display_string())
+        self.assertEqual(result.structured_data["start_line"], 2)
 
     def test_file_read_rejects_escape_path(self):
         tool = FileReadTool(workspace_root=self.root)
@@ -84,6 +96,52 @@ class FilesystemToolsTestCase(unittest.TestCase):
         relative_paths = {item["relative_path"] for item in matches}
         self.assertEqual(relative_paths, {"main.py", os.path.join("utils", "helper.py")})
 
+    def test_glob_normalizes_wrapped_pattern_and_uses_cwd_as_default_root(self):
+        tool = GlobTool(workspace_root=self.root, cwd=os.path.join(self.root, "src"))
+        result = tool.run({"pattern": "'**/*.py'"})
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.structured_data["root"], os.path.join(self.root, "src"))
+        relative_paths = {item["relative_path"] for item in result.structured_data["matches"]}
+        self.assertEqual(relative_paths, {"main.py", os.path.join("utils", "helper.py")})
+
+    def test_glob_no_match_returns_diagnostics(self):
+        tool = GlobTool(workspace_root=self.root)
+        result = tool.run({"pattern": ".*\\.py$"})
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.structured_data["matches"], [])
+        self.assertIn("regex", result.to_display_string().lower())
+
+    def test_list_shows_directory_structure_and_hidden_entries(self):
+        tool = ListTool(workspace_root=self.root)
+        result = tool.run({"path": self.root})
+
+        self.assertEqual(result.status, "success")
+        names = {item["name"] for item in result.structured_data["entries"]}
+        self.assertIn("src", names)
+        self.assertIn("docs", names)
+        self.assertIn(".env.example", names)
+        self.assertIn("目录:", result.to_display_string())
+
+    def test_list_supports_recursive_directory_only_view(self):
+        tool = ListTool(workspace_root=self.root)
+        result = tool.run(
+            {
+                "path": self.root,
+                "recursive": True,
+                "directories_only": True,
+                "max_depth": 2,
+            }
+        )
+
+        self.assertEqual(result.status, "success")
+        entries = result.structured_data["entries"]
+        self.assertTrue(all(item["is_dir"] for item in entries))
+        relative_paths = {item["relative_path"] for item in entries}
+        self.assertIn("src", relative_paths)
+        self.assertIn(os.path.join("src", "utils"), relative_paths)
+
     def test_grep_returns_content_matches(self):
         tool = GrepTool(workspace_root=self.root)
         result = tool.run(
@@ -99,6 +157,21 @@ class FilesystemToolsTestCase(unittest.TestCase):
         self.assertGreaterEqual(result.structured_data["match_count"], 2)
         self.assertIn("TODO", result.to_display_string())
         self.assertIn("main.py", result.to_display_string())
+
+    def test_grep_normalizes_wrapped_pattern_and_glob(self):
+        tool = GrepTool(workspace_root=self.root)
+        result = tool.run(
+            {
+                "pattern": "'TODO'",
+                "path": self.root,
+                "output_mode": "content",
+                "glob": "'**/*.py'",
+            }
+        )
+
+        self.assertEqual(result.status, "success")
+        self.assertGreaterEqual(result.structured_data["match_count"], 2)
+        self.assertEqual(result.structured_data["pattern"], "TODO")
 
     def test_grep_python_fallback_count_mode(self):
         tool = GrepTool(workspace_root=self.root)
@@ -122,8 +195,9 @@ class FilesystemToolsTestCase(unittest.TestCase):
         registry = ToolRegistry()
         tools = register_filesystem_tools(registry, workspace_root=self.root)
 
-        self.assertEqual(len(tools), 3)
+        self.assertEqual(len(tools), 4)
         self.assertIn("FileRead", registry.tools)
+        self.assertIn("List", registry.tools)
         self.assertIn("Glob", registry.tools)
         self.assertIn("Grep", registry.tools)
 

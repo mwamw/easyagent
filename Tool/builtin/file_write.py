@@ -19,6 +19,7 @@ from ..runtime import (
     recorded_file_is_current,
     remember_file_version,
 )
+from .input_normalization import normalize_path_input
 
 
 FILE_WRITE_PROMPT = """用于创建新文件或整体覆盖已有文件。
@@ -260,7 +261,7 @@ class FileWriteTool(_WorkspaceWriteTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        file_path = str(parameters.get("file_path", "")).strip()
+        file_path = normalize_path_input(parameters.get("file_path", ""))
         content = str(parameters.get("content", ""))
 
         try:

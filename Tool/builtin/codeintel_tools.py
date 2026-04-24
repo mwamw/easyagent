@@ -12,6 +12,7 @@ from Tool.runtime import PathResolutionError
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
+from .input_normalization import normalize_generic_input, normalize_path_input
 from .display_utils import format_error_display, format_structured_display
 
 
@@ -233,7 +234,7 @@ class CodeIntelStatusTool(_CodeIntelTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        file_path = str(parameters.get("file_path") or "").strip() or None
+        file_path = normalize_path_input(parameters.get("file_path") or "") or None
         try:
             status = self.codeintel_manager.get_status(file_path=file_path)
             payload = status.to_dict()
@@ -260,9 +261,10 @@ class FindDefinitionTool(_CodeIntelTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
+        file_path = normalize_path_input(parameters.get("file_path") or "")
         try:
             result = self.codeintel_manager.find_definition(
-                file_path=str(parameters.get("file_path") or ""),
+                file_path=file_path,
                 line=int(parameters.get("line") or 1),
                 column=int(parameters.get("column") or 1),
             )
@@ -271,7 +273,7 @@ class FindDefinitionTool(_CodeIntelTool):
             return self._tool_error(
                 f"definition 查询失败: {exc}",
                 error_type="invalid_path",
-                metadata={"file_path": parameters.get("file_path")},
+                metadata={"file_path": file_path},
             )
         except Exception as exc:
             return self._tool_error(
@@ -293,9 +295,10 @@ class FindReferencesTool(_CodeIntelTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
+        file_path = normalize_path_input(parameters.get("file_path") or "")
         try:
             result = self.codeintel_manager.find_references(
-                file_path=str(parameters.get("file_path") or ""),
+                file_path=file_path,
                 line=int(parameters.get("line") or 1),
                 column=int(parameters.get("column") or 1),
                 include_declaration=bool(parameters.get("include_declaration")),
@@ -305,7 +308,7 @@ class FindReferencesTool(_CodeIntelTool):
             return self._tool_error(
                 f"references 查询失败: {exc}",
                 error_type="invalid_path",
-                metadata={"file_path": parameters.get("file_path")},
+                metadata={"file_path": file_path},
             )
         except Exception as exc:
             return self._tool_error(
@@ -327,16 +330,17 @@ class GetDocumentSymbolsTool(_CodeIntelTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
+        file_path = normalize_path_input(parameters.get("file_path") or "")
         try:
             result = self.codeintel_manager.get_document_symbols(
-                file_path=str(parameters.get("file_path") or ""),
+                file_path=file_path,
             )
             return self._success_result(action="get_document_symbols", payload=result.to_dict())
         except PathResolutionError as exc:
             return self._tool_error(
                 f"document symbols 查询失败: {exc}",
                 error_type="invalid_path",
-                metadata={"file_path": parameters.get("file_path")},
+                metadata={"file_path": file_path},
             )
         except Exception as exc:
             return self._tool_error(
@@ -360,7 +364,7 @@ class GetWorkspaceSymbolsTool(_CodeIntelTool):
     def run(self, parameters: dict) -> ToolResult:
         try:
             result = self.codeintel_manager.get_workspace_symbols(
-                query=str(parameters.get("query") or ""),
+                query=normalize_generic_input(parameters.get("query") or ""),
                 limit=int(parameters.get("limit") or 50),
             )
             return self._success_result(action="get_workspace_symbols", payload=result.to_dict())
@@ -384,16 +388,17 @@ class GetDiagnosticsTool(_CodeIntelTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
+        file_path = normalize_path_input(parameters.get("file_path") or "")
         try:
             result = self.codeintel_manager.get_diagnostics(
-                file_path=str(parameters.get("file_path") or ""),
+                file_path=file_path,
             )
             return self._success_result(action="get_diagnostics", payload=result.to_dict())
         except PathResolutionError as exc:
             return self._tool_error(
                 f"diagnostics 查询失败: {exc}",
                 error_type="invalid_path",
-                metadata={"file_path": parameters.get("file_path")},
+                metadata={"file_path": file_path},
             )
         except Exception as exc:
             return self._tool_error(

@@ -190,12 +190,31 @@ agent = BasicAgent.load_session("session_001")
 ---
 
 ### 9. 更多预置工具 / 内置 Skill
-当前内置 Skill 有 calculator、web_search、memory、mcp，继续扩展：
+当前内置 Skill 已包括：
+
+- `calculator`
+- `web_search`
+- `web_research`
+- `file_manager`
+- `linux_ops`
+- `task_planning`
+- `code_review`
+- `debug`
+- `agent_teams`
+- `frontend_design`
+- `writing`
+- `research_synthesis`
+- `product_strategy`
+- `teaching`
+- `memory`
+- `mcp`
+
+继续扩展：
 
 - `skill/builtin/code_interpreter_skill.py` - 代码执行器 Skill
-- `skill/builtin/file_manager_skill.py` - 文件管理 Skill
 - `skill/builtin/http_client_skill.py` - HTTP 请求 Skill
-- `skill/builtin/linux_ops_skill.py` - Linux 运维 Skill
+- `skill/builtin/testing_skill.py` - TDD / 回归测试 / 覆盖率策略 Skill
+- `skill/builtin/worktree_skill.py` - Git worktree / 并行开发 Skill
 
 ---
 

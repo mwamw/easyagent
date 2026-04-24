@@ -5,9 +5,11 @@ from .search import WebSearchTool, register_search_tool
 from .calculator import CalculatorTool, register_calculator_tool
 from .filesystem import (
     FileReadTool,
+    ListTool,
     GlobTool,
     GrepTool,
     register_file_read_tool,
+    register_list_tool,
     register_glob_tool,
     register_grep_tool,
     register_filesystem_tools,
@@ -83,6 +85,7 @@ __all__ = [
     "WebSearchTool",
     "CalculatorTool",
     "FileReadTool",
+    "ListTool",
     "GlobTool",
     "GrepTool",
     "FileWriteTool",
@@ -124,6 +127,7 @@ __all__ = [
     "register_search_tool",
     "register_calculator_tool",
     "register_file_read_tool",
+    "register_list_tool",
     "register_glob_tool",
     "register_grep_tool",
     "register_filesystem_tools",

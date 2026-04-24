@@ -52,6 +52,14 @@ class FileMutationToolsTestCase(unittest.TestCase):
         with open(target, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "print('created')\n")
 
+    def test_file_write_normalizes_wrapped_path(self):
+        tool = FileWriteTool(workspace_root=self.root)
+        target = os.path.join(self.root, "src", "wrapped.py")
+        result = tool.run({"file_path": f"'{target}'", "content": "print('wrapped')\n"})
+
+        self.assertEqual(result.status, "success")
+        self.assertTrue(os.path.exists(target))
+
     def test_file_write_rejects_outside_workspace(self):
         tool = FileWriteTool(workspace_root=self.root)
         outside_path = os.path.join(self.outside.name, "forbidden.py")
@@ -104,6 +112,25 @@ class FileMutationToolsTestCase(unittest.TestCase):
         self.assertIn("+value = 'world'", result.structured_data["diff"]["unified"])
         with open(target, "r", encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "value = 'world'\n")
+
+    def test_file_edit_normalizes_wrapped_path(self):
+        target = os.path.join(self.root, "src", "quoted.py")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("value = 'hello'\n")
+
+        tool = FileEditTool(workspace_root=self.root)
+        self._read(target)
+        result = tool.run(
+            {
+                "file_path": f"`{target}`",
+                "old_string": "'hello'",
+                "new_string": "'wrapped'",
+            }
+        )
+
+        self.assertEqual(result.status, "success")
+        with open(target, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "value = 'wrapped'\n")
 
     def test_file_edit_requires_prior_read(self):
         target = os.path.join(self.root, "src", "target.py")

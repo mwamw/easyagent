@@ -1056,6 +1056,218 @@ class TestBuiltinMemorySkill:
         assert len(tools) == 6  # add, search, get, update, remove, maintenance
 
 
+class TestBuiltinFileManagerSkill:
+    def test_creation(self):
+        from skill.builtin.file_manager_skill import FileManagerSkill
+
+        skill = FileManagerSkill()
+        assert skill.name == "file_manager"
+        assert "filesystem" in skill.tags
+
+    def test_prompt(self):
+        from skill.builtin.file_manager_skill import FileManagerSkill
+
+        skill = FileManagerSkill()
+        prompt = skill.get_prompt()
+        assert "文件" in prompt
+        assert "FileEdit" in prompt
+        assert "List" in prompt
+
+    def test_tools(self):
+        from skill.builtin.file_manager_skill import FileManagerSkill
+
+        skill = FileManagerSkill()
+        tools = skill.get_tools()
+        assert len(tools) == 6
+
+
+class TestBuiltinLinuxOpsSkill:
+    def test_creation(self):
+        from skill.builtin.linux_ops_skill import LinuxOpsSkill
+
+        skill = LinuxOpsSkill()
+        assert skill.name == "linux_ops"
+        assert "shell" in skill.tags
+
+    def test_prompt(self):
+        from skill.builtin.linux_ops_skill import LinuxOpsSkill
+
+        skill = LinuxOpsSkill()
+        prompt = skill.get_prompt()
+        assert "shell" in prompt.lower()
+        assert "Bash" in prompt
+
+    def test_tools(self):
+        from skill.builtin.linux_ops_skill import LinuxOpsSkill
+
+        skill = LinuxOpsSkill()
+        tools = skill.get_tools()
+        assert len(tools) == 1
+        assert tools[0].name == "Bash"
+
+
+class TestBuiltinWebResearchSkill:
+    def test_creation(self):
+        from skill.builtin.web_research_skill import WebResearchSkill
+
+        skill = WebResearchSkill()
+        assert skill.name == "web_research"
+        assert "research" in skill.tags
+
+    def test_prompt(self):
+        from skill.builtin.web_research_skill import WebResearchSkill
+
+        skill = WebResearchSkill()
+        prompt = skill.get_prompt()
+        assert "研究" in prompt
+        assert "WebFetch" in prompt
+
+    def test_tools(self):
+        from skill.builtin.web_research_skill import WebResearchSkill
+
+        skill = WebResearchSkill()
+        tools = skill.get_tools()
+        assert len(tools) == 2
+        assert {tool.name for tool in tools} == {"web_search", "WebFetch"}
+
+
+class TestBuiltinTaskPlanningSkill:
+    def test_creation(self):
+        from skill.builtin.task_planning_skill import TaskPlanningSkill
+
+        skill = TaskPlanningSkill()
+        assert skill.name == "task_planning"
+        assert "planning" in skill.tags
+
+    def test_prompt(self):
+        from skill.builtin.task_planning_skill import TaskPlanningSkill
+
+        skill = TaskPlanningSkill()
+        prompt = skill.get_prompt()
+        assert "任务" in prompt
+        assert "TaskCreate" in prompt
+
+    def test_tools(self):
+        from skill.builtin.task_planning_skill import TaskPlanningSkill
+
+        skill = TaskPlanningSkill()
+        tools = skill.get_tools()
+        assert len(tools) == 4
+        assert {tool.name for tool in tools} == {
+            "TaskCreate",
+            "TaskGet",
+            "TaskUpdate",
+            "TaskList",
+        }
+
+
+class TestBuiltinWorkflowSkills:
+    def test_code_review_skill(self):
+        from skill.builtin.code_review_skill import CodeReviewSkill
+
+        skill = CodeReviewSkill()
+        assert skill.name == "code_review"
+        assert skill.get_tools() == []
+        assert "审查" in skill.get_prompt()
+
+    def test_debug_skill(self):
+        from skill.builtin.debug_skill import DebugSkill
+
+        skill = DebugSkill()
+        assert skill.name == "debug"
+        assert skill.get_tools() == []
+        assert "调试" in skill.get_prompt()
+
+    def test_agent_teams_skill(self):
+        from skill.builtin.agent_teams_skill import AgentTeamsSkill
+
+        skill = AgentTeamsSkill()
+        assert skill.name == "agent_teams"
+        assert skill.get_tools() == []
+        assert "plan -> team -> synthesize" in skill.get_prompt()
+
+
+class TestBuiltinGeneralPurposeSkills:
+    def test_frontend_design_skill(self):
+        from skill.builtin.frontend_design_skill import FrontendDesignSkill
+
+        skill = FrontendDesignSkill()
+        assert skill.name == "frontend_design"
+        assert "design" in skill.tags
+        assert skill.get_tools() == []
+        prompt = skill.get_prompt()
+        assert "审美" in prompt
+        assert "Typography" in prompt
+
+    def test_writing_skill(self):
+        from skill.builtin.writing_skill import WritingSkill
+
+        skill = WritingSkill()
+        assert skill.name == "writing"
+        assert "writing" in skill.tags
+        assert skill.get_tools() == []
+        assert "写作" in skill.get_prompt()
+
+    def test_research_synthesis_skill(self):
+        from skill.builtin.research_synthesis_skill import ResearchSynthesisSkill
+
+        skill = ResearchSynthesisSkill()
+        assert skill.name == "research_synthesis"
+        assert "research" in skill.tags
+        assert skill.get_tools() == []
+        prompt = skill.get_prompt()
+        assert "综述" in prompt
+        assert "证据" in prompt
+
+    def test_product_strategy_skill(self):
+        from skill.builtin.product_strategy_skill import ProductStrategySkill
+
+        skill = ProductStrategySkill()
+        assert skill.name == "product_strategy"
+        assert "product" in skill.tags
+        assert skill.get_tools() == []
+        assert "MVP" in skill.get_prompt()
+
+    def test_teaching_skill(self):
+        from skill.builtin.teaching_skill import TeachingSkill
+
+        skill = TeachingSkill()
+        assert skill.name == "teaching"
+        assert "education" in skill.tags
+        assert skill.get_tools() == []
+        assert "教学" in skill.get_prompt()
+
+
+class TestRegisterBuiltinSkills:
+    def setup_method(self):
+        SkillRegistry.reset()
+        self.registry = SkillRegistry.instance()
+
+    def teardown_method(self):
+        SkillRegistry.reset()
+
+    def test_register_builtin_skills(self):
+        from skill.builtin import register_builtin_skills
+
+        registered = register_builtin_skills(self.registry)
+
+        assert "calculator" in registered
+        assert "file_manager" in registered
+        assert "linux_ops" in registered
+        assert "web_research" in registered
+        assert "task_planning" in registered
+        assert "code_review" in registered
+        assert "debug" in registered
+        assert "agent_teams" in registered
+        assert "frontend_design" in registered
+        assert "writing" in registered
+        assert "research_synthesis" in registered
+        assert "product_strategy" in registered
+        assert "teaching" in registered
+        assert self.registry.has("memory")
+        assert self.registry.has("mcp")
+
+
 # ==================== SkillRegistry.search 测试 ====================
 
 

@@ -84,26 +84,35 @@ class ClaudeFileEditInput(BaseModel):
 
 
 class ClaudeFileReadInput(BaseModel):
-    file_path: str = Field(description="要读取的文件路径")
+    file_path: str = Field(description="要读取的文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
     offset: Optional[int] = Field(default=None, description="起始行号")
     limit: Optional[int] = Field(default=None, description="读取行数")
     pages: Optional[str] = Field(default=None, description="PDF 页范围")
 
 
 class ClaudeFileWriteInput(BaseModel):
-    file_path: str = Field(description="目标绝对路径")
+    file_path: str = Field(description="目标文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
     content: str = Field(description="写入内容")
 
 
+class ClaudeListInput(BaseModel):
+    path: Optional[str] = Field(default=None, description="要列出的目录；不填时默认当前 cwd")
+    recursive: bool = Field(default=False, description="是否递归列出子目录")
+    max_depth: Optional[int] = Field(default=None, ge=0, description="递归深度上限；0 表示仅当前目录")
+    include_hidden: bool = Field(default=True, description="是否包含隐藏文件和隐藏目录")
+    directories_only: bool = Field(default=False, description="是否只返回目录")
+    limit: int = Field(default=500, ge=1, le=5000, description="最多返回多少条目录项")
+
+
 class ClaudeGlobInput(BaseModel):
-    pattern: str = Field(description="glob 匹配模式")
-    path: Optional[str] = Field(default=None, description="搜索目录")
+    pattern: str = Field(description="glob 匹配模式。使用 shell 风格通配符，不是 regex；递归请显式写 `**`。")
+    path: Optional[str] = Field(default=None, description="搜索目录；不填时默认从当前 cwd 搜索")
 
 
 class ClaudeGrepInput(BaseModel):
-    pattern: str = Field(description="正则匹配模式")
-    path: Optional[str] = Field(default=None, description="搜索路径")
-    glob: Optional[str] = Field(default=None, description="文件过滤 glob")
+    pattern: str = Field(description="正则匹配模式。这里是内容 regex，不是文件 glob。")
+    path: Optional[str] = Field(default=None, description="搜索路径；不填时默认从当前 cwd 搜索")
+    glob: Optional[str] = Field(default=None, description="文件过滤 glob，例如 `**/*.py`")
     output_mode: Optional[Literal["content", "files_with_matches", "count"]] = Field(
         default="files_with_matches",
         description="输出模式",
@@ -207,7 +216,7 @@ class ClaudeListMcpResourcesInput(BaseModel):
 
 
 class ClaudeNotebookEditInput(BaseModel):
-    notebook_path: str = Field(description="Notebook 文件路径")
+    notebook_path: str = Field(description="Notebook 文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
     cell_id: Optional[str] = Field(default=None, description="单元格 ID")
     new_source: str = Field(description="新的单元格内容")
     cell_type: Optional[Literal["code", "markdown"]] = Field(default=None, description="单元格类型")

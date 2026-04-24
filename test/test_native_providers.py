@@ -18,6 +18,7 @@ from core.providers import (
     provider_requires_base_url,
 )
 from core.request_input import ReplayRequestInput
+from context.token.counter import TokenCounter
 
 
 class _FakeGoogleModels:
@@ -457,6 +458,94 @@ class TestNativeProviders(unittest.TestCase):
         )
         signature = request_input.replay_history[-1]["parts"][0]["thought_signature"]
         self.assertEqual(signature, base64.b64encode(raw_signature).decode("ascii"))
+
+    def test_google_codec_token_estimate_ignores_thought_signature(self):
+        codec = create_codec("google_native")
+        counter = TokenCounter()
+        history_with_signature = [
+            {"role": "user", "parts": [{"text": "计算 3^22"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "plan",
+                        "thought": True,
+                        "thought_signature": b"\n$\x01\x8f=k" + b"a" * 512,
+                    },
+                    {
+                        "function_call": {
+                            "id": "call_1",
+                            "name": "calculator",
+                            "args": {"expression": "3**22"},
+                        },
+                        "thought_signature": "sig-1",
+                    },
+                ],
+            },
+        ]
+        history_without_signature = [
+            {"role": "user", "parts": [{"text": "计算 3^22"}]},
+            {
+                "role": "model",
+                "parts": [
+                    {
+                        "text": "plan",
+                        "thought": True,
+                    },
+                    {
+                        "function_call": {
+                            "id": "call_1",
+                            "name": "calculator",
+                            "args": {"expression": "3**22"},
+                        },
+                    },
+                ],
+            },
+        ]
+
+        self.assertEqual(
+            codec.count_request_tokens(counter, history_with_signature),
+            codec.count_request_tokens(counter, history_without_signature),
+        )
+
+    def test_anthropic_codec_token_estimate_ignores_signature(self):
+        codec = create_codec("anthropic_native")
+        counter = TokenCounter()
+        history_with_signature = [
+            {"role": "user", "content": "计算 3^22"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "s" * 512},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "calculator",
+                        "input": {"expression": "3**22"},
+                    },
+                ],
+            },
+        ]
+        history_without_signature = [
+            {"role": "user", "content": "计算 3^22"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan"},
+                    {
+                        "type": "tool_use",
+                        "id": "call_1",
+                        "name": "calculator",
+                        "input": {"expression": "3**22"},
+                    },
+                ],
+            },
+        ]
+
+        self.assertEqual(
+            codec.count_request_tokens(counter, history_with_signature),
+            codec.count_request_tokens(counter, history_without_signature),
+        )
 
     def test_google_provider_builds_fallback_request_without_signed_model_turn(self):
         provider = GoogleNativeProvider(

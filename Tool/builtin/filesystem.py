@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -15,12 +16,20 @@ from pydantic import BaseModel
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
-from ..claude_compat.models import ClaudeFileReadInput, ClaudeGlobInput, ClaudeGrepInput
+from ..claude_compat.models import ClaudeFileReadInput, ClaudeGlobInput, ClaudeGrepInput, ClaudeListInput
 from ..runtime import (
     FilesystemAccessError,
     FilesystemGuard,
     PathResolutionError,
     remember_file_version,
+)
+from .input_normalization import (
+    format_no_match_message,
+    glob_pattern_hints,
+    grep_pattern_hints,
+    normalize_generic_input,
+    normalize_path_input,
+    normalize_path_with_line_hint,
 )
 
 
@@ -40,6 +49,12 @@ GLOB_PROMPT = """用于按文件名模式查找本地路径。
 GREP_PROMPT = """用于在本地文件内容中检索模式。
 - 默认优先返回命中文件；若要看具体上下文，显式设置 `output_mode=content`。
 - 适合先定位调用点、配置项或关键字，再读取目标文件。"""
+
+LIST_PROMPT = """用于列出本地目录结构，适合替代 `ls` / `ls -al` 查看项目结构。
+- 不填 `path` 时默认从当前 cwd 列出，而不是整个 workspace root。
+- 默认包含隐藏文件和隐藏目录，便于查看 `.gitignore`、`.github/`、`.env.example` 这类项目结构项。
+- 若项目很大，优先限制 `path` 或设置 `recursive=false`，避免一次性展开过多目录。
+- 只想看目录骨架时，使用 `directories_only=true`。"""
 
 
 def _format_line_window(lines: list[str], start_line: int) -> str:
@@ -96,6 +111,16 @@ def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
 
 def _resolve_rg_binary() -> Optional[str]:
     return shutil.which("rg")
+
+
+def _format_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 class _WorkspaceTool(Tool):
@@ -155,8 +180,10 @@ class FileReadTool(_WorkspaceTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        file_path = str(parameters.get("file_path", "")).strip()
+        file_path, line_hint = normalize_path_with_line_hint(parameters.get("file_path", ""))
         offset = parameters.get("offset")
+        if offset is None and line_hint is not None:
+            offset = line_hint
         limit = parameters.get("limit")
         pages = parameters.get("pages")
         try:
@@ -251,6 +278,196 @@ class FileReadTool(_WorkspaceTool):
         )
 
 
+class ListTool(_WorkspaceTool):
+    """List local directory entries with structured metadata."""
+
+    def __init__(
+        self,
+        workspace_root: Optional[str] = None,
+        *,
+        allowed_roots: Optional[Iterable[str]] = None,
+        cwd: Optional[str] = None,
+        max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS,
+        max_results: int = DEFAULT_MAX_RESULTS,
+    ):
+        self.max_output_chars = max_output_chars
+        self.max_results = max_results
+        super().__init__(
+            name="List",
+            description="列出本地目录结构，适合替代 `ls` / `ls -al` 查看项目结构。",
+            parameters=ClaudeListInput,
+            workspace_root=workspace_root,
+            allowed_roots=allowed_roots,
+            cwd=cwd,
+            guidance="适合先看目录骨架，再决定是否用 FileRead / Glob / Grep 深入查看。",
+            prompt=LIST_PROMPT,
+            tags=["filesystem", "list", "claude_code"],
+        )
+
+    def run(self, parameters: dict) -> ToolResult:
+        target = normalize_path_input(parameters.get("path")) if parameters.get("path") is not None else self.cwd
+        recursive = bool(parameters.get("recursive", False))
+        include_hidden = bool(parameters.get("include_hidden", True))
+        directories_only = bool(parameters.get("directories_only", False))
+        raw_max_depth = parameters.get("max_depth")
+        max_depth = 0 if raw_max_depth is None and not recursive else raw_max_depth
+        if max_depth is None and recursive:
+            max_depth = 10
+        max_depth = 0 if max_depth is None else max(0, int(max_depth))
+        limit = min(max(int(parameters.get("limit") or self.max_results), 1), self.max_results)
+
+        try:
+            root = self.guard.resolve_directory(target, cwd=self.cwd, must_exist=True)
+            entries, truncated = self._collect_entries(
+                root=root,
+                recursive=recursive,
+                max_depth=max_depth,
+                include_hidden=include_hidden,
+                directories_only=directories_only,
+                limit=limit,
+            )
+        except (PathResolutionError, FilesystemAccessError, ValueError) as exc:
+            return self._tool_error(
+                f"列出目录失败: {exc}",
+                error_type="invalid_path",
+                metadata={"path": target},
+            )
+
+        display_text = self._format_entries(root, entries)
+        if not entries:
+            display_text = f"目录为空: {root}"
+        display_text, display_truncated = _clip_text(display_text, max_chars=self.max_output_chars)
+
+        return ToolResult.success(
+            display_text,
+            structured_data={
+                "root": root,
+                "recursive": recursive,
+                "max_depth": max_depth,
+                "include_hidden": include_hidden,
+                "directories_only": directories_only,
+                "entries": entries,
+                "truncated": truncated or display_truncated,
+            },
+            metadata={
+                "root": root,
+                "recursive": recursive,
+                "max_depth": max_depth,
+                "include_hidden": include_hidden,
+                "directories_only": directories_only,
+                "result_count": len(entries),
+                "truncated": truncated or display_truncated,
+            },
+        )
+
+    def _collect_entries(
+        self,
+        *,
+        root: str,
+        recursive: bool,
+        max_depth: int,
+        include_hidden: bool,
+        directories_only: bool,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        entries: list[dict[str, Any]] = []
+        truncated = False
+
+        def walk(current_dir: str, depth: int) -> None:
+            nonlocal truncated
+            if truncated:
+                return
+            if depth > max_depth:
+                return
+
+            try:
+                with os.scandir(current_dir) as iterator:
+                    items = sorted(
+                        iterator,
+                        key=lambda item: (
+                            not item.is_dir(follow_symlinks=False),
+                            item.name.lower(),
+                        ),
+                    )
+            except OSError as exc:
+                entries.append(
+                    {
+                        "path": current_dir,
+                        "relative_path": os.path.relpath(current_dir, root),
+                        "name": os.path.basename(current_dir) or current_dir,
+                        "is_dir": True,
+                        "is_symlink": False,
+                        "size_bytes": None,
+                        "size_display": None,
+                        "modified_at": None,
+                        "hidden": False,
+                        "depth": depth,
+                        "error": str(exc),
+                    }
+                )
+                return
+
+            for item in items:
+                if len(entries) >= limit:
+                    truncated = True
+                    return
+                if not include_hidden and item.name.startswith("."):
+                    continue
+
+                is_dir = item.is_dir(follow_symlinks=False)
+                if directories_only and not is_dir:
+                    continue
+
+                try:
+                    stat_result = item.stat(follow_symlinks=False)
+                    size_bytes = 0 if is_dir else int(stat_result.st_size)
+                    modified_at = datetime.fromtimestamp(stat_result.st_mtime).isoformat()
+                except OSError:
+                    size_bytes = None
+                    modified_at = None
+
+                path = str(Path(item.path).resolve(strict=False))
+                self.guard.resolver.ensure_allowed(path)
+                relative_path = os.path.relpath(path, root)
+                entries.append(
+                    {
+                        "path": path,
+                        "relative_path": relative_path,
+                        "name": item.name,
+                        "is_dir": is_dir,
+                        "is_symlink": item.is_symlink(),
+                        "size_bytes": size_bytes,
+                        "size_display": None if size_bytes is None else _format_size(size_bytes),
+                        "modified_at": modified_at,
+                        "hidden": item.name.startswith("."),
+                        "depth": depth,
+                    }
+                )
+
+                if recursive and is_dir:
+                    walk(path, depth + 1)
+
+        walk(root, 0)
+        return entries, truncated
+
+    @staticmethod
+    def _format_entries(root: str, entries: list[dict[str, Any]]) -> str:
+        lines = [f"目录: {root}"]
+        for entry in entries:
+            depth = int(entry.get("depth") or 0)
+            indent = "  " * depth
+            name = str(entry.get("name") or entry.get("relative_path") or "")
+            suffix = "/" if entry.get("is_dir") else ""
+            size_text = entry.get("size_display")
+            line = f"{indent}{name}{suffix}"
+            if size_text and not entry.get("is_dir"):
+                line += f" ({size_text})"
+            if entry.get("error"):
+                line += f" [error: {entry['error']}]"
+            lines.append(line)
+        return "\n".join(lines)
+
+
 class GlobTool(_WorkspaceTool):
     """Find local paths with glob patterns."""
 
@@ -276,8 +493,9 @@ class GlobTool(_WorkspaceTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        pattern = str(parameters.get("pattern", "")).strip()
-        search_path = parameters.get("path")
+        original_pattern = str(parameters.get("pattern", "")).strip()
+        pattern = normalize_generic_input(original_pattern)
+        search_path = normalize_path_input(parameters.get("path")) if parameters.get("path") is not None else None
         if not pattern:
             return self._tool_error("pattern 不能为空。", error_type="invalid_parameters")
 
@@ -294,14 +512,24 @@ class GlobTool(_WorkspaceTool):
                 }
                 for match in matches
             ]
-            display_text = "\n".join(item["path"] for item in structured) or "未找到匹配路径。"
+            hints = glob_pattern_hints(original_pattern=original_pattern, normalized_pattern=pattern)
+            display_text = "\n".join(item["path"] for item in structured) or format_no_match_message(
+                "未找到匹配路径。",
+                scope_label="搜索根目录",
+                scope_value=root,
+                query_label="glob pattern",
+                query_value=pattern,
+                hints=hints,
+            )
             return ToolResult.success(
                 display_text,
                 structured_data={
                     "root": root,
                     "pattern": pattern,
+                    "original_pattern": original_pattern,
                     "matches": structured,
                     "truncated": truncated,
+                    "hints": hints,
                 },
                 metadata={"root": root, "pattern": pattern, "truncated": truncated},
             )
@@ -359,16 +587,19 @@ class GrepTool(_WorkspaceTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        pattern = str(parameters.get("pattern", "")).strip()
-        path_value = parameters.get("path")
+        original_pattern = str(parameters.get("pattern", "")).strip()
+        pattern = normalize_generic_input(original_pattern)
+        path_value = normalize_path_input(parameters.get("path")) if parameters.get("path") is not None else None
         if not pattern:
             return self._tool_error("pattern 不能为空。", error_type="invalid_parameters")
 
         try:
+            normalized_parameters = dict(parameters)
+            normalized_parameters["glob"] = normalize_generic_input(parameters.get("glob")) if parameters.get("glob") else None
             search_path = self._resolve_search_path(path_value)
             if self.rg_binary:
-                return self._run_rg(pattern, search_path, parameters)
-            return self._run_python_fallback(pattern, search_path, parameters)
+                return self._run_rg(pattern, search_path, normalized_parameters, original_pattern=original_pattern)
+            return self._run_python_fallback(pattern, search_path, normalized_parameters, original_pattern=original_pattern)
         except (PathResolutionError, FilesystemAccessError, ValueError, re.error) as exc:
             return self._tool_error(
                 f"Grep 失败: {exc}",
@@ -397,7 +628,7 @@ class GrepTool(_WorkspaceTool):
             return sliced
         return sliced[:head_limit]
 
-    def _run_rg(self, pattern: str, search_path: str, parameters: dict) -> ToolResult:
+    def _run_rg(self, pattern: str, search_path: str, parameters: dict, *, original_pattern: str) -> ToolResult:
         output_mode = parameters.get("output_mode") or "files_with_matches"
         offset = int(parameters.get("offset") or 0)
         head_limit = self._normalized_head_limit(parameters.get("head_limit"))
@@ -439,12 +670,25 @@ class GrepTool(_WorkspaceTool):
         raw_lines = [line for line in completed.stdout.splitlines() if line.strip()]
         normalized_lines, match_count = self._normalize_rg_output(raw_lines, output_mode)
         visible_lines = self._apply_offset_and_limit(normalized_lines, offset=offset, head_limit=head_limit)
-        display_text = "\n".join(visible_lines) or "未找到匹配内容。"
+        hints = grep_pattern_hints(
+            original_pattern=original_pattern,
+            normalized_pattern=pattern,
+            file_glob=parameters.get("glob"),
+        )
+        display_text = "\n".join(visible_lines) or format_no_match_message(
+            "未找到匹配内容。",
+            scope_label="搜索路径",
+            scope_value=search_path,
+            query_label="grep pattern",
+            query_value=pattern,
+            hints=hints,
+        )
         display_text, truncated = _clip_text(display_text, max_chars=self.max_output_chars)
         return ToolResult.success(
             display_text,
             structured_data={
                 "pattern": pattern,
+                "original_pattern": original_pattern,
                 "path": search_path,
                 "output_mode": output_mode,
                 "matches": visible_lines,
@@ -452,6 +696,7 @@ class GrepTool(_WorkspaceTool):
                 "match_count": match_count,
                 "result_count": len(normalized_lines),
                 "engine": "rg",
+                "hints": hints,
             },
             metadata={
                 "pattern": pattern,
@@ -489,7 +734,7 @@ class GrepTool(_WorkspaceTool):
 
         return normalized_lines, match_count
 
-    def _run_python_fallback(self, pattern: str, search_path: str, parameters: dict) -> ToolResult:
+    def _run_python_fallback(self, pattern: str, search_path: str, parameters: dict, *, original_pattern: str) -> ToolResult:
         output_mode = parameters.get("output_mode") or "files_with_matches"
         regex_flags = re.MULTILINE
         if parameters.get("ignore_case"):
@@ -530,12 +775,25 @@ class GrepTool(_WorkspaceTool):
         offset = int(parameters.get("offset") or 0)
         head_limit = self._normalized_head_limit(parameters.get("head_limit"))
         visible = self._apply_offset_and_limit(raw_results, offset=offset, head_limit=head_limit)
-        display_text = "\n".join(visible) or "未找到匹配内容。"
+        hints = grep_pattern_hints(
+            original_pattern=original_pattern,
+            normalized_pattern=pattern,
+            file_glob=parameters.get("glob"),
+        )
+        display_text = "\n".join(visible) or format_no_match_message(
+            "未找到匹配内容。",
+            scope_label="搜索路径",
+            scope_value=search_path,
+            query_label="grep pattern",
+            query_value=pattern,
+            hints=hints,
+        )
         display_text, truncated = _clip_text(display_text, max_chars=self.max_output_chars)
         return ToolResult.success(
             display_text,
             structured_data={
                 "pattern": pattern,
+                "original_pattern": original_pattern,
                 "path": search_path,
                 "output_mode": output_mode,
                 "matches": visible,
@@ -543,6 +801,7 @@ class GrepTool(_WorkspaceTool):
                 "match_count": match_count,
                 "result_count": len(raw_results),
                 "engine": "python",
+                "hints": hints,
             },
             metadata={
                 "pattern": pattern,
@@ -584,6 +843,18 @@ def register_file_read_tool(
     return tool
 
 
+def register_list_tool(
+    registry: ToolRegistry,
+    workspace_root: Optional[str] = None,
+    *,
+    allowed_roots: Optional[Iterable[str]] = None,
+    cwd: Optional[str] = None,
+) -> ListTool:
+    tool = ListTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+    registry.register_tool(tool)
+    return tool
+
+
 def register_glob_tool(
     registry: ToolRegistry,
     workspace_root: Optional[str] = None,
@@ -621,8 +892,9 @@ def register_filesystem_tools(
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
     rg_binary: Optional[str] = None,
-) -> tuple[FileReadTool, GlobTool, GrepTool]:
+) -> tuple[FileReadTool, ListTool, GlobTool, GrepTool]:
     file_read = register_file_read_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+    list_tool = register_list_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
     glob_tool = register_glob_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
     grep_tool = register_grep_tool(
         registry,
@@ -631,14 +903,16 @@ def register_filesystem_tools(
         cwd=cwd,
         rg_binary=rg_binary,
     )
-    return file_read, glob_tool, grep_tool
+    return file_read, list_tool, glob_tool, grep_tool
 
 
 __all__ = [
     "FileReadTool",
+    "ListTool",
     "GlobTool",
     "GrepTool",
     "register_file_read_tool",
+    "register_list_tool",
     "register_glob_tool",
     "register_grep_tool",
     "register_filesystem_tools",

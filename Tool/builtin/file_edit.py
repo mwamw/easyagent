@@ -11,6 +11,7 @@ from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeFileEditInput
 from ..runtime import FilesystemAccessError, PathResolutionError, remember_file_version
 from .file_write import _WorkspaceWriteTool, _build_file_diff_payload
+from .input_normalization import normalize_path_input
 
 
 FILE_EDIT_PROMPT = """用于对已有文件做精确文本替换。
@@ -137,7 +138,7 @@ class FileEditTool(_WorkspaceWriteTool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        file_path = str(parameters.get("file_path", "")).strip()
+        file_path = normalize_path_input(parameters.get("file_path", ""))
         old_string = _normalize_line_endings(str(parameters.get("old_string", "")))
         new_string = _normalize_line_endings(str(parameters.get("new_string", "")))
         replace_all = bool(parameters.get("replace_all", False))

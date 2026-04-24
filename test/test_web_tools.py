@@ -31,6 +31,21 @@ class TestWebSearchDomainFiltering(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
         self.assertEqual(filtered[0]["link"], "https://docs.python.org/3/")
 
+    def test_filter_results_accepts_url_style_domain_filters(self):
+        results = [
+            {"title": "A", "link": "https://docs.python.org/3/", "snippet": "Python docs"},
+            {"title": "B", "link": "https://example.com/post", "snippet": "Example"},
+        ]
+
+        filtered = _filter_results_by_domains(
+            results,
+            allowed_domains=["https://docs.python.org/3/"],
+            blocked_domains=[],
+        )
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0]["link"], "https://docs.python.org/3/")
+
     def test_search_schema_includes_domain_filters(self):
         tool = WebSearchTool()
         schema = tool.get_openai_schema()
@@ -108,6 +123,24 @@ class TestWebFetchTool(unittest.TestCase):
 
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_type, "invalid_parameters")
+
+    def test_web_fetch_normalizes_wrapped_url(self):
+        html = "<html><head><title>Wrapped</title></head><body><p>Hello</p></body></html>"
+        tool = WebFetchTool()
+
+        with patch(
+            "Tool.builtin.web_fetch._import_requests",
+            return_value=SimpleNamespace(get=lambda *args, **kwargs: FakeResponse(html, url="https://example.com/wrapped")),
+        ):
+            result = tool.run(
+                {
+                    "url": "<https://example.com/wrapped>",
+                    "prompt": "`提取页面正文`",
+                }
+            )
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.structured_data["url"], "https://example.com/wrapped")
 
     def test_register_web_fetch_tool(self):
         registry = ToolRegistry()

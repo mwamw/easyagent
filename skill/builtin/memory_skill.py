@@ -4,8 +4,7 @@ MemorySkill — 记忆系统技能
 将 V2 记忆系统（MemoryManage）的全部能力封装为 Skill，包括：
 - 6 个记忆工具（增删改查搜索维护）
 - 记忆系统使用指南 prompt
-- Working Memory 便签本实时注入
-- MemoryContextSource 上下文来源
+- MemoryContextSource 上下文来源（动态记忆内容通过 context 注入）
 """
 from __future__ import annotations
 
@@ -30,7 +29,7 @@ class MemorySkill(BaseSkill):
 
     功能:
     - 提供 add/search/get/update/remove/maintenance 6 个记忆操作工具
-    - 提供记忆系统使用指南 prompt（含 Working Memory 便签本内容注入）
+    - 提供记忆系统静态使用指南 prompt
     - 可选提供 MemoryContextSource 供 ContextManager 使用
 
     Example::
@@ -91,27 +90,11 @@ class MemorySkill(BaseSkill):
         ]
 
     def get_prompt(self) -> str:
-        """返回记忆系统使用指南 prompt + Working Memory 便签本"""
+        """返回记忆系统静态使用指南。动态记忆内容由 ContextSource 注入。"""
         supported = list(self.memory_manage.memory_types.keys())
-        working_memory_entries: list[str] = []
-        include_working_memory = "working" in self.memory_manage.memory_types
-
-        if "working" in self.memory_manage.memory_types:
-            try:
-                working_memories = self.memory_manage.memory_types["working"].get_all_memories()
-                if working_memories:
-                    working_memory_entries = [
-                        f"- id:{memory.id}: {memory.content}"
-                        for memory in working_memories
-                    ]
-            except Exception as e:
-                logger.warning("读取 Working Memory 失败: %s", e)
-                working_memory_entries = ["(读取失败)"]
-
         return build_memory_prompt_section(
             supported_memory_types=supported,
-            working_memory_entries=working_memory_entries,
-            include_working_memory=include_working_memory,
+            include_working_memory=False,
         )
 
     def get_context_sources(self) -> List["BaseContextSource"]:
