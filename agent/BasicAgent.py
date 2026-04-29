@@ -68,7 +68,7 @@ class BasicAgent(BaseAgent):
         tool_interrupt_controller: Optional[BaseToolInterruptController] = None,
         tool_loop_engine: Optional[BaseToolLoopEngine] = None,
         invocation_runner: Optional[BaseInvocationRunner] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
     ):
         """
         初始化 BasicAgent
@@ -116,14 +116,7 @@ class BasicAgent(BaseAgent):
             team_manager=team_manager,
             execution_context=execution_context,
         )
-        self.reasoning: Optional[dict[str, Any]] = None
-        if reasoning:
-            assert isinstance(reasoning, dict)
-            if "effort" in reasoning:
-                assert reasoning['effort'] in ["low", "medium", "high"]
-            if "summary" in reasoning:
-                assert reasoning['summary'] in ["auto", "none"]
-            self.reasoning = reasoning
+        self.reasoning: Optional[dict[str, Any]] = self._normalize_reasoning_config(reasoning)
         self.verbose_thinking = verbose_thinking
         self.trace_recorder = trace_recorder or InMemoryTraceRecorder()
         self.stream_renderer = stream_renderer or ConsoleStreamDisplayRenderer()
@@ -144,6 +137,28 @@ class BasicAgent(BaseAgent):
 
         logger.info(f"BasicAgent '{name}' 初始化完成，工具调用: {'启用' if enable_tool else '禁用'}，provider: {llm.provider_name}")
 
+    @staticmethod
+    def _normalize_reasoning_config(reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        if reasoning is None or reasoning is False:
+            return None
+        if isinstance(reasoning, str):
+            reasoning = {"effort": reasoning}
+        assert isinstance(reasoning, dict)
+        normalized = dict(reasoning)
+        if "effort" in normalized:
+            effort = str(normalized["effort"]).strip().lower().replace("-", "_")
+            effort = {
+                "extra_high": "xhigh",
+                "extra": "xhigh",
+                "max": "xhigh",
+                "maximum": "xhigh",
+            }.get(effort, effort)
+            assert effort in ["low", "medium", "high", "xhigh"]
+            normalized["effort"] = effort
+        if "summary" in normalized:
+            assert normalized["summary"] in ["auto", "none", "detailed"]
+        return normalized
+
     def _get_serializable_state(self) -> dict[str, Any]:
         state = super()._get_serializable_state()
         trace_state = self.trace_recorder.export_state()
@@ -162,7 +177,7 @@ class BasicAgent(BaseAgent):
         self.history_via_context_manager = state.get("history_via_context_manager", False)
         self.trace_recorder.restore_state(state)
         self.tool_interrupt_controller.restore_state(state)
-        self.reasoning = state.get("reasoning")
+        self.reasoning = self._normalize_reasoning_config(state.get("reasoning"))
         self.verbose_thinking = bool(state.get("verbose_thinking", False))
 
     @property

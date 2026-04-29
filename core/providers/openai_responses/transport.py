@@ -13,6 +13,35 @@ from ..base import _usage_field, _usage_float, _usage_int
 
 
 class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
+    def _compile_reasoning_config(self, reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        normalized = self._normalize_reasoning(reasoning)
+        if not normalized or normalized.get("enabled") is False:
+            return None
+        override = self._reasoning_override(normalized)
+        if override is not None:
+            if isinstance(override.get("reasoning"), dict):
+                return dict(override["reasoning"])
+            return override
+        if isinstance(normalized.get("reasoning"), dict):
+            return dict(normalized["reasoning"])
+        if "reasoning_effort" in normalized:
+            effort = normalized["reasoning_effort"]
+        else:
+            effort = normalized.get("effort")
+        if not effort:
+            return None
+        effort_map = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+        }
+        config: dict[str, Any] = {"effort": effort_map.get(str(effort), "medium")}
+        summary = normalized.get("summary")
+        if summary in {"auto", "none", "detailed"}:
+            config["summary"] = summary
+        return config
+
     def _base_params(self, temperature: Optional[float] = None, **kwargs: Any) -> dict[str, Any]:
         params: dict[str, Any] = {}
         if self.max_tokens:
@@ -33,12 +62,13 @@ class OpenAIResponsesProvider(OpenAICompatibleProviderBase):
         system_prompt: Optional[str] = None,
         tools: Optional[Any] = None,
         temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if reasoning:
-            kwargs["reasoning"] = reasoning
+        reasoning_config = self._compile_reasoning_config(reasoning)
+        if reasoning_config:
+            kwargs["reasoning"] = reasoning_config
         params = {
             "model": self.model,
             "input": list(replay_history),

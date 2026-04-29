@@ -21,6 +21,8 @@ from core.llm import EasyLLM
 from core.permissions import PermissionBehavior, PermissionMode, PermissionRule
 from core.request_input import ReplayRequestInput
 from context.manager import ContextManager
+from context.compressor.history import RuleBasedHistoryCompactor
+from context.token.counter import TokenCounter
 from db import ConversationStore, SessionStore
 from runtime import TeamManager
 from skill import BaseSkill, SkillConfig, SkillRegistry
@@ -131,7 +133,13 @@ class RuntimeSubagent:
         return f"runtime:{prompt}"
 
     def get_context_usage(self) -> dict:
-        return {"used_tokens": 9}
+        return {
+            "version": 2,
+            "requestEstimate": {"estimatedRequestTokens": 9, "source": "test", "metadata": {}},
+            "budget": {},
+            "compaction": {"last": {}, "estimatedRequestTokens": 9, "tokenSource": "test", "metadata": {}},
+            "cache": {},
+        }
 
 
 class SlowRuntimeSubagent(RuntimeSubagent):
@@ -448,9 +456,9 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         usage = agent.get_context_usage()
 
-        self.assertEqual(usage["max_tokens"], 80)
-        self.assertGreater(usage["used_tokens"], 0)
-        self.assertGreaterEqual(usage["remaining_tokens"], 0)
+        self.assertEqual(usage["budget"]["maxTokens"], 80)
+        self.assertGreater(usage["requestEstimate"]["estimatedRequestTokens"], 0)
+        self.assertIsNotNone(usage["budget"]["remainingTokens"])
         self.assertFalse(hasattr(manager, "last_usage"))
 
         agent.save_session("basic-context-usage", store=self.session_store)
@@ -464,11 +472,14 @@ class SessionPersistenceTestCase(unittest.TestCase):
         )
 
         restored_usage = restored.get_context_usage()
-        self.assertEqual(restored_usage["max_tokens"], usage["max_tokens"])
-        self.assertEqual(restored_usage["history_tokens"], usage["history_tokens"])
-        self.assertEqual(restored_usage["stable_context_tokens"], usage["stable_context_tokens"])
-        self.assertEqual(restored_usage["canonical_history_messages"], usage["canonical_history_messages"])
-        self.assertEqual(restored_usage["replay_history_messages"], usage["replay_history_messages"])
+        self.assertEqual(restored_usage["budget"]["maxTokens"], usage["budget"]["maxTokens"])
+        self.assertEqual(restored_usage["tokenBreakdown"]["historyTokens"], usage["tokenBreakdown"]["historyTokens"])
+        self.assertEqual(
+            restored_usage["requestEstimate"]["estimatedRequestTokens"],
+            usage["requestEstimate"]["estimatedRequestTokens"],
+        )
+        self.assertEqual(restored_usage["history"]["canonicalMessages"], usage["history"]["canonicalMessages"])
+        self.assertEqual(restored_usage["history"]["replayMessages"], usage["history"]["replayMessages"])
         self.assertFalse(hasattr(restored_manager, "last_usage"))
 
     def test_get_context_usage_does_not_mutate_context_manager(self):
@@ -483,7 +494,8 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         usage = agent.get_context_usage()
 
-        self.assertIn("used_tokens", usage)
+        self.assertEqual(usage["version"], 2)
+        self.assertIn("requestEstimate", usage)
         self.assertFalse(hasattr(manager, "last_usage"))
 
     def test_get_context_usage_exposes_split_token_metrics(self):
@@ -499,17 +511,109 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         usage = agent.get_context_usage()
 
-        self.assertIn("history_tokens", usage)
-        self.assertIn("system_tokens", usage)
-        self.assertIn("tool_tokens", usage)
-        self.assertIn("reasoning_tokens", usage)
-        self.assertIn("estimated_request_tokens", usage)
-        self.assertEqual(usage["estimated_request_tokens"], usage["stable_context_tokens"])
-        self.assertEqual(usage["used_tokens"], usage["estimated_request_tokens"])
+        self.assertIn("historyTokens", usage["tokenBreakdown"])
+        self.assertIn("systemTokens", usage["tokenBreakdown"])
+        self.assertIn("toolTokens", usage["tokenBreakdown"])
+        self.assertIn("reasoningTokens", usage["tokenBreakdown"])
+        self.assertIn("estimatedRequestTokens", usage["requestEstimate"])
         self.assertEqual(
-            usage["estimated_request_tokens"],
-            usage["history_tokens"] + usage["system_tokens"] + usage["tool_tokens"] + usage["reasoning_tokens"],
+            usage["requestEstimate"]["estimatedRequestTokens"],
+            usage["tokenBreakdown"]["historyTokens"]
+            + usage["tokenBreakdown"]["systemTokens"]
+            + usage["tokenBreakdown"]["toolTokens"]
+            + usage["tokenBreakdown"]["reasoningTokens"],
         )
+
+    def test_history_compaction_estimate_uses_provider_usage_anchor_plus_delta(self):
+        manager = ContextManager(max_tokens=100, auto_history=True)
+        manager.set_history_compactor(
+            RuleBasedHistoryCompactor(
+                token_counter=TokenCounter(chars_per_token=1.0),
+                recent_turns=1,
+            )
+        )
+        agent = BasicAgent(
+            name="assistant",
+            llm=ReplayAwareDummyLLM(provider_name="openai"),
+            context_manager=manager,
+        )
+        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
+
+        agent._append_query_history("old question")
+        agent._capture_response_usage_for_history_anchor(
+            {
+                "inputTokens": 80,
+                "outputTokens": 15,
+                "totalTokens": 95,
+                "usageSource": "provider",
+            }
+        )
+        agent._append_assistant_message_history(content="old answer")
+        agent._append_query_history("x" * 20)
+
+        state = agent._estimate_history_compaction_token_state()
+        should_compact, tokens_before, metadata = agent._precheck_history_compaction(
+            max_tokens=100,
+            force=False,
+        )
+
+        self.assertEqual(state["source"], "provider_usage_plus_delta_estimate")
+        self.assertGreater(state["tokens"], 100)
+        self.assertTrue(should_compact)
+        self.assertEqual(tokens_before, state["tokens"])
+        self.assertEqual(
+            metadata["token_estimate"]["source"],
+            "provider_usage_plus_delta_estimate",
+        )
+        self.assertTrue(agent.compact_persistent_history_if_needed())
+        compaction = agent.get_context_usage()["compaction"]["last"]
+        self.assertEqual(compaction["tokens_before"], state["tokens"])
+        self.assertEqual(
+            compaction["metadata"]["token_estimate"]["source"],
+            "provider_usage_plus_delta_estimate",
+        )
+
+    def test_pending_tool_step_usage_anchor_counts_tool_results_as_delta(self):
+        manager = ContextManager(max_tokens=100, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=ReplayAwareDummyLLM(provider_name="openai"),
+            context_manager=manager,
+        )
+        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
+        agent._append_query_history("use tool")
+        agent._capture_response_usage_for_history_anchor(
+            {
+                "inputTokens": 50,
+                "outputTokens": 10,
+                "totalTokens": 60,
+                "usageSource": "provider",
+            }
+        )
+        agent._set_pending_step_state(
+            assistant_canonical=agent.llm.assistant_message_to_canonical(
+                content=None,
+                tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
+            ),
+            assistant_replay=agent.llm.assistant_message_to_replay(
+                content=None,
+                tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
+            ),
+            tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
+            round_number=1,
+        )
+        agent._append_pending_tool_result(
+            tool_canonical=agent.llm.tool_result_to_canonical("tool result text", "call_1", "demo"),
+            tool_replay=agent.llm.tool_result_to_replay("tool result text", "call_1", "demo"),
+        )
+        agent._commit_pending_step_state()
+
+        state = agent._estimate_history_compaction_token_state()
+
+        self.assertEqual(state["source"], "provider_usage_plus_delta_estimate")
+        self.assertEqual(state["metadata"]["provider_usage_tokens"], 60)
+        self.assertEqual(state["metadata"]["delta_replay_messages"], 1)
+        self.assertGreater(state["metadata"]["delta_tokens"], 0)
 
     def test_reasoning_history_persistence_can_be_disabled(self):
         agent = BasicAgent(

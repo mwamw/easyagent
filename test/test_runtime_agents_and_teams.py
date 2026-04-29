@@ -54,7 +54,13 @@ class FakeSubagent:
         return f"{self.response_prefix}:{prompt}"
 
     def get_context_usage(self) -> dict:
-        return {"used_tokens": 21}
+        return {
+            "version": 2,
+            "requestEstimate": {"estimatedRequestTokens": 21, "source": "test", "metadata": {}},
+            "budget": {},
+            "compaction": {"last": {}, "estimatedRequestTokens": 21, "tokenSource": "test", "metadata": {}},
+            "cache": {},
+        }
 
     def get_trace_history(self):
         return list(self.trace_history)

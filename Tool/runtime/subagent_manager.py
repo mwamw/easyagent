@@ -245,11 +245,11 @@ class SubagentManager:
             context_usage = {}
 
         if isinstance(context_usage, dict):
-            input_tokens = int(
-                context_usage.get("stable_context_tokens")
-                or context_usage.get("used_tokens")
-                or 0
-            )
+            request_estimate = context_usage.get("requestEstimate")
+            if isinstance(request_estimate, dict):
+                input_tokens = int(request_estimate.get("estimatedRequestTokens") or 0)
+            else:
+                input_tokens = 0
             usage["input_tokens"] = input_tokens
         else:
             input_tokens = 0

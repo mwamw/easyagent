@@ -121,7 +121,7 @@ class BaseProvider(ABC):
         system_prompt: Optional[str] = None,
         tools: Optional[Any] = None,
         temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> Any:

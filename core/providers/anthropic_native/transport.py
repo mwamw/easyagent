@@ -12,6 +12,37 @@ from ..base import BaseProvider, _usage_field, _usage_float, _usage_int
 
 
 class AnthropicNativeProvider(BaseProvider):
+    @staticmethod
+    def _normalize_reasoning(reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        if reasoning is None or reasoning is False:
+            return None
+        if isinstance(reasoning, str):
+            reasoning = {"effort": reasoning}
+        if not isinstance(reasoning, dict):
+            return None
+        normalized = dict(reasoning)
+        effort = normalized.get("effort")
+        if effort is not None:
+            effort_key = str(effort).strip().lower().replace("-", "_")
+            normalized["effort"] = {
+                "extra_high": "xhigh",
+                "extra": "xhigh",
+                "max": "xhigh",
+                "maximum": "xhigh",
+            }.get(effort_key, effort_key)
+        return normalized
+
+    def _reasoning_override(self, reasoning: dict[str, Any]) -> Optional[dict[str, Any]]:
+        overrides = reasoning.get("provider_overrides") or reasoning.get("overrides")
+        if not isinstance(overrides, dict):
+            return None
+        aliases = (self.provider_name, "anthropic_native", "claude_native", "anthropic", "claude")
+        for alias in aliases:
+            override = overrides.get(alias)
+            if isinstance(override, dict):
+                return dict(override)
+        return None
+
     def _create_client(self) -> Any:
         injected = self.kwargs.get("client")
         if injected is not None:
@@ -56,10 +87,15 @@ class AnthropicNativeProvider(BaseProvider):
             self._async_client = AsyncAnthropic(**client_kwargs)
         return self._async_client
 
-    @staticmethod
-    def _thinking_config(reasoning: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
-        if not reasoning:
+    def _thinking_config(self, reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        reasoning = self._normalize_reasoning(reasoning)
+        if not reasoning or reasoning.get("enabled") is False:
             return None
+        override = self._reasoning_override(reasoning)
+        if override is not None:
+            if isinstance(override.get("thinking"), dict):
+                return dict(override["thinking"])
+            return override
         if "thinking" in reasoning and isinstance(reasoning["thinking"], dict):
             return dict(reasoning["thinking"])
         if "budget_tokens" in reasoning:
@@ -67,7 +103,7 @@ class AnthropicNativeProvider(BaseProvider):
         effort = reasoning.get("effort")
         if not effort:
             return None
-        budget_map = {"low": 1024, "medium": 4096, "high": 16384}
+        budget_map = {"low": 1024, "medium": 4096, "high": 16384, "xhigh": 32768}
         return {"type": "enabled", "budget_tokens": budget_map.get(str(effort), 4096)}
 
     def build_request(
@@ -77,7 +113,7 @@ class AnthropicNativeProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[Any] = None,
         temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:

@@ -193,7 +193,7 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(compacted)
         usage = agent.get_context_usage()
-        compactor_info = usage["last_history_compaction"]["metadata"]["compactor"]
+        compactor_info = usage["compaction"]["last"]["metadata"]["compactor"]
         self.assertTrue(compactor_info["fallback_used"])
         self.assertEqual(compactor_info["status"], "fallback")
         self.assertEqual(compactor_info["fallback_compactor"], "RuleBasedHistoryCompactor")

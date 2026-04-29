@@ -12,6 +12,8 @@ if ROOT not in sys.path:
 from core.providers import (
     AnthropicNativeProvider,
     GoogleNativeProvider,
+    OpenAICompatibleProviderBase,
+    OpenAIResponsesProvider,
     create_codec,
     create_provider,
     detect_provider_from_model,
@@ -188,6 +190,104 @@ class _FakeAnthropicAsyncClient:
 
 
 class TestNativeProviders(unittest.TestCase):
+    def test_reasoning_effort_xhigh_is_compiled_per_provider(self):
+        openai_provider = OpenAICompatibleProviderBase(
+            model="gpt-test",
+            api_key="k",
+            base_url="http://example.test",
+            client=SimpleNamespace(),
+            _provider_name="openai",
+        )
+        openai_request = openai_provider.build_request(
+            [{"role": "user", "content": "hi"}],
+            reasoning={"effort": "xhigh"},
+        )
+        self.assertEqual(openai_request["reasoning_effort"], "high")
+
+        responses_provider = OpenAIResponsesProvider(
+            model="gpt-test",
+            api_key="k",
+            base_url="http://example.test",
+            client=SimpleNamespace(),
+            _provider_name="openai_responses",
+        )
+        responses_request = responses_provider.build_request(
+            [{"role": "user", "content": "hi"}],
+            reasoning={"effort": "xhigh", "summary": "auto"},
+        )
+        self.assertEqual(responses_request["reasoning"], {"effort": "high", "summary": "auto"})
+
+        google_provider = GoogleNativeProvider(
+            model="gemini-2.5-pro",
+            api_key="k",
+            base_url="",
+            client=_FakeGoogleClient(),
+        )
+        google_request = google_provider.build_request(
+            [{"role": "user", "parts": [{"text": "hi"}]}],
+            reasoning={"effort": "xhigh"},
+        )
+        self.assertEqual(google_request["config"]["thinking_config"], {"thinking_budget": 32768})
+
+        gemini3_provider = GoogleNativeProvider(
+            model="gemini-3-flash",
+            api_key="k",
+            base_url="",
+            client=_FakeGoogleClient(),
+        )
+        gemini3_request = gemini3_provider.build_request(
+            [{"role": "user", "parts": [{"text": "hi"}]}],
+            reasoning={"effort": "xhigh"},
+        )
+        self.assertEqual(gemini3_request["config"]["thinking_config"], {"thinking_level": "high"})
+
+        anthropic_provider = AnthropicNativeProvider(
+            model="claude-test",
+            api_key="k",
+            base_url="",
+            client=_FakeAnthropicClient(),
+        )
+        anthropic_request = anthropic_provider.build_request(
+            [{"role": "user", "content": "hi"}],
+            reasoning={"effort": "xhigh"},
+        )
+        self.assertEqual(anthropic_request["thinking"], {"type": "enabled", "budget_tokens": 32768})
+
+    def test_reasoning_provider_overrides_take_precedence(self):
+        google_provider = GoogleNativeProvider(
+            model="gemini-2.5-pro",
+            api_key="k",
+            base_url="",
+            client=_FakeGoogleClient(),
+        )
+        google_request = google_provider.build_request(
+            [{"role": "user", "parts": [{"text": "hi"}]}],
+            reasoning={
+                "effort": "xhigh",
+                "provider_overrides": {
+                    "google_native": {"thinking_config": {"thinking_budget": 1234}},
+                },
+            },
+        )
+        self.assertEqual(google_request["config"]["thinking_config"], {"thinking_budget": 1234})
+
+        anthropic_provider = AnthropicNativeProvider(
+            model="claude-test",
+            api_key="k",
+            base_url="",
+            client=_FakeAnthropicClient(),
+        )
+        anthropic_request = anthropic_provider.build_request(
+            [{"role": "user", "content": "hi"}],
+            reasoning={
+                "effort": "low",
+                "provider_overrides": {
+                    "anthropic_native": {"thinking": {"type": "enabled", "budget_tokens": 2222}},
+                },
+            },
+        )
+        self.assertEqual(anthropic_request["thinking"], {"type": "enabled", "budget_tokens": 2222})
+
     def test_google_provider_invoke_with_tools_builds_native_contents(self):
         client = _FakeGoogleClient()
         provider = GoogleNativeProvider(

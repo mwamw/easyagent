@@ -17,6 +17,37 @@ logger = logging.getLogger(__name__)
 
 class GoogleNativeProvider(BaseProvider):
     @staticmethod
+    def _normalize_reasoning(reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        if reasoning is None or reasoning is False:
+            return None
+        if isinstance(reasoning, str):
+            reasoning = {"effort": reasoning}
+        if not isinstance(reasoning, dict):
+            return None
+        normalized = dict(reasoning)
+        effort = normalized.get("effort")
+        if effort is not None:
+            effort_key = str(effort).strip().lower().replace("-", "_")
+            normalized["effort"] = {
+                "extra_high": "xhigh",
+                "extra": "xhigh",
+                "max": "xhigh",
+                "maximum": "xhigh",
+            }.get(effort_key, effort_key)
+        return normalized
+
+    def _reasoning_override(self, reasoning: dict[str, Any]) -> Optional[dict[str, Any]]:
+        overrides = reasoning.get("provider_overrides") or reasoning.get("overrides")
+        if not isinstance(overrides, dict):
+            return None
+        aliases = (self.provider_name, "google_native", "gemini_native", "google", "gemini")
+        for alias in aliases:
+            override = overrides.get(alias)
+            if isinstance(override, dict):
+                return dict(override)
+        return None
+
+    @staticmethod
     def _message_has_function_response(message: Any) -> bool:
         if not isinstance(message, dict) or message.get("role") != "user":
             return False
@@ -118,9 +149,15 @@ class GoogleNativeProvider(BaseProvider):
             self._async_client = aio_client
         return self._async_client
 
-    def _build_thinking_config(self, reasoning: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
-        if not reasoning:
+    def _build_thinking_config(self, reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        reasoning = self._normalize_reasoning(reasoning)
+        if not reasoning or reasoning.get("enabled") is False:
             return None
+        override = self._reasoning_override(reasoning)
+        if override is not None:
+            if isinstance(override.get("thinking_config"), dict):
+                return dict(override["thinking_config"])
+            return override
         if "thinking_config" in reasoning and isinstance(reasoning["thinking_config"], dict):
             return dict(reasoning["thinking_config"])
         if "thinking_budget" in reasoning:
@@ -131,9 +168,9 @@ class GoogleNativeProvider(BaseProvider):
         if not effort:
             return None
         if self.model and "gemini-3" in self.model.lower():
-            level_map = {"low": "low", "medium": "medium", "high": "high"}
+            level_map = {"low": "low", "medium": "medium", "high": "high", "xhigh": "high"}
             return {"thinking_level": level_map.get(str(effort), "medium")}
-        budget_map = {"low": 1024, "medium": 8192, "high": 24576}
+        budget_map = {"low": 1024, "medium": 8192, "high": 24576, "xhigh": 32768}
         return {"thinking_budget": budget_map.get(str(effort), 8192)}
 
     def build_request(
@@ -143,7 +180,7 @@ class GoogleNativeProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[Any] = None,
         temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:

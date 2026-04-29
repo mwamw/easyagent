@@ -215,6 +215,24 @@ class RecordingToolLoopEngine(BaseToolLoopEngine):
 
 
 class TestAgentInterfaces(unittest.TestCase):
+    def test_basic_agent_normalizes_string_and_xhigh_reasoning(self):
+        agent = BasicAgent(
+            name="reasoning-agent",
+            llm=DummyLLM(PlainProvider()),
+            reasoning="max",
+        )
+
+        self.assertEqual(agent.reasoning, {"effort": "xhigh"})
+
+        detailed = BasicAgent(
+            name="reasoning-agent-detail",
+            llm=DummyLLM(PlainProvider()),
+            reasoning={"effort": "extra-high", "summary": "detailed"},
+        )
+
+        self.assertEqual(detailed.reasoning["effort"], "xhigh")
+        self.assertEqual(detailed.reasoning["summary"], "detailed")
+
     def test_llm_replay_request_input_skips_full_message_preparation(self):
         provider = RecordingProvider()
         llm = DummyLLM(provider)

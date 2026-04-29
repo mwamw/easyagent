@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _build_history_context_usage_payload(
+def _build_context_usage_report_v2(
     *,
     max_tokens: Optional[int],
     history_budget_tokens: Optional[int],
@@ -54,36 +54,52 @@ def _build_history_context_usage_payload(
     tool_tokens: int,
     reasoning_tokens: int,
     estimated_request_tokens: int,
+    request_estimate_source: str,
+    request_estimate_metadata: Optional[dict[str, Any]] = None,
     canonical_history_messages: int,
     replay_history_messages: int,
     compaction: Optional[dict[str, Any]] = None,
+    compaction_estimated_request_tokens: Optional[int] = None,
+    compaction_token_source: Optional[str] = None,
+    compaction_metadata: Optional[dict[str, Any]] = None,
+    cache: Optional[dict[str, Any]] = None,
     pending_step_active: bool = False,
 ) -> dict[str, Any]:
     remaining = (max_tokens - estimated_request_tokens) if max_tokens is not None else None
     history_remaining = (history_budget_tokens - estimated_request_tokens) if history_budget_tokens is not None else None
-    remaining_legacy = max(remaining, 0) if remaining is not None else None
     compaction = dict(compaction or {})
     return {
-        "max_tokens": max_tokens,
-        "history_budget_tokens": history_budget_tokens,
-        "history_tokens": history_tokens,
-        "system_tokens": system_tokens,
-        "tool_tokens": tool_tokens,
-        "reasoning_tokens": reasoning_tokens,
-        "estimated_request_tokens": estimated_request_tokens,
-        "system_prompt_tokens": system_tokens,
-        "tool_schema_tokens": tool_tokens,
-        "stable_context_tokens": estimated_request_tokens,
-        "used_tokens": estimated_request_tokens,
-        "remaining_tokens_for_sources_and_query": remaining,
-        "remaining_tokens": remaining_legacy,
-        "history_budget_remaining_tokens": history_remaining,
-        "history_compacted": bool(compaction.get("was_compacted", False)),
-        "last_history_compaction": compaction or {},
-        "canonical_history_messages": canonical_history_messages,
-        "replay_history_messages": replay_history_messages,
-        "pending_step_active": pending_step_active,
-        "tracked_at": datetime.now().isoformat(),
+        "version": 2,
+        "budget": {
+            "maxTokens": max_tokens,
+            "historyBudgetTokens": history_budget_tokens,
+            "remainingTokens": remaining,
+            "historyRemainingTokens": history_remaining,
+        },
+        "requestEstimate": {
+            "estimatedRequestTokens": estimated_request_tokens,
+            "source": request_estimate_source,
+            "metadata": dict(request_estimate_metadata or {}),
+        },
+        "tokenBreakdown": {
+            "historyTokens": history_tokens,
+            "systemTokens": system_tokens,
+            "toolTokens": tool_tokens,
+            "reasoningTokens": reasoning_tokens,
+        },
+        "history": {
+            "canonicalMessages": canonical_history_messages,
+            "replayMessages": replay_history_messages,
+            "pendingStepActive": pending_step_active,
+        },
+        "compaction": {
+            "last": compaction or {},
+            "estimatedRequestTokens": compaction_estimated_request_tokens,
+            "tokenSource": compaction_token_source,
+            "metadata": dict(compaction_metadata or {}),
+        },
+        "cache": dict(cache or {}),
+        "trackedAt": datetime.now().isoformat(),
     }
 
 
@@ -190,6 +206,8 @@ class BaseAgent(ABC):
         # 上下文工程管理器（可选）
         self.context_manager = context_manager
         self._last_history_compaction: dict[str, Any] = {}
+        self._history_usage_anchor: Optional[dict[str, Any]] = None
+        self._pending_response_usage_anchor: Optional[dict[str, Any]] = None
         self._pending_step_state: Optional[dict[str, Any]] = None
         self._context_usage_counter = TokenCounter()
         
@@ -681,6 +699,7 @@ class BaseAgent(ABC):
         force: bool = False,
         tokens_before: Optional[int] = None,
     ) -> Optional[int]:
+        '''在历史压缩前运行 hook，允许动态调整压缩策略或阻断压缩'''
         payload = {
             "agent": self,
             "operation": operation,
@@ -943,6 +962,8 @@ class BaseAgent(ABC):
         self,
         canonical_entries: list[Any],
         replay_entries: list[Any],
+        *,
+        usage_anchor_replay_count: Optional[int] = None,
     ) -> None:
         self._assert_replay_history_ready_for_current_provider()
         canonical_entries, replay_entries = self._prepare_history_entries_for_persistence(
@@ -952,15 +973,128 @@ class BaseAgent(ABC):
         provider_name = getattr(self.llm, "provider_name", None)
         for entry in canonical_entries:
             self._history.append(entry)
+        canonical_trimmed = 0
         while len(self._history) > self.config.max_history_length:
             self._history.pop(0)
+            canonical_trimmed += 1
 
+        replay_anchor_index: Optional[int] = None
+        if (
+            self._pending_response_usage_anchor is not None
+            and replay_entries
+            and self._contains_assistant_history_entry(canonical_entries)
+        ):
+            anchor_count = (
+                len(replay_entries)
+                if usage_anchor_replay_count is None
+                else max(0, min(int(usage_anchor_replay_count), len(replay_entries)))
+            )
+            if anchor_count > 0:
+                replay_anchor_index = len(self.replay_history) + anchor_count
         for entry in replay_entries:
             self.llm.append_replay_entry(self.replay_history, entry, provider_name)
+        replay_trimmed = 0
         while len(self.replay_history) > self.config.max_history_length:
             self.replay_history.pop(0)
+            replay_trimmed += 1
         self.replay_history_provider_name = provider_name
+        if replay_anchor_index is not None:
+            self._install_history_usage_anchor(
+                replay_index=replay_anchor_index - replay_trimmed,
+                canonical_index=len(self._history),
+            )
+        elif self._pending_response_usage_anchor is not None and not self._contains_assistant_history_entry(canonical_entries):
+            self._pending_response_usage_anchor = None
+        elif replay_trimmed and self._history_usage_anchor is not None:
+            self._shift_history_usage_anchor(replay_trimmed)
         self._check_and_trigger_background_memory()
+
+    @staticmethod
+    def _contains_assistant_history_entry(entries: list[Any]) -> bool:
+        for entry in entries or []:
+            canonical = coerce_canonical_message(entry)
+            if canonical is not None and canonical.role == "assistant":
+                return True
+            if isinstance(entry, dict) and entry.get("role") == "assistant":
+                return True
+        return False
+
+    @staticmethod
+    def _usage_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _request_context_signature(self) -> str:
+        payload = {
+            "provider_name": getattr(self.llm, "provider_name", None),
+            "system_prompt": self._stable_system_prompt(),
+            "tools": self._stable_tools(),
+            "reasoning": self.reasoning,
+        }
+        try:
+            return json.dumps(self._make_json_safe(payload), ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return str(self._make_json_safe(payload))
+
+    def _usage_context_tokens(self, usage: dict[str, Any]) -> Optional[int]:
+        input_tokens = self._usage_int(usage.get("inputTokens"))
+        output_tokens = self._usage_int(usage.get("outputTokens"))
+        cache_read_tokens = self._usage_int(usage.get("cacheReadTokens")) or 0
+        cache_creation_tokens = self._usage_int(usage.get("cacheCreationTokens")) or 0
+        if input_tokens is not None or output_tokens is not None:
+            return int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens + cache_creation_tokens
+        return self._usage_int(usage.get("totalTokens"))
+
+    def _capture_response_usage_for_history_anchor(self, usage: dict[str, Any]) -> None:
+        if usage.get("usageSource") != "provider":
+            return
+        context_tokens = self._usage_context_tokens(usage)
+        if context_tokens is None:
+            return
+        self._pending_response_usage_anchor = {
+            "provider_name": getattr(self.llm, "provider_name", None),
+            "context_tokens": context_tokens,
+            "usage": self._make_json_safe(usage),
+            "context_signature": self._request_context_signature(),
+            "tracked_at": datetime.now().isoformat(),
+        }
+
+    def _install_history_usage_anchor(
+        self,
+        *,
+        replay_index: int,
+        canonical_index: int,
+    ) -> None:
+        pending = self._pending_response_usage_anchor
+        self._pending_response_usage_anchor = None
+        if pending is None or replay_index <= 0:
+            self._history_usage_anchor = None
+            return
+        self._history_usage_anchor = {
+            **pending,
+            "replay_index": replay_index,
+            "canonical_index": max(0, canonical_index),
+        }
+
+    def _shift_history_usage_anchor(self, replay_trimmed: int) -> None:
+        if self._history_usage_anchor is None:
+            return
+        replay_index = int(self._history_usage_anchor.get("replay_index") or 0) - int(replay_trimmed or 0)
+        if replay_index <= 0:
+            self._history_usage_anchor = None
+            return
+        self._history_usage_anchor = {
+            **self._history_usage_anchor,
+            "replay_index": replay_index,
+        }
+
+    def _invalidate_history_usage_anchor(self) -> None:
+        self._history_usage_anchor = None
+        self._pending_response_usage_anchor = None
 
     def _should_persist_reasoning_history(self) -> bool:
         return bool(getattr(self.config, "persist_reasoning_history", True))
@@ -1107,15 +1241,14 @@ class BaseAgent(ABC):
     def _commit_pending_step_state(self) -> bool:
         if not self._pending_step_state:
             return False
-        canonical_entries = [
-            *list(self._pending_step_state.get("assistant_canonical") or []),
-            *list(self._pending_step_state.get("tool_results_canonical") or []),
-        ]
-        replay_entries = [
-            *list(self._pending_step_state.get("assistant_replay") or []),
-            *list(self._pending_step_state.get("tool_results_replay") or []),
-        ]
-        self._append_dual_history(canonical_entries, replay_entries)
+        assistant_canonical = list(self._pending_step_state.get("assistant_canonical") or [])
+        assistant_replay = list(self._pending_step_state.get("assistant_replay") or [])
+        tool_results_canonical = list(self._pending_step_state.get("tool_results_canonical") or [])
+        tool_results_replay = list(self._pending_step_state.get("tool_results_replay") or [])
+        if assistant_canonical or assistant_replay:
+            self._append_dual_history(assistant_canonical, assistant_replay)
+        if tool_results_canonical or tool_results_replay:
+            self._append_dual_history(tool_results_canonical, tool_results_replay)
         self._pending_step_state = None
         return True
 
@@ -1289,6 +1422,8 @@ class BaseAgent(ABC):
         self._history.clear()
         self.replay_history.clear()
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self._history_usage_anchor = None
+        self._pending_response_usage_anchor = None
         self._clear_pending_step_state()
         self._last_history_compaction = {}
         self._unextracted_msg_count = 0
@@ -1330,9 +1465,10 @@ class BaseAgent(ABC):
         self._history = list(result.canonical_history)
         self.replay_history = list(result.replay_history)
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self._invalidate_history_usage_anchor()
         return True
 
-    def _estimate_history_compaction_tokens(self) -> Optional[int]:
+    def _local_history_compaction_tokens(self) -> Optional[int]:
         if not self.replay_history:
             return 0
         try:
@@ -1347,27 +1483,94 @@ class BaseAgent(ABC):
         except Exception:
             return None
 
+    def _estimate_history_compaction_token_state(self) -> dict[str, Any]:
+        local_tokens = self._local_history_compaction_tokens()
+        anchor = self._history_usage_anchor
+        if not anchor:
+            return {
+                "tokens": local_tokens,
+                "source": "local_request_estimate",
+                "local_tokens": local_tokens,
+                "metadata": {"source": "local_request_estimate"},
+            }
+        if anchor.get("provider_name") != getattr(self.llm, "provider_name", None):
+            self._history_usage_anchor = None
+            return {
+                "tokens": local_tokens,
+                "source": "local_request_estimate",
+                "local_tokens": local_tokens,
+                "metadata": {"source": "local_request_estimate", "anchor_invalidated": "provider_changed"},
+            }
+        if anchor.get("context_signature") != self._request_context_signature():
+            return {
+                "tokens": local_tokens,
+                "source": "local_request_estimate",
+                "local_tokens": local_tokens,
+                "metadata": {"source": "local_request_estimate", "anchor_invalidated": "request_context_changed"},
+            }
+        replay_index = self._usage_int(anchor.get("replay_index"))
+        context_tokens = self._usage_int(anchor.get("context_tokens"))
+        if replay_index is None or context_tokens is None or replay_index < 0 or replay_index > len(self.replay_history):
+            return {
+                "tokens": local_tokens,
+                "source": "local_request_estimate",
+                "local_tokens": local_tokens,
+                "metadata": {"source": "local_request_estimate", "anchor_invalidated": "index_out_of_range"},
+            }
+        delta_replay = self.replay_history[replay_index:]
+        try:
+            codec = create_codec(getattr(self.llm, "provider_name", None))
+            delta_tokens = codec.count_request_tokens(
+                self._context_usage_counter,
+                delta_replay,
+            ) if delta_replay else 0
+        except Exception:
+            return {
+                "tokens": local_tokens,
+                "source": "local_request_estimate",
+                "local_tokens": local_tokens,
+                "metadata": {"source": "local_request_estimate", "anchor_invalidated": "delta_estimate_failed"},
+            }
+        tokens = int(context_tokens) + int(delta_tokens)
+        return {
+            "tokens": tokens,
+            "source": "provider_usage_plus_delta_estimate",
+            "local_tokens": local_tokens,
+            "metadata": {
+                "source": "provider_usage_plus_delta_estimate",
+                "provider_usage_tokens": int(context_tokens),
+                "delta_tokens": int(delta_tokens),
+                "delta_replay_messages": len(delta_replay),
+                "anchor_replay_index": replay_index,
+                "local_tokens": local_tokens,
+                "usage": self._make_json_safe(anchor.get("usage") or {}),
+            },
+        }
+
     def _precheck_history_compaction(
         self,
         *,
         max_tokens: Optional[int],
         force: bool = False,
-    ) -> tuple[bool, Optional[int]]:
+    ) -> tuple[bool, Optional[int], dict[str, Any]]:
         if max_tokens is None or max_tokens <= 0:
-            return False, None
-        tokens_before = self._estimate_history_compaction_tokens()
+            return False, None, {}
+        token_state = self._estimate_history_compaction_token_state()
+        tokens_before = token_state.get("tokens")
+        metadata = {"token_estimate": token_state.get("metadata") or {}}
         if tokens_before is None:
-            return True, None
+            return True, None, metadata
         if force or tokens_before > max_tokens:
-            return True, tokens_before
+            return True, tokens_before, metadata
         self._last_history_compaction = _build_history_compaction_state(
             was_compacted=False,
             compaction_possible=False,
             tokens_before=tokens_before,
             tokens_after=tokens_before,
             max_tokens=max_tokens,
+            metadata=metadata,
         )
-        return False, tokens_before
+        return False, tokens_before, metadata
 
     def compact_persistent_history_if_needed(self) -> bool:
         if self.context_manager is None or not self._history:
@@ -1375,7 +1578,7 @@ class BaseAgent(ABC):
         budget = self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
-        should_compact, tokens_before = self._precheck_history_compaction(
+        should_compact, tokens_before, token_metadata = self._precheck_history_compaction(
             max_tokens=budget,
             force=False,
         )
@@ -1398,6 +1601,8 @@ class BaseAgent(ABC):
             tools=self._stable_tools(),
             reasoning=self.reasoning,
             max_tokens=budget,
+            tokens_before_override=tokens_before,
+            metadata=token_metadata,
         )
         return self._apply_history_compaction_result(result)
 
@@ -1407,7 +1612,7 @@ class BaseAgent(ABC):
         budget = self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
-        should_compact, tokens_before = self._precheck_history_compaction(
+        should_compact, tokens_before, token_metadata = self._precheck_history_compaction(
             max_tokens=budget,
             force=False,
         )
@@ -1430,6 +1635,8 @@ class BaseAgent(ABC):
             tools=self._stable_tools(),
             reasoning=self.reasoning,
             max_tokens=budget,
+            tokens_before_override=tokens_before,
+            metadata=token_metadata,
         )
         return self._apply_history_compaction_result(result)
 
@@ -1439,7 +1646,7 @@ class BaseAgent(ABC):
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
-        _, tokens_before = self._precheck_history_compaction(
+        _, tokens_before, token_metadata = self._precheck_history_compaction(
             max_tokens=budget,
             force=True,
         )
@@ -1461,6 +1668,8 @@ class BaseAgent(ABC):
             reasoning=self.reasoning,
             max_tokens=budget,
             force=True,
+            tokens_before_override=tokens_before,
+            metadata=token_metadata,
         )
         return self._apply_history_compaction_result(result)
 
@@ -1470,7 +1679,7 @@ class BaseAgent(ABC):
         budget = max_tokens if max_tokens is not None else self._history_budget_max_tokens()
         if budget is None or budget <= 0:
             return False
-        _, tokens_before = self._precheck_history_compaction(
+        _, tokens_before, token_metadata = self._precheck_history_compaction(
             max_tokens=budget,
             force=True,
         )
@@ -1492,6 +1701,8 @@ class BaseAgent(ABC):
             reasoning=self.reasoning,
             max_tokens=budget,
             force=True,
+            tokens_before_override=tokens_before,
+            metadata=token_metadata,
         )
         return self._apply_history_compaction_result(result)
 
@@ -1499,6 +1710,8 @@ class BaseAgent(ABC):
         """返回子类需要补充持久化的状态。"""
         return {
             "last_history_compaction": self._make_json_safe(self._last_history_compaction),
+            "history_usage_anchor": self._make_json_safe(self._history_usage_anchor),
+            "pending_response_usage_anchor": self._make_json_safe(self._pending_response_usage_anchor),
             "pending_step_state": self._make_json_safe(self._pending_step_state),
             "mode_state": self.mode_controller.export_state(),
             "permission_context": self.permission_context.export_state(),
@@ -1517,6 +1730,8 @@ class BaseAgent(ABC):
         """恢复子类持久化状态。"""
         state = state or {}
         self._last_history_compaction = self._make_json_safe(state.get("last_history_compaction") or {})
+        self._history_usage_anchor = self._make_json_safe(state.get("history_usage_anchor") or None)
+        self._pending_response_usage_anchor = self._make_json_safe(state.get("pending_response_usage_anchor") or None)
         pending_state = state.get("pending_step_state")
         self._pending_step_state = self._make_json_safe(pending_state) if pending_state is not None else None
         self.mode_controller.restore_state(state.get("mode_state"))
@@ -2936,17 +3151,43 @@ class BaseAgent(ABC):
             tools=tools,
             reasoning=self.reasoning,
         )
-        usage = _build_history_context_usage_payload(
+        compaction_token_state = self._estimate_history_compaction_token_state()
+        estimate_tokens = compaction_token_state.get("tokens")
+        if estimate_tokens is None:
+            estimate_tokens = breakdown["estimated_request_tokens"]
+        estimate_source = compaction_token_state.get("source") or "local_request_estimate"
+        estimate_metadata = compaction_token_state.get("metadata") or {}
+        anchor = self._history_usage_anchor if isinstance(self._history_usage_anchor, dict) else None
+        pending_anchor = (
+            self._pending_response_usage_anchor
+            if isinstance(self._pending_response_usage_anchor, dict)
+            else None
+        )
+        cache_state = {
+            "enabled": False,
+            "signature": anchor.get("context_signature") if anchor else None,
+            "anchorActive": anchor is not None,
+            "anchorProvider": anchor.get("provider_name") if anchor else None,
+            "anchorReplayIndex": anchor.get("replay_index") if anchor else None,
+            "pendingAnchorActive": pending_anchor is not None,
+        }
+        usage = _build_context_usage_report_v2(
             max_tokens=max_tokens,
             history_budget_tokens=history_budget,
             history_tokens=breakdown["history_tokens"],
             system_tokens=breakdown["system_tokens"],
             tool_tokens=breakdown["tool_tokens"],
             reasoning_tokens=breakdown["reasoning_tokens"],
-            estimated_request_tokens=breakdown["estimated_request_tokens"],
+            estimated_request_tokens=int(estimate_tokens),
+            request_estimate_source=str(estimate_source),
+            request_estimate_metadata=estimate_metadata,
             canonical_history_messages=len(self._history),
             replay_history_messages=len(self.replay_history),
             compaction=self._last_history_compaction,
+            compaction_estimated_request_tokens=compaction_token_state.get("tokens"),
+            compaction_token_source=compaction_token_state.get("source"),
+            compaction_metadata=compaction_token_state.get("metadata") or {},
+            cache=cache_state,
             pending_step_active=self._pending_step_state is not None,
         )
         return self._make_json_safe(usage)
@@ -3121,6 +3362,8 @@ class BaseAgent(ABC):
             final_text=final_text,
             final_thinking=final_thinking,
         )
+        if success:
+            self._capture_response_usage_for_history_anchor(usage)
         self.observability_recorder.end_llm_request(
             event_id,
             input_tokens=usage.get("inputTokens"),
@@ -3229,6 +3472,7 @@ class BaseAgent(ABC):
             getattr(self.llm, "provider_name", None),
         )
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self._invalidate_history_usage_anchor()
         return self.replay_history
 
     def prepare_replay_history(self, messages: list[Any], provider_name: Optional[str] = None) -> list[Any]:
@@ -3240,6 +3484,8 @@ class BaseAgent(ABC):
         for message in list(messages or []):
             canonical_entries.extend(self.llm.history_entry_to_canonical(message))
         self._history = canonical_entries[-self.config.max_history_length :]
+        if not rebuild_replay:
+            self._pending_response_usage_anchor = None
         if rebuild_replay:
             self.rebuild_replay_history()
 

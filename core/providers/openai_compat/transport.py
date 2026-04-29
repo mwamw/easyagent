@@ -13,6 +13,57 @@ from openai import AsyncOpenAI, OpenAI
 from ..base import BaseProvider, _usage_field, _usage_float, _usage_int
 
 class OpenAICompatibleProviderBase(BaseProvider):
+    @staticmethod
+    def _normalize_reasoning(reasoning: Optional[dict[str, Any] | str]) -> Optional[dict[str, Any]]:
+        if reasoning is None or reasoning is False:
+            return None
+        if isinstance(reasoning, str):
+            reasoning = {"effort": reasoning}
+        if not isinstance(reasoning, dict):
+            return None
+        normalized = dict(reasoning)
+        effort = normalized.get("effort")
+        if effort is not None:
+            effort_key = str(effort).strip().lower().replace("-", "_")
+            normalized["effort"] = {
+                "extra_high": "xhigh",
+                "extra": "xhigh",
+                "max": "xhigh",
+                "maximum": "xhigh",
+            }.get(effort_key, effort_key)
+        return normalized
+
+    def _reasoning_override(self, reasoning: dict[str, Any]) -> Optional[dict[str, Any]]:
+        overrides = reasoning.get("provider_overrides") or reasoning.get("overrides")
+        if not isinstance(overrides, dict):
+            return None
+        aliases = (self.provider_name, "openai_compat", "openai", "chat_completions")
+        for alias in aliases:
+            override = overrides.get(alias)
+            if isinstance(override, dict):
+                return dict(override)
+        return None
+
+    def _compile_reasoning_params(self, reasoning: Optional[dict[str, Any] | str]) -> dict[str, Any]:
+        normalized = self._normalize_reasoning(reasoning)
+        if not normalized or normalized.get("enabled") is False:
+            return {}
+        override = self._reasoning_override(normalized)
+        if override is not None:
+            return override
+        if "reasoning_effort" in normalized:
+            return {"reasoning_effort": normalized["reasoning_effort"]}
+        effort = normalized.get("effort")
+        if not effort:
+            return {}
+        effort_map = {
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+        }
+        return {"reasoning_effort": effort_map.get(str(effort), "medium")}
+
     def _create_client(self) -> OpenAI:
         injected = self.kwargs.get("client")
         if injected is not None:
@@ -42,7 +93,7 @@ class OpenAICompatibleProviderBase(BaseProvider):
         system_prompt: Optional[str] = None,
         tools: Optional[Any] = None,
         temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
+        reasoning: Optional[dict[str, Any] | str] = None,
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -59,8 +110,7 @@ class OpenAICompatibleProviderBase(BaseProvider):
         }
         if tools:
             params["tools"] = tools
-        if reasoning and reasoning.get("effort"):
-            params["reasoning_effort"] = reasoning["effort"]
+        params.update(self._compile_reasoning_params(reasoning))
         extra_kwargs = dict(kwargs)
         if stream and self.provider_name == "openai":
             stream_options = extra_kwargs.pop("stream_options", None)
