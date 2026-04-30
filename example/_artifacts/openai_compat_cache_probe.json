@@ -1,0 +1,128 @@
+{
+  "summary": {
+    "provider": "openai",
+    "model": "gemini-3-flash",
+    "base_url": "http://210.45.70.84:30000/v1",
+    "rounds": 3,
+    "supports_cache_usage_field": true
+  },
+  "runs": [
+    {
+      "round": 1,
+      "provider": "openai",
+      "model": "gemini-3-flash",
+      "base_url": "http://210.45.70.84:30000/v1",
+      "status": "ok",
+      "normalized_usage": {
+        "inputTokens": 1529,
+        "outputTokens": 1389,
+        "totalTokens": 2918,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 1267,
+        "usageSource": "provider"
+      },
+      "raw_usage": {
+        "completion_tokens": 1389,
+        "prompt_tokens": 1529,
+        "total_tokens": 2918,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": 0,
+          "reasoning_tokens": 1267,
+          "rejected_prediction_tokens": null,
+          "text_tokens": 0
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "text_tokens": 1529,
+          "image_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "cached_tokens": 0
+    },
+    {
+      "round": 2,
+      "provider": "openai",
+      "model": "gemini-3-flash",
+      "base_url": "http://210.45.70.84:30000/v1",
+      "status": "ok",
+      "normalized_usage": {
+        "inputTokens": 1529,
+        "outputTokens": 675,
+        "totalTokens": 2204,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 545,
+        "usageSource": "provider"
+      },
+      "raw_usage": {
+        "completion_tokens": 675,
+        "prompt_tokens": 1529,
+        "total_tokens": 2204,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": 0,
+          "reasoning_tokens": 545,
+          "rejected_prediction_tokens": null,
+          "text_tokens": 0
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "text_tokens": 1529,
+          "image_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "cached_tokens": 0
+    },
+    {
+      "round": 3,
+      "provider": "openai",
+      "model": "gemini-3-flash",
+      "base_url": "http://210.45.70.84:30000/v1",
+      "status": "ok",
+      "normalized_usage": {
+        "inputTokens": 1529,
+        "outputTokens": 1522,
+        "totalTokens": 3051,
+        "cachedInputTokens": 0,
+        "reasoningTokens": 1385,
+        "usageSource": "provider"
+      },
+      "raw_usage": {
+        "completion_tokens": 1522,
+        "prompt_tokens": 1529,
+        "total_tokens": 3051,
+        "completion_tokens_details": {
+          "accepted_prediction_tokens": null,
+          "audio_tokens": 0,
+          "reasoning_tokens": 1385,
+          "rejected_prediction_tokens": null,
+          "text_tokens": 0
+        },
+        "prompt_tokens_details": {
+          "audio_tokens": 0,
+          "cached_tokens": 0,
+          "text_tokens": 1529,
+          "image_tokens": 0
+        },
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "input_tokens_details": null,
+        "claude_cache_creation_5_m_tokens": 0,
+        "claude_cache_creation_1_h_tokens": 0
+      },
+      "cached_tokens": 0
+    }
+  ]
+}

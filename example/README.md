@@ -33,6 +33,7 @@
 - `example_stream.py`
 - `example_stream_display.py`
 - `example_stream_history.py`
+- `example_openai_compat_cache_probe.py`
 - `openai_res.py`
 - `agent_test.py`
 
