@@ -472,6 +472,7 @@ def register_codeintel_tools(
     parent_agent: Any | None = None,
     workspace_root: Optional[str] = None,
     allowed_roots: Optional[tuple[str, ...]] = None,
+    expose_in_deferred: bool | None = True,
 ) -> CodeIntelManager:
     codeintel_manager = _build_codeintel_manager(
         manager=manager,
@@ -483,14 +484,14 @@ def register_codeintel_tools(
     register_surface = getattr(registry, "register_runtime_surface", None)
     if callable(register_surface):
         register_surface("codeintel_manager", "default", codeintel_manager)
-    registry.register_tool(CodeIntelStatusTool(codeintel_manager))
-    registry.register_tool(FindDefinitionTool(codeintel_manager))
-    registry.register_tool(FindReferencesTool(codeintel_manager))
-    registry.register_tool(GetDocumentSymbolsTool(codeintel_manager))
-    registry.register_tool(GetWorkspaceSymbolsTool(codeintel_manager))
-    registry.register_tool(GetDiagnosticsTool(codeintel_manager))
-    registry.register_tool(CodeIntelCacheStatusTool(codeintel_manager))
-    registry.register_tool(CodeIntelPrewarmWorkspaceTool(codeintel_manager))
+    registry.register_tool(CodeIntelStatusTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(FindDefinitionTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(FindReferencesTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(GetDocumentSymbolsTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(GetWorkspaceSymbolsTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(GetDiagnosticsTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(CodeIntelCacheStatusTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
+    registry.register_tool(CodeIntelPrewarmWorkspaceTool(codeintel_manager), expose_in_deferred=expose_in_deferred)
     return codeintel_manager
 
 

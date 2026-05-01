@@ -92,6 +92,7 @@ def register_task_stop_tool(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    expose_in_deferred: bool | None = True,
 ) -> TaskStopTool:
     tool = TaskStopTool(
         workspace_root=workspace_root,
@@ -103,7 +104,7 @@ def register_task_stop_tool(
         max_output_chars=max_output_chars,
         process_manager=process_manager,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

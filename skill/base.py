@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 SkillExposureMode = Literal["resident", "on_demand"]
 SkillExecutionMode = Literal["mount", "inline"]
+SkillCacheLifecycle = Literal["resident", "session", "turn"]
 
 
 class SkillConfig(BaseModel):
@@ -42,6 +43,10 @@ class SkillConfig(BaseModel):
     )
     source_type: str = Field(default="python", description="Skill 来源类型，例如 python/yaml/markdown/folder")
     source_path: str = Field(default="", description="Skill 定义来源路径")
+    cache_lifecycle: SkillCacheLifecycle = Field(
+        default="session",
+        description="控制 Skill 正文默认进入哪个 cache 分区：resident/session/turn",
+    )
     extra: Dict[str, Any] = Field(default_factory=dict, description="Skill 自定义扩展配置")
 
 
@@ -59,6 +64,7 @@ class SkillManifest(BaseModel):
     execution_mode: SkillExecutionMode = "mount"
     source_type: str = "python"
     source_path: str = ""
+    cache_lifecycle: SkillCacheLifecycle = "session"
     tool_names: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
@@ -144,6 +150,10 @@ class BaseSkill(ABC):
     def get_execution_mode(self) -> SkillExecutionMode:
         """返回此 Skill 的执行方式。"""
         return self.config.execution_mode
+
+    def get_cache_lifecycle(self) -> SkillCacheLifecycle:
+        """返回此 Skill 正文的 cache 生命周期。"""
+        return self.config.cache_lifecycle
 
     def get_context_sources(self) -> List["BaseContextSource"]:
         """
@@ -250,6 +260,7 @@ class BaseSkill(ABC):
             execution_mode=self.get_execution_mode(),
             source_type=self.config.source_type,
             source_path=self.config.source_path,
+            cache_lifecycle=self.get_cache_lifecycle(),
             tool_names=self.get_tool_names(),
             metadata=dict(self.config.extra),
         )
@@ -266,6 +277,7 @@ class BaseSkill(ABC):
             "priority": self.config.priority,
             "exposure_mode": self.get_exposure_mode(),
             "execution_mode": self.get_execution_mode(),
+            "cache_lifecycle": self.get_cache_lifecycle(),
             "is_active": self._is_active,
             "tools": self.get_tool_names(),
         }

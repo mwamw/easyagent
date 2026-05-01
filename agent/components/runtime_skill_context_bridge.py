@@ -7,6 +7,8 @@ import json
 from typing import Any
 
 from Tool.BaseTool import ToolResult
+from core.cache_policy import CacheableBlock
+from core.Message import MetaUserMessage
 from logging import getLogger
 logger = getLogger(__name__)
 from agent import BasicAgent
@@ -60,15 +62,27 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
 
     @staticmethod
     def _append_runtime_text(agent:BasicAgent, messages: list[Any] | ReplayRequestInput, text: str) -> None:
-        replay_entries = agent.llm.query_to_replay(text)
         if isinstance(messages, ReplayRequestInput):
-            messages.extend_replay(replay_entries)
+            messages.append_dynamic_tail_text(text)
             return
-        for entry in replay_entries:
-            agent.llm.append_replay_entry(messages, entry)
+        messages.append(MetaUserMessage(text, metadata={"source": "skill_tool"}))
+
+    @staticmethod
+    def _append_runtime_skill_blocks(agent: BasicAgent, messages: list[Any] | ReplayRequestInput) -> bool:
+        if not isinstance(messages, ReplayRequestInput):
+            return False
+        blocks = agent.skill_manager.build_runtime_skill_context_blocks()
+        if not blocks:
+            return False
+        for block in blocks:
+            messages.append_on_demand_expansion_block(block)
+        return True
 
     def append_runtime_skill_context_message(self, agent:BasicAgent, messages: list[Any]) -> None:
         runtime_prompt = agent.skill_manager.build_runtime_skill_context_prompt()
+        if self._append_runtime_skill_blocks(agent, messages):
+            logger.info("Injecting runtime skill context as on-demand expansion")
+            return
         if not runtime_prompt:
             logger.debug("No runtime skill context available")
             return
@@ -94,11 +108,19 @@ class DefaultRuntimeSkillContextBridge(BaseRuntimeSkillContextBridge):
         if not context_text:
             return
         logger.info("Injecting tool ephemeral context")
-        self._append_runtime_text(
-            agent,
-            messages,
-            f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>",
-        )
+        if isinstance(messages, ReplayRequestInput):
+            messages.append_dynamic_tail_block(
+                CacheableBlock(
+                    name=f"runtime_tool_context:{tool_name}",
+                    content=f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>",
+                    partition="dynamic",
+                    cacheable=False,
+                    reason="runtime_tool_context",
+                    metadata={"tool_name": tool_name},
+                )
+            )
+            return
+        self._append_runtime_text(agent, messages, f"## Runtime Tool Context\n<runtime-tool-context tool=\"{tool_name}\">\n{context_text}\n</runtime-tool-context>")
 
     def clear_ephemeral_skill_state(self, agent:BasicAgent) -> None:
         agent.skill_manager.clear_ephemeral_state()

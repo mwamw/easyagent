@@ -8,6 +8,14 @@ from .agents import (
     ReactAgent,
     StructuredOutputAgent,
 )
+from .callbacks import (
+    BaseCallback,
+    CallbackEvent,
+    CallbackManager,
+    LoggingCallback,
+    MetricsCallback,
+    StreamingCallback,
+)
 from .codeintel import CachedFileEntry, CachedQueryEntry, CodeIntelManager, CodeIntelProvider, WorkspaceCodeIntelCache
 from .config import Config
 from .context import ContextManager
@@ -47,6 +55,8 @@ from .permissions import (
     PermissionStore,
     RiskCategory,
 )
+from .prompting import BasePromptComposer, DefaultPromptComposer, PromptBlock, SystemPromptTemplate
+from .reminders import BaseRuntimeReminderSource, RuntimeReminder, StaticRuntimeReminderSource
 from .runtime import ExecutionContext, TeamManager
 from .session import ConversationStore, SessionRestoreReport, SessionStore
 from .skills import BaseSkill, SkillManager, SkillRegistry
@@ -58,11 +68,16 @@ from .version import __version__
 __all__ = [
     "__version__",
     "BaseAgent",
+    "BaseCallback",
     "BaseHook",
+    "BasePromptComposer",
+    "BaseRuntimeReminderSource",
     "BaseSkill",
     "BasicAgent",
     "CachedFileEntry",
     "CachedQueryEntry",
+    "CallbackEvent",
+    "CallbackManager",
     "CodeIntelManager",
     "CodeIntelProvider",
     "Config",
@@ -70,6 +85,7 @@ __all__ = [
     "ConversationStore",
     "ConversationalAgent",
     "DangerousCommandGuardrail",
+    "DefaultPromptComposer",
     "EasyLLM",
     "ExecutionContext",
     "HookAction",
@@ -99,9 +115,13 @@ __all__ = [
     "PermissionRule",
     "PermissionStore",
     "PlanningAgent",
+    "LoggingCallback",
+    "MetricsCallback",
     "PromptInjectionGuardrail",
+    "PromptBlock",
     "ReactAgent",
     "RiskCategory",
+    "RuntimeReminder",
     "SecretLeakGuardrail",
     "SessionRestoreReport",
     "SessionStore",
@@ -119,6 +139,9 @@ __all__ = [
     "ToolSpec",
     "GitWorktreeInfo",
     "GitWorktreeSession",
+    "StaticRuntimeReminderSource",
+    "StreamingCallback",
+    "SystemPromptTemplate",
     "WorktreeManager",
     "WorkspaceCodeIntelCache",
     "build_default_hook_manager",

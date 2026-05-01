@@ -277,7 +277,11 @@ class CalculatorTool(Tool):
   sin(pi/2)        => 1"""
 
 
-def register_calculator_tool(registry: ToolRegistry) -> CalculatorTool:
+def register_calculator_tool(
+    registry: ToolRegistry,
+    *,
+    expose_in_deferred: bool | None = True,
+) -> CalculatorTool:
     """
     注册计算器工具到 ToolRegistry
     
@@ -288,5 +292,5 @@ def register_calculator_tool(registry: ToolRegistry) -> CalculatorTool:
         创建的 CalculatorTool 实例
     """
     tool = CalculatorTool()
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool

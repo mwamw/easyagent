@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
+from core.cache_policy import CacheableBlock
 from .base import BaseSkill, SkillManifest
 from prompt import (
     build_skill_listing_section,
@@ -265,7 +266,7 @@ class SkillManager:
     def get_active_skills(self) -> List[BaseSkill]:
         """获取所有激活的 Skill（按 priority 降序排列）"""
         skills = list(self._active_skills.values())
-        skills.sort(key=lambda s: s.priority, reverse=True)
+        skills.sort(key=lambda s: (-s.priority, s.name))
         return skills
 
     def get_active_resident_skills(self) -> List[BaseSkill]:
@@ -301,7 +302,7 @@ class SkillManager:
                 logger.warning("从 SkillRegistry 收集 manifest 失败: %s", e)
 
         result = list(manifests.values())
-        result.sort(key=lambda item: (item.priority, item.name), reverse=True)
+        result.sort(key=lambda item: (-item.priority, item.name))
         return result
 
     def get_on_demand_skill_manifests(self) -> List[SkillManifest]:
@@ -310,6 +311,10 @@ class SkillManager:
             manifest for manifest in self._collect_skill_manifests()
             if manifest.exposure_mode == "on_demand" and manifest.name != "meta_skill"
         ]
+
+    def get_skill_cache_lifecycle(self, name: str) -> str:
+        skill = self.get_skill(name)
+        return skill.get_cache_lifecycle()
 
     def has_skill(self, name: str) -> bool:
         """检查 Skill 是否已注册"""
@@ -360,6 +365,8 @@ class SkillManager:
         prompt_parts = []
         for skill in active_skills:
             if skill.name in excluded:
+                continue
+            if skill.get_cache_lifecycle() == "turn" and skill.get_exposure_mode() != "resident":
                 continue
             try:
                 skill_prompt = skill.get_body_prompt()
@@ -416,7 +423,7 @@ class SkillManager:
     def get_invoked_skill_manifests(self) -> List[SkillManifest]:
         """返回按需调用过的 Skill manifest。"""
         manifests = list(self._invoked_skill_manifests.values())
-        manifests.sort(key=lambda item: (item.priority, item.name), reverse=True)
+        manifests.sort(key=lambda item: (-item.priority, item.name))
         return manifests
 
     def clear_invoked_skill(self, name: str) -> None:
@@ -428,7 +435,7 @@ class SkillManager:
         if not self._runtime_skill_contexts:
             return ""
         items = list(self._runtime_skill_contexts.items())
-        items.sort(key=lambda item: (item[1]["manifest"].priority, item[0]), reverse=True)
+        items.sort(key=lambda item: (-item[1]["manifest"].priority, item[0]))
         payloads: list[dict[str, Any]] = []
         for skill_name, payload in items:
             manifest: SkillManifest = payload["manifest"]
@@ -443,6 +450,43 @@ class SkillManager:
                 }
             )
         return build_runtime_skill_context_section(payloads)
+
+    def build_runtime_skill_context_blocks(self) -> list[CacheableBlock]:
+        if not self._runtime_skill_contexts:
+            return []
+        items = list(self._runtime_skill_contexts.items())
+        items.sort(key=lambda item: (-item[1]["manifest"].priority, item[0]))
+        blocks: list[CacheableBlock] = []
+        for skill_name, payload in items:
+            manifest: SkillManifest = payload["manifest"]
+            block_name = f"skill:{skill_name}"
+            block_content = build_runtime_skill_context_section(
+                [
+                    {
+                        "name": skill_name,
+                        "source": payload.get("source", "skill_tool"),
+                        "when_to_use": manifest.when_to_use,
+                        "source_path": manifest.source_path,
+                        "tool_names": manifest.tool_names,
+                        "body": payload.get("body", ""),
+                    }
+                ]
+            )
+            blocks.append(
+                CacheableBlock(
+                    name=block_name,
+                    content=block_content,
+                    partition="session",
+                    cacheable=True,
+                    reason="runtime_skill_context",
+                    metadata={
+                        "request_layer": "on_demand_expansion",
+                        "skill_name": skill_name,
+                        "skill_source": payload.get("source", "skill_tool"),
+                    },
+                )
+            )
+        return blocks
 
     def has_runtime_skill_context(self) -> bool:
         """当前是否存在临时 Skill 正文上下文。"""
@@ -499,6 +543,19 @@ class SkillManager:
         """清理当前轮的临时 Skill 状态。"""
         self.clear_runtime_skill_context()
         self.cleanup_temporary_skill_mounts()
+
+    def expose_runtime_skill_tools(self, skill_name: str) -> list[str]:
+        if self._agent is None:
+            return []
+        registry = getattr(self._agent, "tool_registry", None)
+        if registry is None:
+            return []
+        tool_names = list(self._skill_tool_names.get(skill_name, []))
+        if not tool_names:
+            return []
+        if getattr(getattr(self._agent, "config", None), "tool_schema_mode", "full") == "deferred":
+            registry.expand_deferred_tools(tool_names)
+        return tool_names
 
     # ==================== 生命周期代理 ====================
 
@@ -574,6 +631,12 @@ class SkillManager:
         try:
             tools = skill.get_tools()
             for tool in tools:
+                try:
+                    tool.spec.metadata.setdefault("skill_name", skill.name)
+                    tool.spec.metadata.setdefault("skill_exposure_mode", skill.get_exposure_mode())
+                    tool.spec.metadata.setdefault("skill_tool_visibility", tool_visibility)
+                except Exception:
+                    pass
                 if skill.get_exposure_mode() == "on_demand" and tool_visibility in {"runtime", "turn"}:
                     tool.mark_as_demand_skill_tool(skill.name)
                 else:

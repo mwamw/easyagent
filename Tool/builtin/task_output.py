@@ -28,7 +28,7 @@ class TaskOutputTool(_ShellToolBase):
     ):
         super().__init__(
             name="TaskOutput",
-            description="读取 Bash 后台任务的当前输出，可选择阻塞等待任务结束。",
+            description="读取 Bash 后台任务的当前输出，可按需阻塞等待结束。",
             parameters=ClaudeTaskOutputInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -104,6 +104,7 @@ def register_task_output_tool(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    expose_in_deferred: bool | None = True,
 ) -> TaskOutputTool:
     tool = TaskOutputTool(
         workspace_root=workspace_root,
@@ -115,7 +116,7 @@ def register_task_output_tool(
         max_output_chars=max_output_chars,
         process_manager=process_manager,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 __all__ = [

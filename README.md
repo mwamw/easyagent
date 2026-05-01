@@ -1,84 +1,31 @@
 # EasyAgent
 
-EasyAgent 是一个面向 **Code Agent** 和 **通用 Agent** 的 Python 框架。
+EasyAgent 是一个面向通用 Agent、Code Agent 和多 Agent 协作场景的 Python 框架。
+它关注的不是“怎么调用一次模型”，而是“怎么把模型、工具、权限、会话、上下文、运行时和可观测性组装成可持续维护的 Agent 产品”。
 
-它的目标不是只提供一个“聊天接口”，而是给你一套可组合的能力，让你能比较直接地搭出下面这些东西：
+这份 README 不是简介，而是整个框架文档体系的总入口。
+如果你只读一个文件，请先读它；如果你要做真正的产品化集成，请顺着这里的主题索引继续读 `docs/` 下的专题手册。
 
-- 带工具调用的单智能体助手
-- 多轮对话助手
-- 结构化输出 agent
-- 会规划、会协作的 agent
-- 多智能体 code agent
-- 带会话恢复、权限控制、MCP、代码智能的长期运行 agent
+## 1. 你可以用 EasyAgent 做什么
 
-这份 README 只讲一件事：
+EasyAgent 适合构建：
 
-> **作为框架使用者，你该怎么用 EasyAgent。**
+- 单智能体对话助手
+- 带工具调用的自动化助手
+- 本地或远程运行的 Code Agent
+- 带 Ask / Allow / Deny 权限模型的命令执行代理
+- 带 Skill、MCP、CodeIntel、RAG、Memory 的工程助手
+- 支持 Team / Task / Mailbox / background agent 的多 Agent 系统
 
-不会展开太多底层实现细节，也不会把内部运行机制讲成源码导读。你可以把它当成 EasyAgent 的用户手册。
+## 2. 快速安装
 
----
-
-## 目录
-
-- [为什么用 EasyAgent](#为什么用-easyagent)
-- [安装](#安装)
-- [公共导入方式](#公共导入方式)
-- [5 分钟快速开始](#5-分钟快速开始)
-- [核心概念](#核心概念)
-- [Agent 类型怎么选](#agent-类型怎么选)
-- [常见使用方式](#常见使用方式)
-- [1. 最基础的对话 Agent](#1-最基础的对话-agent)
-- [2. 带工具的 Agent](#2-带工具的-agent)
-- [3. 结构化输出](#3-结构化输出)
-- [4. 带记忆的对话 Agent](#4-带记忆的对话-agent)
-- [5. 规划型 Agent](#5-规划型-agent)
-- [6. ReAct 风格 Agent](#6-react-风格-agent)
-- [7. 多智能体协作](#7-多智能体协作)
-- [8. Session 保存与恢复](#8-session-保存与恢复)
-- [9. 权限控制](#9-权限控制)
-- [10. Hook 与 Guardrail](#10-hook-与-guardrail)
-- [11. Code Intelligence](#11-code-intelligence)
-- [12. MCP 集成](#12-mcp-集成)
-- [13. Observability](#13-observability)
-- [14. RAG](#14-rag)
-- [15. Skill](#15-skill)
-- [16. 如何自定义 Tool](#16-如何自定义-tool)
-- [17. 如何自定义 Agent](#17-如何自定义-agent)
-- [18. 如何自定义 Provider](#18-如何自定义-provider)
-- [模块可自定义程度](#模块可自定义程度)
-- [推荐阅读顺序](#推荐阅读顺序)
-- [FAQ](#faq)
-
----
-
-## 为什么用 EasyAgent
-
-如果你只想做一个最简单的“发消息给模型然后拿回复”的脚本，直接用模型 SDK 就够了。
-
-EasyAgent 适合这些场景：
-
-- 你希望一个 agent 不只是聊天，还能安全地调用工具
-- 你希望对 agent 的能力做模块化组合，而不是写死在一个类里
-- 你希望支持任务、会话恢复、权限控制、观测、MCP、代码智能
-- 你后续可能会从单智能体演进到多智能体
-- 你需要做 code agent，但也不想失去构建通用 agent 的能力
-
-一句话说：
-
-> EasyAgent 适合“要做真实 Agent 系统”的项目，而不是只做一次性 demo。
-
----
-
-## 安装
-
-### 安装核心框架
+核心安装：
 
 ```bash
 pip install -e .
 ```
 
-### 安装可选扩展
+可选扩展：
 
 ```bash
 pip install -e ".[mcp]"
@@ -87,35 +34,15 @@ pip install -e ".[memory]"
 pip install -e ".[dev]"
 ```
 
-通常建议：
+推荐：
 
-- 只做基础 agent：安装核心依赖即可
+- 只做工具型 Agent：核心安装即可
 - 要接 MCP：加 `.[mcp]`
-- 要做知识库问答：加 `.[rag]`
-- 要做多轮记忆：加 `.[memory]`
+- 要接知识库或检索：加 `.[rag]`
+- 要长期记忆：加 `.[memory]`
+- 要跑完整测试：加 `.[dev]`
 
----
-
-## 公共导入方式
-
-新的外部项目建议统一从 `easyagent` 导入，而不是直接依赖仓库内部目录。
-
-推荐写法：
-
-```python
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-from easyagent.permissions import PermissionContext, PermissionRule
-from easyagent.tasks import TaskService
-from easyagent.mcp import register_mcp_tools
-```
-
-如果你只是阅读源码，内部目录当然可以看；但如果你是在写业务代码，`easyagent` 才是推荐入口。
-
----
-
-## 5 分钟快速开始
-
-### 最小示例
+## 3. 30 秒最小 Agent
 
 ```python
 from easyagent import BasicAgent, EasyLLM
@@ -123,1180 +50,335 @@ from easyagent import BasicAgent, EasyLLM
 llm = EasyLLM(
     provider="openai",
     base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
+    api_key="test",
     model="qwen3.5-9b",
 )
 
-agent = BasicAgent(
-    name="assistant",
-    llm=llm,
-)
-
-result = agent.invoke("请用三句话介绍 EasyAgent。")
-print(result)
+agent = BasicAgent(name="assistant", llm=llm)
+print(agent.invoke("用一句话说明 EasyAgent 是什么。"))
 ```
 
-这个例子已经够你验证三件事：
-
-- LLM 是否配置正确
-- EasyAgent 是否安装成功
-- 你是否能正常创建一个最基础的 agent
-
-如果这一步能跑通，后面所有功能都可以逐步叠加。
-
----
-
-## 核心概念
-
-在开始之前，先理解几个最常用的对象。
-
-### `EasyLLM`
-
-统一的模型入口。
-
-你一般用它来：
-
-- 指定 provider
-- 指定模型
-- 配置 `base_url` / `api_key`
-- 让框架统一处理不同模型服务
-
-### `BasicAgent`
-
-最常用的 Agent 类型。
-
-如果你不知道该选哪个 agent，先选 `BasicAgent`。
-
-### `ToolRegistry`
-
-工具注册表。
-
-所有自定义工具、内置工具、MCP 工具，最终都会汇总到这里。
-
-### `PermissionContext`
-
-权限配置。
-
-当 agent 开始具备“读文件、写文件、执行命令、调用外部系统”这类能力之后，权限控制就变得非常重要。
-
-### `TaskService`
-
-任务系统。
-
-适合长任务、多步骤任务、协作场景。
-
-### `ExecutionContext`
-
-执行上下文。
-
-它描述“当前 agent 在什么工作区、以什么模式、面向哪个任务在执行”。
-
-### `Session`
-
-会话保存与恢复。
-
-当你要做“可中断、可恢复、可长期运行”的 agent 时，这个能力非常关键。
-
----
-
-## Agent 类型怎么选
-
-EasyAgent 现在最常用的 Agent 类型有五种。
-
-### `BasicAgent`
-
-推荐默认选择。
-
-适合：
-
-- 通用对话
-- 工具调用
-- 多数业务 agent
-- code agent 的起点
-
-### `ConversationalAgent`
-
-偏对话助手，适合配合记忆系统使用。
-
-适合：
-
-- 多轮聊天
-- 记住用户信息
-- 长对话
-
-### `PlanningAgent`
-
-偏规划执行。
-
-适合：
-
-- 复杂任务拆解
-- 需要“先计划、再执行”的流程
-
-### `ReactAgent`
-
-偏显式推理流程。
-
-适合：
-
-- 你想让 agent 的“思考 - 行动 - 观察”过程更明显
-- 调试工具调用过程
-
-### `StructuredOutputAgent`
-
-偏结构化抽取。
-
-适合：
-
-- 从文本提取固定字段
-- 输出必须符合某个 Pydantic 模型
-
-如果你还是不确定：
-
-> 先用 `BasicAgent`，后面再根据场景切换。
-
----
-
-## 常见使用方式
-
-这一节不讲底层原理，只讲你最可能真正会写的代码。
-
----
-
-## 1. 最基础的对话 Agent
+## 4. 20 行最小 Code Agent
 
 ```python
-from easyagent import BasicAgent, EasyLLM
+from easyagent import BasicAgent, Config, EasyLLM
+from easyagent.tools import ToolRegistry, register_filesystem_tools, register_shell_tools
 
 llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
+    provider="anthropic_native",
+    api_key="test",
+    base_url="http://127.0.0.1:5124",
+    model="deepseek-v4-flash:zenmux:claude",
 )
 
-agent = BasicAgent(
-    name="chat-assistant",
-    llm=llm,
-    system_prompt="你是一个清晰、准确、简洁的中文助手。",
-)
-
-print(agent.invoke("解释一下什么是 session restore。"))
-```
-
-适合用在：
-
-- 单轮问答
-- 简单多轮对话
-- 原型验证
-
-你只需要关心两件事：
-
-- `EasyLLM` 配对了没有
-- `system_prompt` 是否符合你的角色设定
-
----
-
-## 2. 带工具的 Agent
-
-这是最常见的下一步。
-
-### 2.1 用装饰器快速定义工具
-
-```python
-from pydantic import BaseModel, Field
-
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-
-
-class SearchParams(BaseModel):
-    query: str = Field(description="搜索关键词")
-
-
+config = Config(tool_schema_mode="deferred")
 registry = ToolRegistry()
-
-
-@registry.tool(
-    name="search_docs",
-    description="搜索项目文档",
-    parameters=SearchParams,
-)
-def search_docs(query: str) -> str:
-    return f"搜索结果: {query}"
-
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-agent = BasicAgent(
-    name="tool-agent",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-)
-
-print(agent.invoke("请搜索和 session 相关的文档"))
-```
-
-### 2.2 什么时候该启用工具
-
-适合启用工具的场景：
-
-- 需要读文件
-- 需要查数据库
-- 需要搜索知识库
-- 需要调用外部服务
-- 需要做多步处理
-
-不适合的场景：
-
-- 只是普通聊天
-- 明明只靠提示词就能解决的问题
-
-### 2.3 什么时候该写复杂工具
-
-如果你的工具只是：
-
-- 搜索
-- 计算
-- 简单查询
-
-装饰器通常就够了。
-
-如果你的工具有复杂语义，比如：
-
-- 启动子 agent
-- 广播消息
-- 进入 worktree
-- 读取 mailbox
-- 调用 MCP 资源
-
-那就应该写成正式 Tool 类，并把说明写清楚。
-
----
-
-## 3. 结构化输出
-
-如果你不是想要“一段回答”，而是想要“一个结构化对象”，可以用 `StructuredOutputAgent`。
-
-```python
-from pydantic import BaseModel, Field
-
-from easyagent import EasyLLM, StructuredOutputAgent
-
-
-class PersonInfo(BaseModel):
-    name: str = Field(description="姓名")
-    age: int = Field(description="年龄")
-    job: str = Field(description="职业")
-
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-agent = StructuredOutputAgent(
-    name="extractor",
-    llm=llm,
-    output_model=PersonInfo,
-)
-
-result = agent.invoke("张三今年 25 岁，是一名后端工程师。")
-print(result.model_dump())
-```
-
-适合：
-
-- 信息抽取
-- 数据清洗
-- 表单解析
-- 结构化摘要
-
-如果你在做业务系统，这类能力会非常常用。
-
----
-
-## 4. 带记忆的对话 Agent
-
-如果你希望 agent 能记住对话内容，可以使用 `ConversationalAgent` 配合记忆系统。
-
-```python
-from easyagent import ConversationalAgent, EasyLLM
-from easyagent.memory import MemoryConfig, MemoryManage
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-memory_manage = MemoryManage(
-    config=MemoryConfig(),
-    user_id="demo-user",
-    enable_working=True,
-    enable_episodic=False,
-    enable_semantic=False,
-    enable_perceptual=False,
-)
-
-agent = ConversationalAgent(
-    name="memory-chat",
-    llm=llm,
-    memory_manage=memory_manage,
-)
-
-agent.invoke("我叫张三，我最近在看 EasyAgent。")
-print(agent.invoke("你还记得我刚刚说了什么吗？"))
-```
-
-适合：
-
-- 客服助手
-- 个人助理
-- 长期陪伴类 agent
-- 需要记住用户偏好的对话系统
-
----
-
-## 5. 规划型 Agent
-
-当任务比较复杂时，先规划再执行通常更稳。
-
-```python
-from easyagent import EasyLLM, PlanningAgent, ToolRegistry
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-registry = ToolRegistry()
-
-agent = PlanningAgent(
-    name="planner",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-    max_steps=8,
-    allow_replan=True,
-)
-
-result = agent.invoke("给我做一份 EasyAgent 的学习计划，按阶段拆成 7 天。")
-print(result)
-```
-
-适合：
-
-- 长任务
-- 研究任务
-- 报告生成
-- 复杂自动化流程
-
----
-
-## 6. ReAct 风格 Agent
-
-如果你想让推理过程更显式，可以使用 `ReactAgent`。
-
-```python
-from easyagent import EasyLLM, ReactAgent, ToolRegistry
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-registry = ToolRegistry()
-
-agent = ReactAgent(
-    name="react-agent",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-)
-
-print(agent.invoke("分析一下当前任务应该怎么拆解。"))
-```
-
-适合：
-
-- 你希望中间过程更清楚
-- 你在调试 agent 的思路
-- 你想更容易观察工具调用过程
-
----
-
-## 7. 多智能体协作
-
-EasyAgent 已经支持正式的多智能体协作，不只是“一个工具调用另一个 agent”。
-
-你可以做：
-
-- 启动子 agent
-- 查询子 agent 状态
-- 等待子 agent 完成
-- 停止子 agent
-- 创建 team
-- 给 agent 或 team 发消息
-- 读取和确认 mailbox
-
-### 7.1 一个最小协作示例
-
-```python
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-from easyagent.runtime import AgentRuntimeManager, TeamManager
-from easyagent.tools import register_agent_tool, register_agent_runtime_tools
-
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-registry = ToolRegistry()
-team_manager = TeamManager()
-
-
-def agent_factory(request):
-    return BasicAgent(
-        name=request.name or "subagent",
-        llm=llm,
-        enable_tool=False,
-    )
-
-
-agent_runtime = AgentRuntimeManager(
-    agent_factory=agent_factory,
-    team_manager=team_manager,
-)
-
-register_agent_tool(registry, agent_runtime=agent_runtime)
-register_agent_runtime_tools(registry, agent_runtime=agent_runtime)
-
-manager = BasicAgent(
-    name="manager",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-    agent_runtime=agent_runtime,
-    team_manager=team_manager,
-)
-
-print(manager.invoke("启动一个子 agent，总结 docs 目录的用途。"))
-```
-
-### 7.2 适合什么场景
-
-适合：
-
-- manager / worker 模式
-- 任务拆分
-- 并行探索
-- 多角色协作
-
-如果你在做 code agent，这一块很重要。
-
----
-
-## 8. Session 保存与恢复
-
-当你希望 agent 支持“下次继续”时，可以用 session。
-
-### 8.1 保存 session
-
-```python
-agent.save_session("demo-session")
-```
-
-### 8.2 恢复 session
-
-```python
-from easyagent import BasicAgent
-
-restored = BasicAgent.load_session(
-    "demo-session",
-    llm=llm,
-)
-
-print(restored.get_last_restore_report())
-```
-
-### 8.3 适合什么场景
-
-适合：
-
-- 长时间任务
-- 中断恢复
-- 多轮协作任务
-- 长期运行的 code agent
-
-### 8.4 什么时候应该关注 restore report
-
-如果你有这些能力：
-
-- 多 agent
-- MCP
-- 代码智能
-- 任务系统
-
-那就应该查看：
-
-```python
-report = restored.get_last_restore_report()
-print(report)
-```
-
-因为恢复不一定永远是“完全无损”的，报告可以告诉你哪些能力恢复成功、哪些是降级恢复。
-
----
-
-## 9. 权限控制
-
-只要 agent 能做文件写入、命令执行、外部调用，就应该考虑权限控制。
-
-### 9.1 最简单的权限示例
-
-```python
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-from easyagent.permissions import (
-    PermissionBehavior,
-    PermissionContext,
-    PermissionMode,
-    PermissionRule,
-)
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-permission_context = PermissionContext(mode=PermissionMode.ACCEPT_EDITS)
-permission_context.add_rule(
-    PermissionRule(
-        tool_name="Bash",
-        behavior=PermissionBehavior.ASK,
-        matcher={"command_prefixes": ["git", "pytest"]},
-        description="shell 命令默认要求确认",
-    ),
-    source="project",
-)
-
-agent = BasicAgent(
-    name="safe-agent",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=ToolRegistry(),
-    permission_context=permission_context,
-)
-```
-
-### 9.2 一般怎么用
-
-常见做法是：
-
-- 默认保守
-- 对某些工具明确放行
-- 对高风险工具要求确认
-
-特别是 code agent 场景，权限控制通常不是“锦上添花”，而是必须项。
-
----
-
-## 10. Hook 与 Guardrail
-
-如果你希望在请求前后、工具前后加额外控制，可以用 hook。
-
-如果你希望快速启用常见安全策略，可以用 guardrail。
-
-### 10.1 使用默认 guardrails
-
-```python
-from easyagent import BasicAgent, EasyLLM
-from easyagent.guardrails import build_default_hook_manager
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-hook_manager = build_default_hook_manager()
-
-agent = BasicAgent(
-    name="guarded-agent",
-    llm=llm,
-    hook_manager=hook_manager,
-)
-```
-
-### 10.2 适合什么时候启用
-
-适合：
-
-- 你担心危险命令
-- 你担心 prompt injection
-- 你要处理外部不可信输入
-- 你需要对工具返回内容做清洗
-
----
-
-## 11. Code Intelligence
-
-如果你在做 code agent，不要只靠 `FileRead + Grep`。
-
-EasyAgent 已经提供正式的代码智能支持，可以做：
-
-- definition
-- references
-- document symbols
-- workspace symbols
-- diagnostics
-
-### 11.1 最小接入方式
-
-```python
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-from easyagent.codeintel import CodeIntelManager, LSPCodeIntelProvider
-from easyagent.tools import register_codeintel_tools
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-registry = ToolRegistry()
-
-codeintel = CodeIntelManager(
-    provider=LSPCodeIntelProvider(),
-)
-
-register_codeintel_tools(registry, manager=codeintel)
+register_filesystem_tools(registry, workspace_root=".")
+register_shell_tools(registry, workspace_root=".", expose_in_deferred=False)
 
 agent = BasicAgent(
     name="code-agent",
     llm=llm,
     enable_tool=True,
+    config=config,
     tool_registry=registry,
 )
-
-print(agent.invoke("查找 runtime/context.py 里 ExecutionContext 的定义。"))
 ```
 
-### 11.2 它对用户意味着什么
+更完整的产品装配示例见：
 
-意味着你的 agent 会更容易：
+- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
 
-- 理解符号关系
-- 找定义和引用
-- 获取诊断信息
-- 在大型仓库里更稳地工作
+## 5. 公共 SDK 导入方式
 
----
+新项目建议统一从 `easyagent` 或 `easyagent.*` 导入，而不是直接依赖内部目录。
 
-## 12. MCP 集成
-
-如果你已经有 MCP server，EasyAgent 可以直接接入。
-
-### 12.1 最基础的 MCP 示例
+常见导入：
 
 ```python
-from easyagent import BasicAgent, EasyLLM, ToolRegistry
-from easyagent.mcp import register_mcp_tools
-
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
-
-registry = ToolRegistry()
-
-mcp_manager = register_mcp_tools(
-    registry=registry,
-    server_source=["python", "./mcp/examples/real_python_mcp_server.py"],
-    tool_prefix="mcp_",
-    include_resources=True,
-)
-
-agent = BasicAgent(
-    name="mcp-agent",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-)
-
-print(agent.invoke("请调用 mcp_calc 计算 12 * 7"))
-
-mcp_manager.close()
+from easyagent import BasicAgent, EasyLLM, Config
+from easyagent.tools import ToolRegistry, register_filesystem_tools, register_shell_tools
+from easyagent.permissions import PermissionContext, PermissionEngine, PermissionRule
+from easyagent.callbacks import CallbackManager, StreamingCallback
+from easyagent.prompting import PromptBlock, BasePromptComposer
+from easyagent.reminders import RuntimeReminder, BaseRuntimeReminderSource
 ```
 
-### 12.2 什么时候适合 MCP
+完整公共 API 索引见：
 
-适合：
+- [Framework API](./docs/framework_api.md)
 
-- 你已经有 MCP server 生态
-- 你不想把所有能力都写成本地 Tool
-- 你需要接第三方系统能力
+## 6. 文档导航
 
----
+### 6.1 入门与公共 API
 
-## 13. Observability
+- [Framework API](./docs/framework_api.md)
+- [Config Reference](./docs/config_reference.md)
+- [Agent Guide](./docs/agent_guide.md)
+- [LLM Provider Guide](./docs/llm_provider_guide.md)
+- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
 
-当 agent 变复杂以后，单靠打印日志通常不够。
+### 6.2 Tool 系统
 
-EasyAgent 已经有统一的 observability 能力，你可以直接查看：
+- [Tool System Guide](./docs/tool_system_guide.md)
+- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
+- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
+- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
 
-- 调用了多少次 LLM
-- 调了哪些工具
-- 最近发生了哪些事件
-- 当前 trace 摘要
+### 6.3 Prompt、Reminder、Skill
 
-### 13.1 常用接口
+- [Prompt System Guide](./docs/prompt_system_guide.md)
+- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
+- [Runtime Reminders Guide](./docs/runtime_reminders_guide.md)
+- [Skill System Guide](./docs/skill_system_guide.md)
 
-```python
-summary = agent.get_observability_summary()
-recent = agent.get_recent_observability_events()
-trace = agent.get_trace_summary()
+### 6.4 Context、Memory、Session
 
-print(summary)
-print(recent)
-print(trace)
-```
+- [Memory System Guide](./docs/memory_system_guide.md)
+- [Context And Compaction Guide](./docs/context_and_compaction_guide.md)
+- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
 
-这对调试和优化都很有帮助。
+### 6.5 Runtime、Task、Permission、Hook、Callback
 
-如果你后面要做：
+- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
+- [Tasks Guide](./docs/tasks_guide.md)
+- [Permissions Guide](./docs/permissions_guide.md)
+- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
+- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
 
-- 成本统计
-- 请求分析
-- 失败排查
-- benchmark
+### 6.6 扩展能力
 
-这部分会很重要。
+- [MCP Guide](./docs/mcp_guide.md)
+- [CodeIntel Guide](./docs/codeintel_guide.md)
+- [Observability And Cache Guide](./docs/observability_and_cache_guide.md)
+- [RAG Guide](./docs/rag_guide.md)
+- [Worktree Guide](./docs/worktree_guide.md)
 
----
+## 7. 核心概念总览
 
-## 14. RAG
+### Agent
 
-如果你想基于知识库来回答问题，可以用 RAG 子系统。
+`BaseAgent` 是运行时基座，`BasicAgent` 是默认可用的通用实现。
+Agent 负责把 LLM、Tool、Skill、History、Callback、Hook、Permission、Runtime 组装起来。
 
-```python
-from easyagent import EasyLLM
-from easyagent.rag import (
-    ChromaVectorStore,
-    DocumentLoader,
-    OpenAIEmbedding,
-    RAGPipeline,
-    RecursiveCharacterChunker,
-    VectorRetriever,
-)
+详见：
 
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="122",
-    model="qwen3.5-9b",
-)
+- [Agent Guide](./docs/agent_guide.md)
 
-loader = DocumentLoader()
-chunker = RecursiveCharacterChunker(chunk_size=500)
-embedding = OpenAIEmbedding()
-vectorstore = ChromaVectorStore(collection_name="demo_kb")
-retriever = VectorRetriever(vectorstore=vectorstore, embedding=embedding, k=5)
+### EasyLLM / Provider
 
-pipeline = RAGPipeline(
-    llm=llm,
-    embedding=embedding,
-    vectorstore=vectorstore,
-    loader=loader,
-    chunker=chunker,
-    retriever=retriever,
-)
-```
+`EasyLLM` 是统一的模型访问层。
+框架通过 provider 适配不同协议，例如 `openai`、`openai_responses`、`google_native`、`anthropic_native`。
 
-适合：
+详见：
 
-- 文档问答
-- 内部知识库
-- 检索增强型 agent
+- [LLM Provider Guide](./docs/llm_provider_guide.md)
 
----
+### Tool
 
-## 15. Skill
+Tool 是 Agent 的执行能力。
+EasyAgent 提供 Tool 基类、ToolRegistry、权限判定、确认中断、deferred schema、runtime/turn 可见性，以及大量 builtin tools。
 
-Skill 适合把某些能力做成“按需挂载”的形式，而不是一直塞进主 prompt 或固定工具集里。
+详见：
 
-常见用途：
+- [Tool System Guide](./docs/tool_system_guide.md)
+- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
+- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
 
-- 复用一组 prompt 逻辑
-- 按需激活特定能力
-- 把 MCP prompt 接进框架
+### Prompt / Runtime Reminder
 
-公共导入：
+EasyAgent 不把所有上下文都塞进 system prompt。
+系统提示词、runtime reminder、on-demand expansion、dynamic tail 是不同层，目的包括更清晰的请求结构和更稳定的 cache 前缀。
 
-```python
-from easyagent.skills import BaseSkill, SkillManager, SkillRegistry
-```
+详见：
 
-如果你暂时不需要 Skill，可以完全跳过这一块。
+- [Prompt System Guide](./docs/prompt_system_guide.md)
+- [Runtime Reminders Guide](./docs/runtime_reminders_guide.md)
 
----
+### Skill
 
-## 16. 如何自定义 Tool
+Skill 是“能力包”，可以同时提供：
 
-这是大多数用户最常做的扩展方式。
+- prompt 片段
+- tool
+- context source
+- 按需激活逻辑
 
-### 16.1 简单工具：用装饰器
+详见：
 
-```python
-from pydantic import BaseModel, Field
+- [Skill System Guide](./docs/skill_system_guide.md)
 
-from easyagent import ToolRegistry
+### Context / Memory / History Compaction
 
+Context 模块负责“请求时附加上下文”，Memory 模块负责“长期或工作记忆”，Compaction 负责“当上下文过长时如何压缩历史”。
 
-class WeatherParams(BaseModel):
-    city: str = Field(description="城市名")
+详见：
 
+- [Memory System Guide](./docs/memory_system_guide.md)
+- [Context And Compaction Guide](./docs/context_and_compaction_guide.md)
 
-registry = ToolRegistry()
+### Session
 
+Session 模块负责持久化 agent 快照和消息历史，并提供恢复报告。
 
-@registry.tool(
-    name="get_weather",
-    description="查询城市天气",
-    parameters=WeatherParams,
-)
-def get_weather(city: str) -> str:
-    return f"{city} 今天天气晴朗"
-```
+详见：
 
-这种方式适合：
+- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
 
-- 参数简单
-- 逻辑简单
-- 不需要复杂返回结构
+### Runtime / Team / Task / Mailbox
 
-### 16.2 正式工具：继承 `Tool`
+Runtime 负责 subagent、background task、team 协作、mailbox 广播和执行上下文管理。
 
-如果你的工具：
+详见：
 
-- 语义复杂
-- 有明确风险级别
-- 需要返回结构化数据
-- 需要提供详细的工具说明
+- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
+- [Tasks Guide](./docs/tasks_guide.md)
 
-建议用正式类。
+### Permission / Hook / Callback
 
-```python
-from pydantic import BaseModel, Field
+- Permission：决定某个工具调用是 Ask、Allow 还是 Deny
+- Hook：在关键执行点阻塞、修改、放行 payload
+- Callback：做非阻塞观测、UI 更新、日志采集
 
-from easyagent import Tool, ToolResult
+详见：
 
+- [Permissions Guide](./docs/permissions_guide.md)
+- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
+- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
 
-class SearchParams(BaseModel):
-    query: str = Field(description="搜索关键词")
+### MCP / CodeIntel / RAG / Worktree
 
+这些是更偏产品增强的扩展层：
 
-class SearchDocsTool(Tool):
-    def __init__(self):
-        super().__init__(
-            name="search_docs",
-            description="搜索内部文档",
-            parameters=SearchParams,
-            guidance="用于查找 README、API 文档、架构文档等文本内容。",
-            read_only=True,
-            source="custom",
-            tags=["docs", "search"],
-            side_effect_level="none",
-            resource_scope=["docs"],
-        )
+- MCP：远程工具与资源接入
+- CodeIntel：定义、引用、诊断、符号
+- RAG：知识库与检索增强
+- Worktree：隔离执行环境
 
-    def run(self, parameters: dict) -> ToolResult:
-        query = parameters["query"]
-        payload = {
-            "query": query,
-            "results": [
-                {"title": "README", "snippet": "框架用法总览"},
-                {"title": "framework_api", "snippet": "公共 API 说明"},
-            ],
-        }
-        return ToolResult.success(
-            content="已完成搜索",
-            structured_data=payload,
-            metadata={"query": query},
-        )
-```
+详见：
 
-### 16.3 实践建议
+- [MCP Guide](./docs/mcp_guide.md)
+- [CodeIntel Guide](./docs/codeintel_guide.md)
+- [RAG Guide](./docs/rag_guide.md)
+- [Worktree Guide](./docs/worktree_guide.md)
 
-- 简单工具用装饰器
-- 复杂工具用正式类
-- 复杂工具一定要把描述写清楚
-- 工具返回不要只给一句模糊文本，能结构化就结构化
+## 8. 模块集成顺序建议
 
----
-
-## 17. 如何自定义 Agent
-
-大多数时候，你不需要一开始就写一个全新的 Agent 类。
-
-更推荐的顺序是：
-
-1. 先配置 `system_prompt`
-2. 再加 Tool
-3. 再加 Permission / Hook / Task / Runtime
-4. 最后如果真的需要，再写自己的 Agent 子类
-
-### 17.1 一个很轻的 Agent 子类
-
-```python
-from easyagent import BasicAgent
-
-
-class ReviewAgent(BasicAgent):
-    def invoke(self, query: str, max_iter: int = 10, temperature: float = 0.7, **kwargs):
-        query = (
-            "请以代码评审模式回答。优先指出 bug、行为回归、缺失测试和风险。\n\n"
-            f"{query}"
-        )
-        return super().invoke(query, max_iter=max_iter, temperature=temperature, **kwargs)
-```
-
-适合什么时候写子类：
-
-- 你要固定某种角色
-- 你要固定某种调用风格
-- 你希望业务代码直接用你的 agent 类型，而不是每次手动组装
-
-如果你只是想改一段提示词，不值得单独写子类。
-
----
-
-## 18. 如何自定义 Provider
-
-多数用户其实不需要自定义 provider。
-
-### 18.1 先判断你是不是真的需要
-
-如果你的模型服务是 OpenAI-compatible，那么通常直接这样就行：
-
-```python
-llm = EasyLLM(
-    provider="openai",
-    base_url="http://your-gateway/v1",
-    api_key="your-key",
-    model="your-model",
-)
-```
-
-这已经能覆盖很多实际场景：
-
-- 自建代理
-- 本地推理网关
-- vLLM
-- Ollama OpenAI-compatible
-- 其他兼容 OpenAI 协议的服务
-
-### 18.2 当前内置 provider
-
-开箱可用的主要 provider 有：
-
-- `openai`
-- `openai_responses`
-- `google` / `gemini`
-- `google_native` / `gemini_native`
-- `anthropic` / `claude`
-- `anthropic_native` / `claude_native`
-
-以及一些 OpenAI-compatible alias：
-
-- `deepseek`
-- `qwen`
-- `kimi`
-- `moonshot`
-- `zhipu`
-- `glm`
-- `ollama`
-- `vllm`
-- `modelscope`
-
-### 18.3 真要自定义 provider 时怎么做
-
-如果你接的不是现有协议，才需要新增 provider。
-
-这时通常需要做两件事：
-
-1. 写一个 provider 适配器，负责：
-   - 把 EasyAgent 的请求组装成你的 SDK 请求
-   - 发起同步/异步/流式调用
-   - 从响应里提取 usage
-2. 如果你的响应格式和现有 provider 差异很大，再补一个响应解析适配层
-
-从使用者角度理解就够了：
-
-> 你要告诉 EasyAgent 两件事：怎么发请求，怎么读响应。
-
-### 18.4 现实建议
-
-如果你不是在做框架扩展，而是在做业务，优先走这条路：
-
-- 能用 OpenAI-compatible 就别新写 provider
-- 能复用现有 provider 就别新开一种 provider 名称
-
-这是更稳、更省维护成本的做法。
-
----
-
-## 模块可自定义程度
-
-这一节只从“使用者视角”说明哪些部分容易改，哪些适合后改。
-
-### 非常适合业务层直接自定义
-
-- `system_prompt`
-- Tool
-- `ToolRegistry`
-- 权限规则
-- Hook / Guardrail
-- 任务系统用法
-- session 使用方式
-- observability 使用方式
-
-### 中等适合自定义
-
-- Agent 子类
-- 多智能体协作模式
-- MCP 接入方式
-- RAG 组合方式
-- Memory 组合方式
-
-### 更适合框架层扩展，而不是业务层先动
-
-- provider 适配
-- 新的响应解析协议
-- 更深的运行时策略
-
-如果你是业务使用者，建议先把“能配置的能力”用满，再考虑改底层。
-
----
-
-## 推荐阅读顺序
-
-如果你是第一次接触这个仓库，建议这样看：
-
-### 想快速上手
-
-1. 本 README
-2. [docs/framework_api.md](./docs/framework_api.md)
-3. [example/README.md](./example/README.md)
-4. [example/example_phaseg_sdk_release.py](./example/example_phaseg_sdk_release.py)
-
-### 想做 code agent
-
-1. 本 README
-2. [docs/current_execution_plan.md](./docs/current_execution_plan.md)
-3. [example/example_phase1a_permission_task_session.py](./example/example_phase1a_permission_task_session.py)
-4. [example/example_phase23_mailbox_collaboration_complete.py](./example/example_phase23_mailbox_collaboration_complete.py)
-5. [example/example_phased_codeintel_lsp_v1.py](./example/example_phased_codeintel_lsp_v1.py)
-
-### 想做会恢复、可长期运行的 agent
-
-1. [example/example_phasec_restore_report_lifecycle.py](./example/example_phasec_restore_report_lifecycle.py)
-2. [example/example_phasei_observability_metrics.py](./example/example_phasei_observability_metrics.py)
-3. [example/example_phasej_provider_usage_extraction.py](./example/example_phasej_provider_usage_extraction.py)
-
-### 想接 MCP
-
-1. [example/example_phasef_mcp_engineering.py](./example/example_phasef_mcp_engineering.py)
-2. [example/example_mcp_filesystem_updated.py](./example/example_mcp_filesystem_updated.py)
-
----
-
-## FAQ
-
-### 我应该默认用哪个 Agent？
-
-默认先用 `BasicAgent`。
-
-### 如果只是普通问答，是不是没必要用这个框架？
-
-看需求。
-
-- 只是一次性聊天：可能没必要
-- 后面要加工具、权限、恢复、协作：很有必要
-
-### 多智能体是不是必须一开始就上？
-
-不是。
-
-最好的做法通常是：
-
-1. 先做单智能体
-2. 先把工具、权限、session 跑通
-3. 再加多智能体
-
-### 我做 code agent，一开始最值得接的能力是什么？
-
-建议顺序：
-
-1. Tool
-2. 权限系统
-3. Session
-4. Code Intelligence
-5. 多智能体协作
-6. MCP
-7. Observability
-
-### 我一定要看内部源码才能用吗？
-
-不需要。
-
-你可以先把 README、公共 API 文档和示例跑起来，再按需要深入源码。
-
-### 我只想知道框架支持什么能力，有没有索引？
-
-有：
-
-- [docs/framework_api.md](./docs/framework_api.md)
-- [example/README.md](./example/README.md)
-- [docs/current_execution_plan.md](./docs/current_execution_plan.md)
-
----
-
-## 总结
-
-如果你把 EasyAgent 当成一个“可组合的 Agent 框架”，会最容易用对它。
-
-推荐你从下面这条路径开始：
+如果你要从零做一个产品，推荐按这个顺序接模块：
 
 1. `EasyLLM`
 2. `BasicAgent`
-3. `ToolRegistry`
-4. 权限控制
-5. Session
-6. 根据需要接入多智能体、MCP、Code Intelligence、RAG、Memory
+3. `Config`
+4. `ToolRegistry` + builtin tools
+5. `PermissionContext` / `PermissionEngine`
+6. `CallbackManager`
+7. `PromptBlock` / runtime reminders
+8. `SkillManager`
+9. `SessionStore` / `ConversationStore`
+10. `ObservabilityRecorder`
+11. 视场景继续接 `Runtime` / `MCP` / `CodeIntel` / `Memory` / `RAG`
 
-如果你现在就准备开始写代码，下一步建议直接看：
+## 9. 最常见的三条产品路径
 
-- [docs/framework_api.md](./docs/framework_api.md)
-- [example/README.md](./example/README.md)
+### 9.1 通用 Agent
+
+适合问答、工具调用和基本会话。
+
+重点阅读：
+
+- [Agent Guide](./docs/agent_guide.md)
+- [Tool System Guide](./docs/tool_system_guide.md)
+- [Prompt System Guide](./docs/prompt_system_guide.md)
+
+### 9.2 Code Agent
+
+适合本地仓库分析、读写文件、shell、子 agent、worktree。
+
+重点阅读：
+
+- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
+- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
+- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
+- [Permissions Guide](./docs/permissions_guide.md)
+- [Worktree Guide](./docs/worktree_guide.md)
+- [CodeIntel Guide](./docs/codeintel_guide.md)
+
+### 9.3 Multi-Agent 协作系统
+
+适合 manager + worker、广播、后台子任务、结构化任务推进。
+
+重点阅读：
+
+- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
+- [Tasks Guide](./docs/tasks_guide.md)
+- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
+
+## 10. 你最可能先问的几个问题
+
+### 怎么自定义系统提示词
+
+看：
+
+- [Prompt System Guide](./docs/prompt_system_guide.md)
+- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
+
+### 怎么自定义工具
+
+看：
+
+- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
+- [Tool System Guide](./docs/tool_system_guide.md)
+
+### deferred tool 到底怎么工作
+
+看：
+
+- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
+
+### 怎么把 memory / session / callback / hook 接到 agent
+
+看：
+
+- [Memory System Guide](./docs/memory_system_guide.md)
+- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
+- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
+- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
+
+### 内置工具都有哪些
+
+看：
+
+- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
+
+## 11. FAQ
+
+### 文档为什么拆成这么多文件
+
+因为 EasyAgent 不是单一功能库。
+Agent、Tool、Prompt、Permission、Runtime、Session、MCP、Memory、Cache 都是独立主题；把所有细节都塞进一个 README 会不可维护。
+
+### README 和 `docs/` 的关系是什么
+
+README 是总入口，负责：
+
+- 快速开始
+- 核心概念
+- 阅读路径
+- 各主题索引
+
+`docs/` 负责：
+
+- 参数逐项解释
+- 内部机制说明
+- 模块集成细节
+- 自定义与扩展方式
+
+### 我应该先看哪几份
+
+通常推荐：
+
+1. `README.md`
+2. [Framework API](./docs/framework_api.md)
+3. [Agent Guide](./docs/agent_guide.md)
+4. [Config Reference](./docs/config_reference.md)
+5. 按你的场景继续看 Tool / Prompt / Runtime / Memory / Session

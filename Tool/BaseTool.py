@@ -40,6 +40,7 @@ class ToolSpec:
     side_effect_level: ToolSideEffectLevel = "none"
     resource_scope: list[str] = field(default_factory=list)
     visibility_scope: ToolVisibilityScope = "resident"
+    expose_in_deferred: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def parameter_schema(self) -> dict[str, Any]:
@@ -142,6 +143,7 @@ class ToolSpec:
             "side_effect_level": self.side_effect_level,
             "resource_scope": list(self.resource_scope),
             "visibility_scope": self.visibility_scope,
+            "expose_in_deferred": self.expose_in_deferred,
             "parameters": self.parameter_schema(),
             "metadata": dict(self.metadata),
         }
@@ -160,6 +162,7 @@ class ToolSpec:
             "side_effect_level": self.side_effect_level,
             "resource_scope": list(self.resource_scope),
             "visibility_scope": self.visibility_scope,
+            "expose_in_deferred": self.expose_in_deferred,
             "metadata": dict(self.metadata),
         }
 
@@ -264,6 +267,7 @@ class Tool(ABC):
         side_effect_level: Optional[ToolSideEffectLevel] = None,
         resource_scope: Optional[list[str]] = None,
         visibility_scope: ToolVisibilityScope = "resident",
+        expose_in_deferred: bool = False,
         metadata: Optional[dict[str, Any]] = None,
     ):
         resolved_side_effect_level: ToolSideEffectLevel
@@ -296,6 +300,7 @@ class Tool(ABC):
             side_effect_level=resolved_side_effect_level,
             resource_scope=list(resource_scope or []),
             visibility_scope=visibility_scope,
+            expose_in_deferred=expose_in_deferred,
             metadata=dict(metadata or {}),
         )
         self.name = self.spec.name
@@ -347,6 +352,7 @@ class Tool(ABC):
             side_effect_level=self.spec.side_effect_level,
             resource_scope=list(self.spec.resource_scope),
             visibility_scope=self.spec.visibility_scope,
+            expose_in_deferred=self.spec.expose_in_deferred,
             metadata=dict(self.spec.metadata),
         )
 

@@ -428,7 +428,12 @@ class MemoryMaintenanceTool(Tool):
 # ==========================================
 # 便利注册接口
 # ==========================================
-def register_memory_tools(memory_manage: MemoryManage, registry: ToolRegistry):
+def register_memory_tools(
+    memory_manage: MemoryManage,
+    registry: ToolRegistry,
+    *,
+    expose_in_deferred: bool | None = True,
+):
     """
     一键向 ToolRegistry 里注册所有的 Memory 细分工具。
     """
@@ -442,5 +447,5 @@ def register_memory_tools(memory_manage: MemoryManage, registry: ToolRegistry):
         MemoryMaintenanceTool(memory_manage)
     ]
     for tool in tools:
-        registry.register_tool(tool)
+        registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     logger.info(f"成功将 {len(tools)} 个 Memory 工具注册到系统。")

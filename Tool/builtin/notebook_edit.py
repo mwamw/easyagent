@@ -263,9 +263,10 @@ def register_notebook_edit_tool(
     *,
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> NotebookEditTool:
     tool = NotebookEditTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

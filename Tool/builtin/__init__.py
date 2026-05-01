@@ -19,6 +19,7 @@ from .file_edit import FileEditTool, register_file_edit_tool
 from .bash_tool import BashTool, register_bash_tool, register_shell_tools
 from .task_output import TaskOutputTool, register_task_output_tool
 from .task_stop import TaskStopTool, register_task_stop_tool
+from .tool_schema_tool import ToolSchemaTool, register_tool_schema_tool
 from .web_fetch import WebFetchTool, register_web_fetch_tool
 from .todo_write import TodoWriteTool, register_todo_write_tool
 from .agent_tool import AgentTool, register_agent_tool
@@ -93,6 +94,7 @@ __all__ = [
     "BashTool",
     "TaskOutputTool",
     "TaskStopTool",
+    "ToolSchemaTool",
     "WebFetchTool",
     "TodoWriteTool",
     "AgentTool",
@@ -136,6 +138,7 @@ __all__ = [
     "register_bash_tool",
     "register_task_output_tool",
     "register_task_stop_tool",
+    "register_tool_schema_tool",
     "register_shell_tools",
     "register_web_fetch_tool",
     "register_todo_write_tool",

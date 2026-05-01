@@ -36,6 +36,49 @@ def _avg_ms(items: list[dict[str, Any]]) -> Optional[float]:
     return sum(values) / len(values)
 
 
+def _normalize_cache_accounting(item: dict[str, Any]) -> tuple[int, int, int]:
+    semantics = str(item.get("cacheUsageSemantics") or "unknown")
+    input_tokens = int(item.get("inputTokens") or 0)
+    cached_input_tokens = int(item.get("cachedInputTokens") or 0)
+    cache_read_tokens = int(item.get("cacheReadTokens") or 0)
+
+    if semantics == "anthropic_style":
+        prompt_cached = cache_read_tokens
+        prompt_uncached = input_tokens
+        prompt_total = prompt_cached + prompt_uncached
+        return prompt_total, prompt_uncached, prompt_cached
+
+    if semantics in {"openai_style", "google_style"}:
+        prompt_total = input_tokens
+        prompt_cached = cached_input_tokens
+        prompt_uncached = max(0, prompt_total - prompt_cached)
+        return prompt_total, prompt_uncached, prompt_cached
+
+    prompt_cached = cache_read_tokens or cached_input_tokens
+    prompt_total = input_tokens if input_tokens > 0 else prompt_cached
+    prompt_uncached = max(0, prompt_total - prompt_cached)
+    return prompt_total, prompt_uncached, prompt_cached
+
+
+def _cache_layer_name(field: str) -> str:
+    value = str(field or "")
+    if value in {"system_hash", "cache_policy_hash"} or value.startswith("system."):
+        return "system"
+    if value in {"tools_hash"} or value.startswith("tools.") or value.startswith("expanded_tool"):
+        return "tools"
+    if value in {"reasoning_hash"} or value.startswith("reasoning."):
+        return "reasoning"
+    if value.startswith("runtime_reminder") or value.startswith("reminder."):
+        return "runtime_reminders"
+    if value.startswith("skill") or "skill" in value:
+        return "skills"
+    if value.startswith("message") or value.startswith("history") or value == "replay_history":
+        return "messages"
+    if value.startswith("provider") or value.startswith("model"):
+        return "provider"
+    return "other"
+
+
 class BaseObservabilityRecorder(ABC):
     @abstractmethod
     def export_state(self) -> dict[str, Any]:
@@ -65,6 +108,7 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
         self._agent_runs: list[dict[str, Any]] = []
         self._llm_requests: list[dict[str, Any]] = []
         self._tool_executions: list[dict[str, Any]] = []
+        self._cache_breaks: list[dict[str, Any]] = []
         self._open_agent_runs: dict[str, dict[str, Any]] = {}
         self._open_llm_requests: dict[str, dict[str, Any]] = {}
         self._open_tool_executions: dict[str, dict[str, Any]] = {}
@@ -77,6 +121,7 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
             "agentRuns": [_json_safe(item) for item in self._agent_runs],
             "llmRequests": [_json_safe(item) for item in self._llm_requests],
             "toolExecutions": [_json_safe(item) for item in self._tool_executions],
+            "cacheBreaks": [_json_safe(item) for item in self._cache_breaks],
         }
 
     def restore_state(self, state: Optional[dict[str, Any]]) -> None:
@@ -87,6 +132,7 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
         self._agent_runs = [dict(item) for item in list(payload.get("agentRuns") or []) if isinstance(item, dict)]
         self._llm_requests = [dict(item) for item in list(payload.get("llmRequests") or []) if isinstance(item, dict)]
         self._tool_executions = [dict(item) for item in list(payload.get("toolExecutions") or []) if isinstance(item, dict)]
+        self._cache_breaks = [dict(item) for item in list(payload.get("cacheBreaks") or []) if isinstance(item, dict)]
         self._open_agent_runs = {}
         self._open_llm_requests = {}
         self._open_tool_executions = {}
@@ -96,6 +142,7 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
         self._agent_runs.clear()
         self._llm_requests.clear()
         self._tool_executions.clear()
+        self._cache_breaks.clear()
         self._open_agent_runs.clear()
         self._open_llm_requests.clear()
         self._open_tool_executions.clear()
@@ -251,6 +298,7 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
             "cacheCreationTokens": cache_creation_tokens,
             "toolUsePromptTokens": tool_use_prompt_tokens,
             "usageSource": usage_source,
+            "cacheUsageSemantics": (metadata or {}).get("cacheUsageSemantics"),
             "errorType": error_type,
             "errorMessage": error_message,
             "costUsd": cost_usd,
@@ -261,6 +309,33 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
         merged_metadata.update(dict(metadata or {}))
         payload["metadata"] = merged_metadata
         self._llm_requests.append(payload)
+        return payload
+
+    def record_cache_break(
+        self,
+        *,
+        reason: str,
+        changed_fields: Optional[list[str]] = None,
+        previous_signature: Optional[dict[str, Any]] = None,
+        current_signature: Optional[dict[str, Any]] = None,
+        previous_cache_read_tokens: Optional[int] = None,
+        current_cache_read_tokens: Optional[int] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        payload = {
+            "id": self._next_event_id("cache_break"),
+            "sessionId": self._session_id,
+            "agentName": self._agent_name,
+            "reason": str(reason or "unknown"),
+            "changedFields": list(changed_fields or []),
+            "previousSignature": _json_safe(previous_signature),
+            "currentSignature": _json_safe(current_signature),
+            "previousCacheReadTokens": previous_cache_read_tokens,
+            "currentCacheReadTokens": current_cache_read_tokens,
+            "metadata": dict(metadata or {}),
+            "createdAt": _now_iso(),
+        }
+        self._cache_breaks.append(payload)
         return payload
 
     def begin_tool_execution(
@@ -373,6 +448,29 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
         cache_read_tokens = sum(int(item.get("cacheReadTokens") or 0) for item in llm_requests)
         cache_creation_tokens = sum(int(item.get("cacheCreationTokens") or 0) for item in llm_requests)
         tool_use_prompt_tokens = sum(int(item.get("toolUsePromptTokens") or 0) for item in llm_requests)
+        prompt_tokens_total = 0
+        prompt_tokens_uncached = 0
+        prompt_tokens_cached = 0
+        cache_layer_breaks = Counter()
+        for item in llm_requests:
+            total_prompt, uncached_prompt, cached_prompt = _normalize_cache_accounting(item)
+            prompt_tokens_total += total_prompt
+            prompt_tokens_uncached += uncached_prompt
+            prompt_tokens_cached += cached_prompt
+        for item in self._cache_breaks:
+            for field in list(item.get("changedFields") or []):
+                cache_layer_breaks[_cache_layer_name(str(field))] += 1
+        cache_hit_tokens = prompt_tokens_cached
+        cache_hit_token_ratio = (
+            float(prompt_tokens_cached) / float(prompt_tokens_total)
+            if prompt_tokens_total > 0
+            else None
+        )
+        request_prefix_signature = None
+        if llm_requests:
+            request_prefix_signature = (
+                (llm_requests[-1].get("metadata") or {}).get("cacheSignature")
+            )
 
         summary = {
             "sessionId": self._session_id,
@@ -392,6 +490,16 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
             "cacheReadTokens": cache_read_tokens,
             "cacheCreationTokens": cache_creation_tokens,
             "toolUsePromptTokens": tool_use_prompt_tokens,
+            "promptTokensTotal": prompt_tokens_total,
+            "promptTokensUncached": prompt_tokens_uncached,
+            "promptTokensCached": prompt_tokens_cached,
+            "cacheHitTokens": cache_hit_tokens,
+            "cacheHitTokenRatio": cache_hit_token_ratio,
+            "cacheHitTokenRatioNormalized": cache_hit_token_ratio,
+            "cacheBreaks": len(self._cache_breaks),
+            "cacheLayerBreaks": dict(cache_layer_breaks),
+            "lastCacheBreak": self._cache_breaks[-1] if self._cache_breaks else None,
+            "requestPrefixSignature": _json_safe(request_prefix_signature),
             "estimatedCostUsd": (sum(costs) if costs else None),
             "avgAgentDurationMs": _avg_ms(agent_runs),
             "avgLlmDurationMs": _avg_ms(llm_requests),
@@ -428,7 +536,9 @@ class InMemoryObservabilityRecorder(BaseObservabilityRecorder):
             events.extend({**item, "eventType": "llm"} for item in self._llm_requests)
         if event_type in {None, "tool"}:
             events.extend({**item, "eventType": "tool"} for item in self._tool_executions)
-        events.sort(key=lambda item: str(item.get("endedAt") or item.get("startedAt") or ""), reverse=True)
+        if event_type in {None, "cache_break"}:
+            events.extend({**item, "eventType": "cache_break"} for item in self._cache_breaks)
+        events.sort(key=lambda item: str(item.get("endedAt") or item.get("startedAt") or item.get("createdAt") or ""), reverse=True)
         return [_json_safe(item) for item in events[: max(1, int(limit))]]
 
     def get_trace_summary(

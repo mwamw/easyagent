@@ -160,6 +160,26 @@ class BaseProvider(ABC):
             return self.get_tool_schema_adapter().export_tools(items)
         return items
 
+    def apply_cache_policy(self, request: Any, request_input: Any) -> Any:
+        from .cache_adapter import create_cache_adapter
+
+        return create_cache_adapter(self.provider_name).apply_cache_policy(request, request_input)
+
+    def get_cache_capability(self) -> Any:
+        from .cache_adapter import create_cache_adapter
+
+        return create_cache_adapter(self.provider_name).capability
+
+    def normalize_usage_metrics(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = {key: value for key, value in dict(payload or {}).items() if value is not None}
+        capability = self.get_cache_capability()
+        normalized.setdefault("cacheUsageSemantics", getattr(capability, "usage_semantics", "unknown"))
+        normalized.setdefault(
+            "supportsCacheUsageFields",
+            bool(getattr(capability, "supports_usage_cache_fields", False)),
+        )
+        return normalized
+
     def wrap_response_with_usage(
         self,
         response: Any,

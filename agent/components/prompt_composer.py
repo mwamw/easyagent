@@ -190,6 +190,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="identity",
                     content=agent.system_prompt or "你是一个有用的 AI 助手，帮助用户回答问题并完成任务。",
                     order=0,
+                    metadata={"cache_partition": "static", "cacheable": True},
                 )
             ]
             blocks.extend(self.build_core_prompt_blocks(agent, start_order=10, include_tool_policy=False))
@@ -207,6 +208,7 @@ class DefaultPromptComposer(BasePromptComposer):
                 name="identity",
                 content="你是一个智能助手，具备使用工具解决问题的能力。",
                 order=0,
+                metadata={"cache_partition": "static", "cacheable": True},
             ),
         ]
         blocks.extend(self.build_core_prompt_blocks(agent, start_order=10, include_tool_policy=True))
@@ -224,9 +226,9 @@ class DefaultPromptComposer(BasePromptComposer):
         include_tool_policy: bool,
     ) -> list[PromptBlock]:
         blocks = [
-            PromptBlock(name="visibility", content=build_visibility_section(), order=start_order),
-            PromptBlock(name="task_execution", content=build_task_execution_section(), order=start_order + 10),
-            PromptBlock(name="safety", content=build_safety_section(), order=start_order + 20),
+            PromptBlock(name="visibility", content=build_visibility_section(), order=start_order, metadata={"cache_partition": "static", "cacheable": True}),
+            PromptBlock(name="task_execution", content=build_task_execution_section(), order=start_order + 10, metadata={"cache_partition": "static", "cacheable": True}),
+            PromptBlock(name="safety", content=build_safety_section(), order=start_order + 20, metadata={"cache_partition": "static", "cacheable": True}),
         ]
         if include_tool_policy:
             blocks.append(
@@ -234,6 +236,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="tool_policy",
                     content=build_tool_policy_section(),
                     order=start_order + 30,
+                    metadata={"cache_partition": "static", "cacheable": True},
                 )
             )
             style_order = start_order + 40
@@ -242,11 +245,12 @@ class DefaultPromptComposer(BasePromptComposer):
 
         blocks.extend(
             [
-                PromptBlock(name="tone_style", content=build_tone_style_section(), order=style_order),
+                PromptBlock(name="tone_style", content=build_tone_style_section(), order=style_order, metadata={"cache_partition": "static", "cacheable": True}),
                 PromptBlock(
                     name="output_efficiency",
                     content=build_output_efficiency_section(),
                     order=style_order + 10,
+                    metadata={"cache_partition": "static", "cacheable": True},
                 ),
             ]
         )
@@ -266,7 +270,10 @@ class DefaultPromptComposer(BasePromptComposer):
         if not agent.tool_registry:
             return ""
         try:
-            tool_descriptions = agent.tool_registry.get_tools_description()
+            tool_descriptions = agent.tool_registry.list_tool_descriptors(
+                stable=True,
+                include_parameters=include_parameters,
+            )
         except Exception as exc:
             logger.error(f"获取工具描述失败: {exc}")
             return "（工具描述获取失败）"
@@ -287,11 +294,18 @@ class DefaultPromptComposer(BasePromptComposer):
         title = "## 可用工具"
         if mode == "compact":
             title = "## 可用工具概览"
+        deferred_note = ""
+        if getattr(getattr(agent, "config", None), "tool_schema_mode", "full") == "deferred":
+            deferred_note = (
+                "当前使用按需工具 schema 模式。先根据下面的概览判断需要哪个工具；"
+                "若该工具当前尚未出现在 tools 集合中，先调用 `tool_schema_tool` 展开，再在后续回合调用目标工具。\n\n"
+            )
 
         return PromptBlock(
             name="tool_inventory",
-            content=f"{title}\n{content}",
+            content=f"{title}\n{deferred_note}{content}",
             order=order,
+            metadata={"cache_partition": "session", "cacheable": True, "request_layer": "reminder"},
         )
 
     def build_shared_prompt_blocks(
@@ -312,6 +326,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="custom_instructions",
                     content=f"## 额外指令\n{agent.system_prompt.strip()}",
                     order=order,
+                    metadata={"cache_partition": "session", "cacheable": True},
                 )
             )
             order += 10
@@ -323,6 +338,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="skill_policy",
                     content=skill_policy_prompt,
                     order=order,
+                    metadata={"cache_partition": "static", "cacheable": True},
                 )
             )
             order += 10
@@ -334,9 +350,15 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="skill_listing",
                     content=skill_listing_prompt,
                     order=order,
+                    metadata={"cache_partition": "session", "cacheable": True, "request_layer": "reminder"},
                 )
             )
             order += 10
+
+        runtime_reminder_blocks = agent.build_runtime_reminder_prompt_blocks(start_order=order)
+        if runtime_reminder_blocks:
+            blocks.extend(runtime_reminder_blocks)
+            order = max(order, max(block.order for block in runtime_reminder_blocks) + 10)
 
         memory_prompt = agent._build_memory_prompt() if include_memory else ""
         if memory_prompt:
@@ -345,6 +367,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="memory",
                     content=memory_prompt,
                     order=order,
+                    metadata={"cache_partition": "dynamic", "cacheable": False},
                 )
             )
             order += 10
@@ -356,6 +379,7 @@ class DefaultPromptComposer(BasePromptComposer):
                     name="mailbox",
                     content=mailbox_prompt,
                     order=order,
+                    metadata={"cache_partition": "dynamic", "cacheable": False},
                 )
             )
             order += 10
@@ -369,6 +393,7 @@ class DefaultPromptComposer(BasePromptComposer):
                         name="skills",
                         content=skills_prompt,
                         order=order,
+                        metadata={"cache_partition": "session", "cacheable": True},
                     )
                 )
                 order += 10

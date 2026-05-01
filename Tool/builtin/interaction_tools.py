@@ -49,7 +49,7 @@ class AskUserQuestionTool(Tool):
     def __init__(self):
         super().__init__(
             name="AskUserQuestion",
-            description="结构化向用户提问，并中断当前执行等待外部回答。",
+            description="向用户发起结构化提问，并中断当前执行等待回答。",
             parameters=ClaudeAskUserQuestionInput,
             guidance="适合在存在 2-4 个清晰选项时请求用户决策。调用后会中断当前 tool loop。",
             prompt=ASK_USER_PROMPT,
@@ -114,7 +114,7 @@ class ExitPlanModeTool(Tool):
     def __init__(self):
         super().__init__(
             name="ExitPlanMode",
-            description="请求退出 plan 模式，并把允许的权限类别交回调用方/UI 处理。",
+            description="请求退出 plan 模式，并把允许的执行权限交回调用方处理。",
             parameters=ClaudeExitPlanModeInput,
             guidance="适合在计划已确认、准备进入执行阶段时使用。调用后会中断当前 tool loop。",
             prompt=EXIT_PLAN_MODE_PROMPT,
@@ -140,21 +140,33 @@ class ExitPlanModeTool(Tool):
         )
 
 
-def register_ask_user_question_tool(registry: ToolRegistry) -> AskUserQuestionTool:
+def register_ask_user_question_tool(
+    registry: ToolRegistry,
+    *,
+    expose_in_deferred: bool | None = True,
+) -> AskUserQuestionTool:
     tool = AskUserQuestionTool()
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
-def register_enter_plan_mode_tool(registry: ToolRegistry) -> EnterPlanModeTool:
+def register_enter_plan_mode_tool(
+    registry: ToolRegistry,
+    *,
+    expose_in_deferred: bool | None = True,
+) -> EnterPlanModeTool:
     tool = EnterPlanModeTool()
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
-def register_exit_plan_mode_tool(registry: ToolRegistry) -> ExitPlanModeTool:
+def register_exit_plan_mode_tool(
+    registry: ToolRegistry,
+    *,
+    expose_in_deferred: bool | None = True,
+) -> ExitPlanModeTool:
     tool = ExitPlanModeTool()
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

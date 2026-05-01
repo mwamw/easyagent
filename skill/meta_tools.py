@@ -176,6 +176,7 @@ class SkillTool(Tool):
             if not body:
                 body = "（该 Skill 未提供额外正文指令）"
             self._manager.set_runtime_skill_context(skill, body, source="skill_tool")
+            exposed_tools = self._manager.expose_runtime_skill_tools(skill_name)
 
             return ToolResult.success(
                 f"已注入 Skill `{skill_name}`。\n"
@@ -185,6 +186,7 @@ class SkillTool(Tool):
                     "skill_arguments": dict(skill_arguments),
                     "exposure_mode": skill.get_exposure_mode(),
                     "execution_mode": skill.get_execution_mode(),
+                    "tool_names": list(exposed_tools),
                 },
             )
         except Exception as e:
@@ -239,6 +241,7 @@ class LoadSkillTool(Tool):
                     self._manager.activate(skill_name)
                     self._loaded_tracker.add(skill_name)
                     skill = self._manager.get_skill(skill_name)
+                    self._manager.expose_runtime_skill_tools(skill_name)
                     tool_names = skill.get_tool_names()
                     return ToolResult.success(
                         f"Skill '{skill_name}' 已重新激活。"
@@ -265,6 +268,7 @@ class LoadSkillTool(Tool):
             skill = self._registry.create(skill_name)
             self._manager.register(skill, auto_activate=True, tool_visibility="resident")
             self._loaded_tracker.add(skill_name)
+            self._manager.expose_runtime_skill_tools(skill_name)
 
             tool_names = skill.get_tool_names()
             return ToolResult.success(

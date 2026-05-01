@@ -48,7 +48,7 @@ class EnterWorktreeTool(Tool):
         self.worktree_manager = worktree_manager
         super().__init__(
             name="EnterWorktree",
-            description="创建并进入一个隔离 git worktree。",
+            description="创建并进入隔离 git worktree。",
             parameters=ClaudeEnterWorktreeInput,
             guidance="适合在代码修改前创建隔离工作区。若已存在活动 worktree，应先退出。",
             prompt=ENTER_WORKTREE_PROMPT,
@@ -87,7 +87,7 @@ class ExitWorktreeTool(Tool):
         self.worktree_manager = worktree_manager
         super().__init__(
             name="ExitWorktree",
-            description="退出当前活动 worktree，或直接将其移除。",
+            description="退出当前活动 worktree，或按需将其移除。",
             parameters=ClaudeExitWorktreeInput,
             guidance="需要保留 worktree 时用 action=keep；确认不再需要时再用 action=remove。",
             prompt=EXIT_WORKTREE_PROMPT,
@@ -121,9 +121,10 @@ def register_enter_worktree_tool(
     registry: ToolRegistry,
     *,
     worktree_manager: WorktreeManager,
+    expose_in_deferred: bool | None = True,
 ) -> EnterWorktreeTool:
     tool = EnterWorktreeTool(worktree_manager=worktree_manager)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -131,9 +132,10 @@ def register_exit_worktree_tool(
     registry: ToolRegistry,
     *,
     worktree_manager: WorktreeManager,
+    expose_in_deferred: bool | None = True,
 ) -> ExitWorktreeTool:
     tool = ExitWorktreeTool(worktree_manager=worktree_manager)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -141,9 +143,10 @@ def register_worktree_tools(
     registry: ToolRegistry,
     *,
     worktree_manager: WorktreeManager,
+    expose_in_deferred: bool | None = True,
 ) -> tuple[EnterWorktreeTool, ExitWorktreeTool]:
-    enter_tool = register_enter_worktree_tool(registry, worktree_manager=worktree_manager)
-    exit_tool = register_exit_worktree_tool(registry, worktree_manager=worktree_manager)
+    enter_tool = register_enter_worktree_tool(registry, worktree_manager=worktree_manager, expose_in_deferred=expose_in_deferred)
+    exit_tool = register_exit_worktree_tool(registry, worktree_manager=worktree_manager, expose_in_deferred=expose_in_deferred)
     return enter_tool, exit_tool
 
 

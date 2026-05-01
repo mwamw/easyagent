@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,9 +16,23 @@ from core.cache_policy import CacheableBlock, PromptCachePolicy
 from core.history import _json_safe
 from core.llm import EasyLLM
 from core.request_input import ReplayRequestInput
+from Tool.BaseTool import Tool
+from Tool.ToolRegistry import ToolRegistry
 
 
 ARTIFACT = PROJECT_ROOT / "example" / "_artifacts" / "prompt_cache_refactor_anthropic_request.json"
+
+
+class EchoParams(BaseModel):
+    text: str = "demo"
+
+
+class EchoTool(Tool):
+    def __init__(self) -> None:
+        super().__init__(name="echo_tool", description="Echo demo tool", parameters=EchoParams)
+
+    def run(self, parameters: dict) -> str:
+        return str(parameters.get("text", ""))
 
 
 def main() -> None:
@@ -42,6 +58,9 @@ def main() -> None:
     if dynamic_context:
         request_input.extend_replay(llm.query_to_replay(dynamic_context))
     request_input.extend_replay(llm.query_to_replay("用一句话说明 prompt cache refactor 的目的。"))
+    registry = ToolRegistry()
+    registry.register_tool(EchoTool())
+    tools = registry.export_tools("anthropic_native")
 
     captured: dict[str, Any] = {}
     original_apply = llm._provider.apply_cache_policy
@@ -53,7 +72,7 @@ def main() -> None:
         return updated
 
     llm._provider.apply_cache_policy = capture_apply  # type: ignore[method-assign]
-    response = llm.invoke_raw(request_input)
+    response = llm.invoke_raw(request_input, tools=tools)
 
     payload = {
         "captured": captured,

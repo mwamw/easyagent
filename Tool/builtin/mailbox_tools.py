@@ -215,11 +215,12 @@ def register_mailbox_tools(
     *,
     agent_runtime: AgentRuntimeManager,
     parent_agent: Any | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> tuple[MailboxReadTool, MailboxAckTool]:
     read_tool = MailboxReadTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
     ack_tool = MailboxAckTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    registry.register_tool(read_tool)
-    registry.register_tool(ack_tool)
+    registry.register_tool(read_tool, expose_in_deferred=expose_in_deferred)
+    registry.register_tool(ack_tool, expose_in_deferred=expose_in_deferred)
     return read_tool, ack_tool
 
 

@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import partial
 import os
+from prompt import PromptBlock
 from .Config import Config
 from .execution_mode import ExecutionMode, ModeController
 from .llm import EasyLLM
@@ -26,6 +27,12 @@ from .callbacks import CallbackManager
 from .guardrails import build_default_hook_manager
 from .hooks import HookManager
 from .permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
+from .request_input import ReplayRequestInput
+from .runtime_reminders import (
+    BaseRuntimeReminderSource,
+    StaticRuntimeReminderSource,
+    collect_runtime_reminder_prompt_blocks,
+)
 from .session import SessionRestoreReport
 from observability import InMemoryObservabilityRecorder
 from skill.manager import SkillManager
@@ -56,6 +63,7 @@ def _build_context_usage_report_v2(
     estimated_request_tokens: int,
     request_estimate_source: str,
     request_estimate_metadata: Optional[dict[str, Any]] = None,
+    request_layers: Optional[dict[str, Any]] = None,
     canonical_history_messages: int,
     replay_history_messages: int,
     compaction: Optional[dict[str, Any]] = None,
@@ -81,6 +89,7 @@ def _build_context_usage_report_v2(
             "source": request_estimate_source,
             "metadata": dict(request_estimate_metadata or {}),
         },
+        "requestLayers": dict(request_layers or {}),
         "tokenBreakdown": {
             "historyTokens": history_tokens,
             "systemTokens": system_tokens,
@@ -209,6 +218,9 @@ class BaseAgent(ABC):
         self._history_usage_anchor: Optional[dict[str, Any]] = None
         self._pending_response_usage_anchor: Optional[dict[str, Any]] = None
         self._pending_step_state: Optional[dict[str, Any]] = None
+        self._last_cache_signature: Optional[dict[str, Any]] = None
+        self._last_cache_usage: Optional[dict[str, Any]] = None
+        self._last_cache_break: Optional[dict[str, Any]] = None
         self._context_usage_counter = TokenCounter()
         
         # Skill 管理器
@@ -221,6 +233,7 @@ class BaseAgent(ABC):
         self.task_service = task_service
         self.agent_runtime = agent_runtime
         self.team_manager = team_manager or getattr(agent_runtime, "team_manager", None)
+        self._runtime_reminder_sources: list[BaseRuntimeReminderSource] = []
         self._stop_requested = False
         self._stop_reason: Optional[str] = None
         self._task_tools_registered = False
@@ -237,7 +250,78 @@ class BaseAgent(ABC):
             self._install_memory_runtime(self.memory_manage)
         if self.task_service and self.tool_registry:
             self._register_task_tools()
+        if self.enable_tool and self.tool_registry:
+            self._ensure_deferred_tool_schema_tool()
         self._refresh_execution_context()
+
+    def add_runtime_reminder_source(
+        self,
+        source: BaseRuntimeReminderSource,
+    ) -> BaseRuntimeReminderSource:
+        if not isinstance(source, BaseRuntimeReminderSource):
+            raise ParameterValidationError(
+                f"runtime_reminder_source 必须是 BaseRuntimeReminderSource 类型，收到: {type(source).__name__}"
+            )
+        self._runtime_reminder_sources.append(source)
+        return source
+
+    def extend_runtime_reminder_sources(
+        self,
+        sources: list[BaseRuntimeReminderSource],
+    ) -> None:
+        for source in sources:
+            self.add_runtime_reminder_source(source)
+
+    def remove_runtime_reminder_source(
+        self,
+        source_or_name: BaseRuntimeReminderSource | str,
+    ) -> bool:
+        if isinstance(source_or_name, BaseRuntimeReminderSource):
+            try:
+                self._runtime_reminder_sources.remove(source_or_name)
+                return True
+            except ValueError:
+                return False
+        target_name = str(source_or_name).strip()
+        for index, source in enumerate(list(self._runtime_reminder_sources)):
+            if getattr(source, "name", source.__class__.__name__) == target_name:
+                del self._runtime_reminder_sources[index]
+                return True
+        return False
+
+    def list_runtime_reminder_sources(self) -> list[BaseRuntimeReminderSource]:
+        return list(self._runtime_reminder_sources)
+
+    def with_runtime_reminder(
+        self,
+        *,
+        name: str,
+        content: str,
+        stable: bool = True,
+        cacheable: bool = True,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> "BaseAgent":
+        self.add_runtime_reminder_source(
+            StaticRuntimeReminderSource(
+                name=name,
+                content=content,
+                stable=stable,
+                cacheable=cacheable,
+                metadata=metadata,
+            )
+        )
+        return self
+
+    def build_runtime_reminder_prompt_blocks(
+        self,
+        *,
+        start_order: int,
+    ) -> list[PromptBlock]:
+        return collect_runtime_reminder_prompt_blocks(
+            self,
+            self._runtime_reminder_sources,
+            start_order=start_order,
+        )
 
     def _register_v2_memory_tools(self) -> None:
         if self.memory_manage and self.tool_registry:
@@ -386,6 +470,17 @@ class BaseAgent(ABC):
             scope_key=f"agent:{self.name}",
             owner=self.name,
         )
+
+    def _ensure_deferred_tool_schema_tool(self) -> None:
+        if self.tool_registry is None:
+            return
+        if getattr(self.config, "tool_schema_mode", "full") != "deferred":
+            return
+        if self.tool_registry.has_tool("tool_schema_tool"):
+            return
+        from Tool.builtin import register_tool_schema_tool
+
+        register_tool_schema_tool(self.tool_registry)
 
     def with_task_service(self, task_service: Any) -> "BaseAgent":
         self.task_service = task_service
@@ -1424,6 +1519,9 @@ class BaseAgent(ABC):
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         self._history_usage_anchor = None
         self._pending_response_usage_anchor = None
+        self._last_cache_signature = None
+        self._last_cache_usage = None
+        self._last_cache_break = None
         self._clear_pending_step_state()
         self._last_history_compaction = {}
         self._unextracted_msg_count = 0
@@ -1443,15 +1541,142 @@ class BaseAgent(ABC):
                 return budget
         return self._request_budget_max_tokens()
 
+    def get_system_prompt_blocks(self) ->  list[PromptBlock]:
+        """获取系统提示的 PromptBlock 列表，供历史压缩时使用。默认实现返回空列表，子类可覆写以提供更丰富的提示结构。"""
+        return []
     def _stable_system_prompt(self) -> Optional[str]:
-        return self.get_enhanced_prompt()
+        try:
+            from core.request_compiler import compile_prompt_blocks
+
+            compiled = compile_prompt_blocks(
+                self.get_system_prompt_blocks(),
+                cache_policy=getattr(self.config, "cache_policy", None),
+                cache_dynamic_memory=bool(getattr(self.config, "cache_dynamic_memory", False)),
+                cache_dynamic_mailbox=bool(getattr(self.config, "cache_dynamic_mailbox", False)),
+                cache_turn_skills=bool(getattr(self.config, "cache_turn_skills", False)),
+            )
+            return compiled.system_prompt
+        except Exception:
+            return self.get_enhanced_prompt()
 
     def _stable_tools(self) -> Optional[Any]:
         if self.tool_registry is None:
             return None
         return self.get_provider_tools()
 
+    def _cache_signature_for_messages(
+        self,
+        messages: Any = None,
+        *,
+        reasoning: Optional[dict[str, Any]] = None,
+        tools_enabled: bool = False,
+    ) -> dict[str, Any]:
+        if isinstance(messages, ReplayRequestInput) and isinstance(messages.cache_signature, dict):
+            return self._make_json_safe(messages.cache_signature)
+        from core.cache_policy import stable_hash
+
+        return {
+            "provider": getattr(self.llm, "provider_name", None),
+            "model": getattr(self.llm, "model", None),
+            "system_hash": stable_hash(self._stable_system_prompt()),
+            "tools_hash": stable_hash(self._stable_tools() if tools_enabled else None),
+            "reasoning_hash": stable_hash(reasoning if reasoning is not None else self.reasoning),
+            "extra_hash": stable_hash(None),
+            "cache_policy_hash": stable_hash(getattr(self.config, "cache_policy", None)),
+        }
+
+    @staticmethod
+    def _cache_signature_changed_fields(
+        previous: Optional[dict[str, Any]],
+        current: Optional[dict[str, Any]],
+    ) -> list[str]:
+        if not previous or not current:
+            return []
+        fields: list[str] = []
+        for key in sorted(set(previous) | set(current)):
+            if previous.get(key) != current.get(key):
+                fields.append(str(key))
+        return fields
+
+    def _record_cache_break(
+        self,
+        *,
+        reason: str,
+        changed_fields: Optional[list[str]] = None,
+        previous_signature: Optional[dict[str, Any]] = None,
+        current_signature: Optional[dict[str, Any]] = None,
+        previous_cache_read_tokens: Optional[int] = None,
+        current_cache_read_tokens: Optional[int] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict[str, Any]]:
+        if not bool(getattr(self.config, "record_cache_breaks", True)):
+            return None
+        event = self.observability_recorder.record_cache_break(
+            reason=reason,
+            changed_fields=changed_fields,
+            previous_signature=previous_signature,
+            current_signature=current_signature,
+            previous_cache_read_tokens=previous_cache_read_tokens,
+            current_cache_read_tokens=current_cache_read_tokens,
+            metadata=metadata,
+        )
+        self._last_cache_break = self._make_json_safe(event)
+        return event
+
+    def _maybe_record_cache_signature_change(
+        self,
+        signature: Optional[dict[str, Any]],
+        *,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not signature:
+            return
+        previous = self._last_cache_signature
+        changed_fields = self._cache_signature_changed_fields(previous, signature)
+        if previous and changed_fields:
+            self._record_cache_break(
+                reason="cache_signature_changed",
+                changed_fields=changed_fields,
+                previous_signature=previous,
+                current_signature=signature,
+                metadata=metadata,
+            )
+        self._last_cache_signature = self._make_json_safe(signature)
+
+    def _cache_read_tokens_from_usage(self, usage: dict[str, Any]) -> Optional[int]:
+        cache_read = self._usage_int(usage.get("cacheReadTokens"))
+        cached_input = self._usage_int(usage.get("cachedInputTokens"))
+        if cache_read is None and cached_input is None:
+            return None
+        if cache_read is not None:
+            return int(cache_read)
+        return int(cached_input or 0)
+
+    def _maybe_record_cache_read_drop(self, usage: dict[str, Any]) -> None:
+        current_read = self._cache_read_tokens_from_usage(usage)
+        previous_read = None
+        if isinstance(self._last_cache_usage, dict):
+            previous_read = self._usage_int(self._last_cache_usage.get("cacheReadTokensForBreakDetection"))
+        if previous_read is not None and current_read is not None:
+            drop = int(previous_read) - int(current_read)
+            if drop > 0 and drop >= max(2000, int(previous_read * 0.05)):
+                self._record_cache_break(
+                    reason="cache_read_drop",
+                    changed_fields=[],
+                    previous_signature=self._last_cache_signature,
+                    current_signature=self._last_cache_signature,
+                    previous_cache_read_tokens=previous_read,
+                    current_cache_read_tokens=current_read,
+                    metadata={"dropTokens": drop, "usage": self._make_json_safe(usage)},
+                )
+        self._last_cache_usage = {
+            **self._make_json_safe(usage),
+            "cacheReadTokensForBreakDetection": current_read,
+        }
+
     def _apply_history_compaction_result(self, result: Any) -> bool:
+        previous_signature = self._last_cache_signature
+        previous_replay_messages = len(self.replay_history)
         self._last_history_compaction = _build_history_compaction_state(
             was_compacted=result.was_compacted,
             compaction_possible=result.compaction_possible,
@@ -1466,6 +1691,18 @@ class BaseAgent(ABC):
         self.replay_history = list(result.replay_history)
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         self._invalidate_history_usage_anchor()
+        self._record_cache_break(
+            reason="history_compacted",
+            changed_fields=["history.compacted", "replay_history"],
+            previous_signature=previous_signature,
+            current_signature=None,
+            metadata={
+                "previousReplayMessages": previous_replay_messages,
+                "currentReplayMessages": len(self.replay_history),
+                "compaction": self._make_json_safe(self._last_history_compaction),
+            },
+        )
+        self._last_cache_signature = None
         return True
 
     def _local_history_compaction_tokens(self) -> Optional[int]:
@@ -1712,6 +1949,9 @@ class BaseAgent(ABC):
             "last_history_compaction": self._make_json_safe(self._last_history_compaction),
             "history_usage_anchor": self._make_json_safe(self._history_usage_anchor),
             "pending_response_usage_anchor": self._make_json_safe(self._pending_response_usage_anchor),
+            "last_cache_signature": self._make_json_safe(self._last_cache_signature),
+            "last_cache_usage": self._make_json_safe(self._last_cache_usage),
+            "last_cache_break": self._make_json_safe(self._last_cache_break),
             "pending_step_state": self._make_json_safe(self._pending_step_state),
             "mode_state": self.mode_controller.export_state(),
             "permission_context": self.permission_context.export_state(),
@@ -1732,6 +1972,9 @@ class BaseAgent(ABC):
         self._last_history_compaction = self._make_json_safe(state.get("last_history_compaction") or {})
         self._history_usage_anchor = self._make_json_safe(state.get("history_usage_anchor") or None)
         self._pending_response_usage_anchor = self._make_json_safe(state.get("pending_response_usage_anchor") or None)
+        self._last_cache_signature = self._make_json_safe(state.get("last_cache_signature") or None)
+        self._last_cache_usage = self._make_json_safe(state.get("last_cache_usage") or None)
+        self._last_cache_break = self._make_json_safe(state.get("last_cache_break") or None)
         pending_state = state.get("pending_step_state")
         self._pending_step_state = self._make_json_safe(pending_state) if pending_state is not None else None
         self.mode_controller.restore_state(state.get("mode_state"))
@@ -3143,10 +3386,32 @@ class BaseAgent(ABC):
         """获取当前稳定上下文的 token 使用情况。"""
         max_tokens = self._request_budget_max_tokens()
         history_budget = self._history_budget_max_tokens()
-        system_prompt = self._stable_system_prompt()
+        from core.request_compiler import compile_prompt_blocks
+        from core.request_input import ReplayRequestInput
+
+        compiled = compile_prompt_blocks(
+            self.get_system_prompt_blocks(),
+            cache_policy=getattr(self.config, "cache_policy", None),
+            cache_dynamic_memory=bool(getattr(self.config, "cache_dynamic_memory", False)),
+            cache_dynamic_mailbox=bool(getattr(self.config, "cache_dynamic_mailbox", False)),
+            cache_turn_skills=bool(getattr(self.config, "cache_turn_skills", False)),
+        )
+        request_input = ReplayRequestInput(
+            provider_name=getattr(self.llm, "provider_name", None),
+            replay_history=list(self.replay_history),
+            system_prompt=compiled.system_prompt,
+            system_prompt_blocks=compiled.system_prompt_blocks,
+            runtime_reminder_blocks=compiled.runtime_reminder_blocks,
+            cache_policy=compiled.cache_policy,
+        )
+        request_input.apply_runtime_layers()
+        system_prompt = request_input.render_system_prompt()
         tools = self._stable_tools()
+        reminder_text = request_input.render_runtime_reminders()
+        expansion_text = request_input.render_on_demand_expansions()
+        dynamic_tail_text = request_input.render_dynamic_tail()
         breakdown = self._estimate_request_token_breakdown(
-            replay_history=self.replay_history,
+            replay_history=request_input.replay_history,
             system_prompt=system_prompt,
             tools=tools,
             reasoning=self.reasoning,
@@ -3163,9 +3428,18 @@ class BaseAgent(ABC):
             if isinstance(self._pending_response_usage_anchor, dict)
             else None
         )
+        capability = getattr(self.llm.provider, "get_cache_capability", lambda: None)()
+        if hasattr(capability, "to_dict"):
+            capability = capability.to_dict()
         cache_state = {
-            "enabled": False,
+            "enabled": bool(getattr(getattr(self, "config", None), "cache_policy", None).enabled if getattr(getattr(self, "config", None), "cache_policy", None) is not None else False),
             "signature": anchor.get("context_signature") if anchor else None,
+            "lastSignature": self._make_json_safe(self._last_cache_signature),
+            "requestPrefixSignature": self._make_json_safe(request_input.cache_signature),
+            "lastBreak": self._make_json_safe(self._last_cache_break),
+            "lastCacheUsage": self._make_json_safe(self._last_cache_usage),
+            "providerCapability": self._make_json_safe(capability),
+            "requestCacheMetadata": self._make_json_safe(getattr(request_input, "cache_metadata", None)),
             "anchorActive": anchor is not None,
             "anchorProvider": anchor.get("provider_name") if anchor else None,
             "anchorReplayIndex": anchor.get("replay_index") if anchor else None,
@@ -3181,8 +3455,17 @@ class BaseAgent(ABC):
             estimated_request_tokens=int(estimate_tokens),
             request_estimate_source=str(estimate_source),
             request_estimate_metadata=estimate_metadata,
+            request_layers={
+                "systemBlocks": [block.name for block in request_input.system_prompt_blocks],
+                "runtimeReminderBlocks": [block.name for block in request_input.runtime_reminder_blocks],
+                "onDemandExpansionBlocks": [block.name for block in request_input.on_demand_expansion_blocks],
+                "dynamicTailBlocks": [block.name for block in request_input.dynamic_tail_blocks],
+                "runtimeReminderTokens": self._context_usage_counter.count(reminder_text),
+                "onDemandExpansionTokens": self._context_usage_counter.count(expansion_text),
+                "dynamicTailTokens": self._context_usage_counter.count(dynamic_tail_text),
+            },
             canonical_history_messages=len(self._history),
-            replay_history_messages=len(self.replay_history),
+            replay_history_messages=len(request_input.replay_history),
             compaction=self._last_history_compaction,
             compaction_estimated_request_tokens=compaction_token_state.get("tokens"),
             compaction_token_source=compaction_token_state.get("source"),
@@ -3329,6 +3612,19 @@ class BaseAgent(ABC):
         tools_enabled: bool,
         metadata: Optional[dict[str, Any]] = None,
     ) -> str:
+        cache_signature = self._cache_signature_for_messages(
+            messages,
+            reasoning=reasoning,
+            tools_enabled=tools_enabled,
+        )
+        cache_metadata = {
+            **dict(metadata or {}),
+            "cacheSignature": self._make_json_safe(cache_signature),
+        }
+        self._maybe_record_cache_signature_change(
+            cache_signature,
+            metadata={"requestKind": request_kind, "stream": stream, "toolsEnabled": tools_enabled},
+        )
         return self.observability_recorder.begin_llm_request(
             turn_id=turn_id,
             request_kind=request_kind,
@@ -3341,7 +3637,7 @@ class BaseAgent(ABC):
                 reasoning=reasoning,
                 tools_enabled=tools_enabled,
             ),
-            metadata=metadata,
+            metadata=cache_metadata,
         )
 
     def _observe_llm_request_end(
@@ -3364,6 +3660,7 @@ class BaseAgent(ABC):
         )
         if success:
             self._capture_response_usage_for_history_anchor(usage)
+            self._maybe_record_cache_read_drop(usage)
         self.observability_recorder.end_llm_request(
             event_id,
             input_tokens=usage.get("inputTokens"),
@@ -3473,6 +3770,7 @@ class BaseAgent(ABC):
         )
         self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
         self._invalidate_history_usage_anchor()
+        self._last_cache_signature = None
         return self.replay_history
 
     def prepare_replay_history(self, messages: list[Any], provider_name: Optional[str] = None) -> list[Any]:
@@ -3936,10 +4234,12 @@ class BaseAgent(ABC):
             raise ToolRegistryError("工具注册表未配置!")
 
         target_provider = provider_name or getattr(self.llm, "provider_name", None)
+        tool_schema_mode = getattr(self.config, "tool_schema_mode", "full")
         try:
-            if target_provider == getattr(self.llm, "provider_name", None):
-                return self.llm.export_tools(self.tool_registry)
-            return self.tool_registry.export_tools(target_provider or "openai")
+            return self.tool_registry.export_tools(
+                target_provider or "openai",
+                mode=tool_schema_mode,
+            )
         except Exception as e:
             raise ToolRegistryError(f"获取 provider 工具列表失败: {e}") from e
 

@@ -314,6 +314,27 @@ class EasyLLM:
         )
     
     # ==================== 主要 API ====================
+
+    def _build_provider_request(
+        self,
+        request_input: ReplayRequestInput,
+        *,
+        tools: Any = None,
+        temperature: Optional[float] = None,
+        reasoning: Optional[dict[str, Any]] = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        request = self._provider.build_request(
+            request_input.replay_history,
+            system_prompt=request_input.render_system_prompt(),
+            tools=tools,
+            temperature=temperature,
+            reasoning=reasoning,
+            stream=stream,
+            **kwargs,
+        )
+        return self._provider.apply_cache_policy(request, request_input)
     
     def invoke(
         self,
@@ -344,9 +365,8 @@ class EasyLLM:
     ) -> Any:
         """同步调用并返回 provider 原始响应对象。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             temperature=temperature,
             reasoning=reasoning,
             stream=False,
@@ -384,9 +404,8 @@ class EasyLLM:
     ) -> Generator[dict[str, Any], None, None]:
         """流式调用，返回 thinking / text / final 事件。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             temperature=temperature,
             reasoning=reasoning,
             stream=True,
@@ -417,9 +436,8 @@ class EasyLLM:
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
         tool_payload = self.export_tools(tools)
         try:
-            request = self._provider.build_request(
-                request_input.replay_history,
-                system_prompt=request_input.system_prompt,
+            request = self._build_provider_request(
+                request_input,
                 tools=tool_payload,
                 temperature=temperature,
                 reasoning=reasoning,
@@ -444,9 +462,8 @@ class EasyLLM:
         """同步流式带工具调用，返回统一事件流。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
         tool_payload = self.export_tools(tools)
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             tools=tool_payload,
             reasoning=reasoning,
             temperature=temperature,
@@ -487,9 +504,8 @@ class EasyLLM:
     ) -> Any:
         """异步调用并返回 provider 原始响应对象。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             temperature=temperature,
             reasoning=reasoning,
             stream=False,
@@ -527,9 +543,8 @@ class EasyLLM:
     ) -> AsyncGenerator[dict[str, Any], None]:
         """异步流式调用，返回 thinking / text / final 事件。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             reasoning=reasoning,
             temperature=temperature,
             stream=True,
@@ -561,9 +576,8 @@ class EasyLLM:
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
         tool_payload = self.export_tools(tools)
         try:
-            request = self._provider.build_request(
-                request_input.replay_history,
-                system_prompt=request_input.system_prompt,
+            request = self._build_provider_request(
+                request_input,
                 tools=tool_payload,
                 reasoning=reasoning,
                 temperature=temperature,
@@ -588,9 +602,8 @@ class EasyLLM:
         """异步流式带工具调用，返回统一事件流。"""
         request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
         tool_payload = self.export_tools(tools)
-        request = self._provider.build_request(
-            request_input.replay_history,
-            system_prompt=request_input.system_prompt,
+        request = self._build_provider_request(
+            request_input,
             tools=tool_payload,
             reasoning=reasoning,
             temperature=temperature,

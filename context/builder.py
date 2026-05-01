@@ -210,6 +210,12 @@ class ContextBuilder:
         self,
         query: str,
         system_prompt: Optional[str] = None,
+        system_prompt_blocks: Optional[List[Any]] = None,
+        runtime_reminder_blocks: Optional[List[Any]] = None,
+        dynamic_tail_blocks: Optional[List[Any]] = None,
+        on_demand_expansion_blocks: Optional[List[Any]] = None,
+        cache_policy: Optional[Any] = None,
+        cache_metadata: Optional[dict[str, Any]] = None,
         replay_history: Optional[List[Any]] = None,
         provider_name: Optional[str] = None,
         include_query: bool = True,
@@ -225,7 +231,14 @@ class ContextBuilder:
             provider_name=provider_name,
             replay_history=normalized_replay_history,
             system_prompt=system_prompt,
+            system_prompt_blocks=list(system_prompt_blocks or []),
+            runtime_reminder_blocks=list(runtime_reminder_blocks or []),
+            dynamic_tail_blocks=list(dynamic_tail_blocks or []),
+            on_demand_expansion_blocks=list(on_demand_expansion_blocks or []),
+            cache_policy=cache_policy,
+            cache_metadata=dict(cache_metadata or {}),
         )
+        request_input.apply_runtime_layers()
         if extra_replay_entries:
             request_input.extend_replay(extra_replay_entries)
 
@@ -251,7 +264,7 @@ class ContextBuilder:
             for source, items in non_history_groups.items():
                 formatted = self._formatter.format(items, source)
                 if formatted:
-                    request_input.extend_replay(codec.query_to_replay(formatted))
+                    request_input.append_dynamic_tail_text(formatted)
 
         if pending_query:
             request_input.extend_replay(pending_query)

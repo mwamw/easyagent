@@ -203,6 +203,7 @@ class YAMLSkillLoader:
             execution_mode=data.get("execution_mode", "inline"),
             source_type="yaml",
             source_path=source_path or str(data.get("source_path", "")),
+            cache_lifecycle=data.get("cache_lifecycle", "turn" if data.get("exposure_mode", "on_demand") == "on_demand" else "session"),
             extra=data.get("config", {}),
         )
 
@@ -378,6 +379,7 @@ class MarkdownSkillLoader:
             execution_mode=data.get("execution_mode", "inline"),
             source_type="markdown",
             source_path=source_path,
+            cache_lifecycle=data.get("cache_lifecycle", "turn" if data.get("exposure_mode", "on_demand") == "on_demand" else "session"),
             extra=data.get("config", {}),
         )
 

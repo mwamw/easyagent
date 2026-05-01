@@ -127,7 +127,7 @@ class WebSearchTool(Tool):
         """
         super().__init__(
             name="web_search",
-            description="在互联网上搜索信息。输入搜索关键词，返回相关网页摘要。",
+            description="在互联网上搜索信息，并返回相关网页摘要。",
             parameters=SearchParams,
             guidance="仅在需要最新外部资料、公开网页信息或时间敏感事实时使用；搜索结果应作为线索再判断，不要机械照抄。",
             prompt=SEARCH_TOOL_PROMPT,
@@ -348,7 +348,9 @@ class WebSearchTool(Tool):
 def register_search_tool(
     registry: ToolRegistry,
     api_key: Optional[str] = None,
-    backend: str = "auto"
+    backend: str = "auto",
+    *,
+    expose_in_deferred: bool | None = True,
 ) -> WebSearchTool:
     """
     注册搜索工具到 ToolRegistry
@@ -362,5 +364,5 @@ def register_search_tool(
         创建的 WebSearchTool 实例
     """
     tool = WebSearchTool(api_key=api_key, backend=backend)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool

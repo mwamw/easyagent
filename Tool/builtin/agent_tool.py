@@ -10,6 +10,8 @@ from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeAgentInput
 from ..runtime import SubagentManager, SubagentRequest, WorktreeManager
 from core.permissions import PermissionContext, PermissionMode
+from core.cache_policy import PromptCachePolicy, build_cache_signature
+from core.request_compiler import compile_prompt_blocks
 from runtime import AgentRuntimeManager, ExecutionContext
 from task import TaskStatus
 from .bash_tool import BashTool, register_shell_tools
@@ -252,6 +254,19 @@ class AgentTool(Tool):
             if config_copy is not None:
                 config_copy.workspace_root = workspace_root
                 config_copy.allowed_roots = list(allowed_roots)
+                subagent_cache_policy = str(getattr(config_copy, "subagent_cache_policy", "inherit") or "inherit")
+                parent_cache_policy = getattr(config_copy, "cache_policy", None)
+                normalized_policy = (
+                    PromptCachePolicy.from_value(parent_cache_policy.to_dict())
+                    if hasattr(parent_cache_policy, "to_dict")
+                    else PromptCachePolicy.from_value(parent_cache_policy)
+                )
+                if subagent_cache_policy == "read_only":
+                    normalized_policy.mode = "read_only"
+                    config_copy.cache_policy = normalized_policy
+                elif subagent_cache_policy in {"skip_write", "isolated"}:
+                    normalized_policy.mode = "skip_write"
+                    config_copy.cache_policy = normalized_policy
 
             parent_permission_context = getattr(self.parent_agent, "permission_context", None)
             if parent_permission_context is not None and hasattr(parent_permission_context, "model_copy"):
@@ -304,6 +319,7 @@ class AgentTool(Tool):
                 enable_tool=registry is not None,
                 tool_registry=registry,
                 description=request.description,
+                reasoning=getattr(self.parent_agent, "reasoning", None),
                 config=config_copy,
                 verbose_thinking=bool(getattr(self.parent_agent, "verbose_thinking", False)),
                 callback_manager=getattr(self.parent_agent, "callback_manager", None),
@@ -314,6 +330,11 @@ class AgentTool(Tool):
                 team_manager=getattr(self.parent_agent, "team_manager", None),
                 execution_context=child_execution_context,
             )
+            if bool(getattr(config_copy, "subagent_inherit_cache_safe_params", True)):
+                child_execution_context.metadata.setdefault(
+                    "cacheSafeParams",
+                    self._build_parent_cache_safe_params(parent_registry),
+                )
             if registry is not None and parent_registry is not None:
                 if parent_registry.has_tool("Agent"):
                     register_agent_tool(
@@ -388,6 +409,43 @@ class AgentTool(Tool):
             return child_agent
 
         return factory
+
+    def _build_parent_cache_safe_params(self, registry: Optional[ToolRegistry]) -> dict[str, Any]:
+        parent = self.parent_agent
+        try:
+            system_blocks = parent.get_system_prompt_blocks()
+        except Exception:
+            system_blocks = []
+        try:
+            tools = parent.get_provider_tools() if registry is not None else None
+        except Exception:
+            tools = None
+        cache_policy = getattr(getattr(parent, "config", None), "cache_policy", None)
+        parent_config = getattr(parent, "config", None)
+        try:
+            signature = build_cache_signature(
+                provider=getattr(getattr(parent, "llm", None), "provider_name", None),
+                model=getattr(getattr(parent, "llm", None), "model", None),
+                system_blocks=compile_prompt_blocks(
+                    system_blocks,
+                    cache_policy=cache_policy,
+                    cache_dynamic_memory=bool(getattr(parent_config, "cache_dynamic_memory", False)),
+                    cache_dynamic_mailbox=bool(getattr(parent_config, "cache_dynamic_mailbox", False)),
+                    cache_turn_skills=bool(getattr(parent_config, "cache_turn_skills", False)),
+                ).system_prompt_blocks,
+                tools=tools,
+                reasoning=getattr(parent, "reasoning", None),
+                cache_policy=cache_policy,
+            ).to_dict()
+        except Exception:
+            signature = {}
+        return {
+            "provider": getattr(getattr(parent, "llm", None), "provider_name", None),
+            "model": getattr(getattr(parent, "llm", None), "model", None),
+            "reasoning": getattr(parent, "reasoning", None),
+            "cachePolicy": cache_policy.to_dict() if hasattr(cache_policy, "to_dict") else cache_policy,
+            "signature": signature,
+        }
 
     def _build_execution_context(self, request: SubagentRequest) -> ExecutionContext:
         workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
@@ -499,6 +557,11 @@ class AgentTool(Tool):
             raise ValueError("prompt 不能为空。")
 
         metadata: dict[str, Any] = {}
+        if bool(getattr(getattr(self.parent_agent, "config", None), "subagent_inherit_cache_safe_params", True)):
+            metadata["cacheSafeParams"] = self._build_parent_cache_safe_params(getattr(self.parent_agent, "tool_registry", None))
+        metadata["subagentCachePolicy"] = str(
+            getattr(getattr(self.parent_agent, "config", None), "subagent_cache_policy", "inherit") or "inherit"
+        )
         workspace_root = self.workspace_root
         allowed_roots = self.allowed_roots
         worktree_path = None
@@ -625,6 +688,7 @@ def register_agent_tool(
     allowed_roots: Optional[Iterable[str]] = None,
     storage_dir: Optional[str] = None,
     max_background_tasks: int = 4,
+    expose_in_deferred: bool | None = True,
 ) -> AgentTool:
     tool = AgentTool(
         parent_agent=parent_agent,
@@ -638,7 +702,7 @@ def register_agent_tool(
         storage_dir=storage_dir,
         max_background_tasks=max_background_tasks,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

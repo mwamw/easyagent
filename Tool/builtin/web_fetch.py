@@ -232,7 +232,7 @@ class WebFetchTool(Tool):
         self.max_display_chars = max_display_chars
         super().__init__(
             name="WebFetch",
-            description="抓取公开网页正文，并根据 prompt 返回最相关的内容摘录。",
+            description="抓取公开网页正文，并按 prompt 返回最相关的内容摘录。",
             parameters=ClaudeWebFetchInput,
             guidance="适合在已知 URL 的前提下读取网页正文。prompt 要明确说明想提取的主题、事实或片段。",
             prompt=WEB_FETCH_PROMPT,
@@ -338,13 +338,14 @@ def register_web_fetch_tool(
     request_timeout_s: int = 30,
     max_content_chars: int = MAX_WEBFETCH_CONTENT_CHARS,
     max_display_chars: int = MAX_WEBFETCH_DISPLAY_CHARS,
+    expose_in_deferred: bool | None = True,
 ) -> WebFetchTool:
     tool = WebFetchTool(
         request_timeout_s=request_timeout_s,
         max_content_chars=max_content_chars,
         max_display_chars=max_display_chars,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

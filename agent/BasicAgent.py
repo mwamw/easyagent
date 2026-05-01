@@ -662,6 +662,8 @@ class BasicAgent(BaseAgent):
 
     def _clear_ephemeral_skill_state(self) -> None:
         self.runtime_skill_context_bridge.clear_ephemeral_skill_state(self)
+        if self.tool_registry is not None and hasattr(self.tool_registry, "clear_deferred_tool_expansions"):
+            self.tool_registry.clear_deferred_tool_expansions()
 
     def _maybe_inject_runtime_skill_context(
         self,

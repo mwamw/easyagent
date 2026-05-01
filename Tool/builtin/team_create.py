@@ -94,9 +94,10 @@ def register_team_create_tool(
     *,
     team_manager: TeamManager,
     parent_agent: Any | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> TeamCreateTool:
     tool = TeamCreateTool(team_manager=team_manager, parent_agent=parent_agent)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

@@ -167,7 +167,7 @@ class OpenAICompatibleProviderBase(BaseProvider):
         }
         if payload["totalTokens"] is None and payload["inputTokens"] is not None and payload["outputTokens"] is not None:
             payload["totalTokens"] = payload["inputTokens"] + payload["outputTokens"]
-        return {key: value for key, value in payload.items() if value is not None}
+        return self.normalize_usage_metrics(payload)
 
 
 class OpenAIProvider(OpenAICompatibleProviderBase):

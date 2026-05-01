@@ -305,13 +305,17 @@ def register_task_tools(
     registry: ToolRegistry,
     *,
     service: TaskService | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> tuple[TaskCreateTool, TaskGetTool, TaskUpdateTool, TaskListTool]:
     task_service = _service_or_default(service)
     create_tool = TaskCreateTool(service=task_service)
     get_tool = TaskGetTool(service=task_service)
     update_tool = TaskUpdateTool(service=task_service)
     list_tool = TaskListTool(service=task_service)
-    registry.register_tools([create_tool, get_tool, update_tool, list_tool])
+    registry.register_tools(
+        [create_tool, get_tool, update_tool, list_tool],
+        expose_in_deferred=expose_in_deferred,
+    )
     return create_tool, get_tool, update_tool, list_tool
 
 

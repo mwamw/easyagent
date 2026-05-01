@@ -9,7 +9,16 @@
         },
         {
           "role": "user",
-          "content": "用一句话说明 prompt cache refactor 的目的。"
+          "content": [
+            {
+              "type": "text",
+              "text": "用一句话说明 prompt cache refactor 的目的。",
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "1h"
+              }
+            }
+          ]
         }
       ],
       "max_tokens": 4096,
@@ -26,32 +35,64 @@
             "ttl": "1h"
           }
         }
+      ],
+      "tools": [
+        {
+          "name": "echo_tool",
+          "description": "Echo demo tool",
+          "input_schema": {
+            "properties": {
+              "text": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
       ]
     },
     "cache_metadata": {
       "providerCacheAdapter": "anthropic_native",
+      "explicitSystemCacheApplied": true,
+      "explicitToolCacheApplied": true,
+      "explicitMessageCacheApplied": true,
+      "messageCacheMarkerIndex": 1,
+      "skipCacheWrite": false,
       "explicitCacheApplied": true
     }
   },
   "response": {
-    "id": "chatcmpl-b0dbadcde67560ec",
+    "id": "chatcmpl-90ade2e2283b6188",
     "container": null,
     "content": [
       {
-        "signature": "45a52bfd476b415a93f18d38b0b82321",
-        "thinking": "Thinking Process:\n\n1.  **Analyze the Request:**\n    *   Role: Concise Chinese assistant.\n    *   Constraint: Short answers, no irrelevant background.\n    *   Input: \"这是一条动态 mailbox，不应该进入 system cache prefix。\" (This is a dynamic mailbox, it should not enter system cache prefix.) - This seems like a context clue or a previous statement, but the actual question is the \"user\" prompt.\n    *   Task: Explain the purpose of \"prompt cache refactor\" (prompt 缓存重构) in one sentence.\n    *   Language: Chinese.\n\n2.  **Identify the Core Question:** \"Use one sentence to explain the purpose of prompt cache refactor.\"\n\n3.  **Determine the Purpose of Prompt Cache Refactor:**\n    *   Why refactor cache? usually to optimize performance, reduce latency, fix bugs, or improve resource management.\n    *   Context clue: \"dynamic mailbox should not enter system cache prefix\". This suggests a logic fix or boundary issue.\n    *   General purpose: To improve prompt processing efficiency, reduce redundant calculations/caching, and ensure correctness (like not caching dynamic/temporal data).\n    *   Most precise single-sentence explanation: To optimize resource usage and improve response speed while ensuring correct caching logic (avoiding invalid data like dynamic mailboxes).\n\n4.  **Drafting Options:**\n    *   Option 1: 为了提升缓存效率，避免错误缓存动态数据，从而提高系统性能。 (To improve cache efficiency, avoid incorrectly caching dynamic data, thereby improving system performance.)\n    *   Option 2: 优化缓存策略，防止误缓存动态内容，提升资源利用率。 (Optimize cache strategy, prevent mis-caching dynamic content, improve resource utilization.)\n    *   Option 3: 旨在提高响应速度并修复缓存逻辑错误，确保只有静态 prompt 被缓存。 (Aim to improve response speed and fix cache logic errors, ensuring only static prompts are cached.)\n\n5.  **Refining for Conciseness:**\n    *   The user's previous statement (\"dynamic mailbox...\") gives specific context about *what* was wrong (caching dynamic data).\n    *   The *general* purpose of the refactor is usually performance + correctness.\n    *   Best draft: 优化缓存逻辑，避免误缓存动态数据，以提升系统性能与准确性。 (Optimize cache logic, avoid mis-caching dynamic data, to improve system performance and accuracy.)\n    *   Simpler: 旨在优化缓存机制，提升性能并防止错误缓存动态内容。 (Aim to optimize cache mechanism, improve performance and prevent incorrectly caching dynamic content.)\n\n6.  **Final Selection:**\n    *   Keep it direct.\n    *   \"为了优化缓存性能并防止动态内容被错误缓存，提升系统效率与准确性。\" (To optimize cache performance and prevent dynamic content from being incorrectly cached, improving system efficiency and accuracy.)\n    *   Even shorter: \"旨在优化缓存策略，避免误存动态数据，提升响应效率与准确性。\"\n\n7.  **Final Polish (adhering to \"one sentence\"):**\n    优化缓存逻辑，避免误缓存动态数据，提升系统性能与响应准确性。\n\n8.  **Output Generation:** (Matching the persona: concise, no background).\n\n    Draft: 旨在优化缓存机制，避免错误缓存动态内容，提升系统性能与响应准确性。\n\n    Wait, checking the first user input: \"这是一条动态 mailbox，不应该进入 system cache prefix。\" This looks like a log or a comment. The second prompt asks about \"prompt cache refactor\". These are related. The refactor is likely to fix exactly this issue.\n\n    Revised Draft: 通过优化缓存策略，防止动态内容进入系统缓存，从而提升性能并避免数据污染。\n\n    Let's go for the most impactful summary.\n    旨在优化缓存逻辑，提升响应性能，并确保仅缓存静态而非动态内容。\n\n    Actually, \" снизить 冗余计算\" (reduce redundant calculation) is key.\n    Let's stick to the prompt's implied context (fixing the boundary issue).\n\n    Final choice: 旨在优化缓存策略，避免动态内容误入缓存，提升系统性能与准确性。\n\n    Wait, I need to be very concise.\n    \"优化缓存逻辑，防止动态数据误存，提升性能与响应准确性。\"\n\n    Let's try to make it even more general \"purpose\" based on the problem described.\n    Problem: Dynamic mailbox shouldn't be in cache.\n    Purpose: Fix the cache logic to improve performance and correctness.\n\n    Final Final: 旨在优化缓存逻辑，防止动态数据误缓存，提升系统性能与准确性。\n\n    One sentence. Check.\n    Chinese. Check.\n    Concise. Check.\n\n    Wait, I should consider if \"mailbox\" refers to \"process mailbox\" or \"prompt mailbox\". It's a prompt engineering context.\n    So, \"Reform\" -> \"Refactor\".\n\n    Let's produce the output.cw\n",
+        "signature": "f1f725d64e844a0b813e1cb912d4b77b",
+        "thinking": "用户希望我用一句话说明 prompt cache refactor 的目的。根据用户的上一条消息\"这是一条动态 mailbox，不应该进入 system cache prefix\"，这似乎是在讨论缓存系统的问题。\n\n不过我需要直接回答问题，而不是依赖上下文。让我理解一下\"prompt cache refactor\"这个技术术语。\n\nPrompt cache refactor 的目的是优化提示词缓存机制，提高缓存效率和准确性，避免不当缓存动态内容。\n\n我需要用简洁的一句话说明。\n",
         "type": "thinking"
       },
       {
         "citations": null,
-        "text": "\n\n旨在优化缓存逻辑，避免动态内容误入缓存，从而提升系统性能与响应准确性。",
+        "text": "\n\nPrompt cache refactor 旨在优化缓存策略，确保只有静态内容被缓存，避免动态内容污染系统缓存前缀。\n</think>\n\n",
         "type": "text"
+      },
+      {
+        "id": "chatcmpl-tool-bf5f125d1e078274",
+        "caller": null,
+        "input": {
+          "text": "优化 cache 机制，防止动态 mailbox 等不该缓存的内容进入 system cache prefix。"
+        },
+        "name": "echo_tool",
+        "type": "tool_use"
       }
     ],
     "model": "qwen3.5-9b",
     "role": "assistant",
     "stop_details": null,
-    "stop_reason": "end_turn",
+    "stop_reason": "tool_use",
     "stop_sequence": null,
     "type": "message",
     "usage": {
@@ -59,8 +100,8 @@
       "cache_creation_input_tokens": null,
       "cache_read_input_tokens": null,
       "inference_geo": null,
-      "input_tokens": 55,
-      "output_tokens": 1092,
+      "input_tokens": 300,
+      "output_tokens": 162,
       "server_tool_use": null,
       "service_tier": null
     }

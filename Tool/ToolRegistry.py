@@ -17,6 +17,7 @@ class ToolRegistry:
         self.tools: dict[str, Tool] = {}
         self._tool_visibility: dict[str, ToolVisibility] = {}
         self._runtime_surfaces: dict[str, dict[str, Any]] = {}
+        self._deferred_expanded_tool_names: set[str] = set()
         self.conflict_policy: ToolConflictPolicy = conflict_policy
 
     def register_tool(
@@ -24,6 +25,7 @@ class ToolRegistry:
         tool: Tool,
         *,
         visibility: ToolVisibility = "resident",
+        expose_in_deferred: bool | None = None,
         conflict_policy: ToolConflictPolicy | None = None,
     ):
         policy = conflict_policy or self.conflict_policy
@@ -36,13 +38,15 @@ class ToolRegistry:
         self.tools[tool.name] = tool
         self._tool_visibility[tool.name] = visibility
         tool.spec.visibility_scope = visibility
+        if expose_in_deferred is not None:
+            tool.spec.expose_in_deferred = bool(expose_in_deferred)
         return tool
 
-    def mount_runtime_tool(self, tool: Tool):
-        return self.register_tool(tool, visibility="runtime")
+    def mount_runtime_tool(self, tool: Tool, *, expose_in_deferred: bool | None = None):
+        return self.register_tool(tool, visibility="runtime", expose_in_deferred=expose_in_deferred)
 
-    def mount_turn_tool(self, tool: Tool):
-        return self.register_tool(tool, visibility="turn")
+    def mount_turn_tool(self, tool: Tool, *, expose_in_deferred: bool | None = None):
+        return self.register_tool(tool, visibility="turn", expose_in_deferred=expose_in_deferred)
 
     def clear_runtime_tools(self) -> None:
         names = [
@@ -82,7 +86,24 @@ class ToolRegistry:
 
         return decorator
 
-    def get_visible_tools(self, scope: str = "all") -> list[Tool]:
+    def _stable_tool_sort_key(self, name: str) -> tuple[int, int, str]:
+        visibility_rank = {"resident": 0, "runtime": 1, "turn": 2}
+        tool = self.tools.get(name)
+        source_rank = 1
+        if tool is not None:
+            try:
+                source = tool.get_spec().source
+                if source == "builtin":
+                    source_rank = 0
+            except Exception:
+                source_rank = 1
+        return (
+            visibility_rank.get(self._tool_visibility.get(name, "resident"), 99),
+            source_rank,
+            name,
+        )
+
+    def _visible_tool_names(self, scope: str = "all", *, stable: bool = False) -> list[str]:
         if scope == "all":
             names = list(self.tools.keys())
         elif scope == "resident":
@@ -102,17 +123,60 @@ class ToolRegistry:
             ]
         else:
             raise ValueError(f"未知工具可见性 scope: {scope}")
+        if stable:
+            names.sort(key=self._stable_tool_sort_key)
+        return names
+
+    def get_visible_tools(self, scope: str = "all", *, stable: bool = False) -> list[Tool]:
+        names = self._visible_tool_names(scope=scope, stable=stable)
         return [self.tools[name] for name in names if name in self.tools]
 
-    def list_tool_specs(self, scope: str = "all") -> list[ToolSpec]:
-        return [tool.get_spec() for tool in self.get_visible_tools(scope=scope)]
+    def list_tool_specs(self, scope: str = "all", *, stable: bool = False) -> list[ToolSpec]:
+        return [tool.get_spec() for tool in self.get_visible_tools(scope=scope, stable=stable)]
 
     def get_tool_spec(self, name: str) -> ToolSpec | None:
         tool = self.get_tool(name)
         return tool.get_spec() if tool else None
 
     def get_tools_description(self) -> list[dict[str, Any]]:
-        return [spec.to_description_payload() for spec in self.list_tool_specs()]
+        return self.list_tool_descriptors(stable=True, include_parameters=True)
+
+    def list_tool_descriptors(
+        self,
+        scope: str = "all",
+        *,
+        stable: bool = False,
+        include_parameters: bool = False,
+        include_internal: bool = False,
+    ) -> list[dict[str, Any]]:
+        descriptors: list[dict[str, Any]] = []
+        for spec in self.list_tool_specs(scope=scope, stable=stable):
+            if not include_internal and spec.metadata.get("internal_tool"):
+                continue
+            descriptor = spec.to_description_payload()
+            if not include_parameters:
+                descriptor.pop("parameters", None)
+            descriptors.append(descriptor)
+        return descriptors
+
+    def expand_deferred_tools(self, names: list[str]) -> list[ToolSpec]:
+        expanded: list[ToolSpec] = []
+        for name in names:
+            normalized = str(name or "").strip()
+            if not normalized:
+                continue
+            tool = self.get_tool(normalized)
+            if tool is None:
+                raise ToolNotFoundError(f"Tool {normalized} not found")
+            self._deferred_expanded_tool_names.add(normalized)
+            expanded.append(tool.get_spec())
+        return expanded
+
+    def clear_deferred_tool_expansions(self) -> None:
+        self._deferred_expanded_tool_names.clear()
+
+    def get_deferred_expanded_tool_names(self) -> list[str]:
+        return sorted(self._deferred_expanded_tool_names, key=self._stable_tool_sort_key)
 
     def validate_tool_call(self, name: str, parameters: dict[str, Any]) -> tuple[Tool, dict[str, Any]]:
         tool = self.get_tool(name)
@@ -303,11 +367,32 @@ class ToolRegistry:
         if not bucket:
             self._runtime_surfaces.pop(str(kind or "").strip(), None)
 
-    def export_tools(self, provider_name: str = "openai", *, scope: str = "all") -> Any:
+    def export_tools(
+        self,
+        provider_name: str = "openai",
+        *,
+        scope: str = "all",
+        mode: str = "full",
+        selected_names: list[str] | None = None,
+    ) -> Any:
         from core.providers.tool_schema import create_tool_schema_adapter
 
         adapter = create_tool_schema_adapter(provider_name)
-        return adapter.export_tools(self.get_visible_tools(scope=scope))
+        visible_tools = self.get_visible_tools(scope=scope, stable=True)
+        if mode == "deferred":
+            explicit = {str(name).strip() for name in list(selected_names or []) if str(name or "").strip()}
+            expanded = set(self.get_deferred_expanded_tool_names())
+            allowed_names = expanded | explicit
+            filtered_tools: list[Tool] = []
+            for tool in visible_tools:
+                spec = tool.get_spec()
+                if spec.expose_in_deferred:
+                    filtered_tools.append(tool)
+                    continue
+                if tool.name in allowed_names:
+                    filtered_tools.append(tool)
+            return adapter.export_tools(filtered_tools)
+        return adapter.export_tools(visible_tools)
 
     def get_tools_for_provider(self, provider_name: str, *, scope: str = "all") -> Any:
         return self.export_tools(provider_name, scope=scope)
@@ -322,10 +407,22 @@ class ToolRegistry:
         else:
             print(f"Tool {name} not found")
 
-    def register_tools(self, tools: list) -> None:
+    def register_tools(
+        self,
+        tools: list,
+        *,
+        visibility: ToolVisibility = "resident",
+        expose_in_deferred: bool | None = None,
+        conflict_policy: ToolConflictPolicy | None = None,
+    ) -> None:
         """批量注册多个工具。"""
         for tool in tools:
-            self.register_tool(tool)
+            self.register_tool(
+                tool,
+                visibility=visibility,
+                expose_in_deferred=expose_in_deferred,
+                conflict_policy=conflict_policy,
+            )
 
     def unregister_tools(self, names: list) -> None:
         """批量移除多个工具。"""

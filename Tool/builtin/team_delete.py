@@ -71,9 +71,10 @@ def register_team_delete_tool(
     registry: ToolRegistry,
     *,
     team_manager: TeamManager,
+    expose_in_deferred: bool | None = True,
 ) -> TeamDeleteTool:
     tool = TeamDeleteTool(team_manager=team_manager)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

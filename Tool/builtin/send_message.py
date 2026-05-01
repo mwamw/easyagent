@@ -120,9 +120,10 @@ def register_send_message_tool(
     *,
     agent_runtime: AgentRuntimeManager,
     parent_agent: Any | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> SendMessageTool:
     tool = SendMessageTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

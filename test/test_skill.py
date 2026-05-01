@@ -20,6 +20,7 @@ import sys
 import json
 import pytest
 import tempfile
+from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
@@ -153,6 +154,7 @@ def _make_mock_agent(with_registry: bool = True, with_context: bool = False):
     """创建模拟 Agent"""
     agent = MagicMock()
     agent.name = "test_agent"
+    agent.config = SimpleNamespace(tool_schema_mode="full")
     if with_registry:
         agent.tool_registry = ToolRegistry()
         agent.enable_tool = True
@@ -1342,6 +1344,7 @@ class TestMetaTools:
         mock_agent = MagicMock()
         mock_agent.tool_registry = self.tool_registry
         mock_agent.context_manager = None
+        mock_agent.config = SimpleNamespace(tool_schema_mode="full")
         self.manager.bind_agent(mock_agent)
 
         # 注册一些 Skill 到 Registry（还未加载到 Manager）
@@ -1513,6 +1516,21 @@ class TestMetaTools:
         assert not self.manager.has_skill("calculator")
         assert not self.manager.has_runtime_skill_context()
         assert "calculator" not in tracker
+
+    def test_skill_tool_expands_runtime_tools_in_deferred_mode(self):
+        from skill.meta_tools import SkillTool
+
+        self.manager._agent.config = SimpleNamespace(tool_schema_mode="deferred")
+        tool = SkillTool(self.registry, self.manager, set())
+
+        result = tool.run({"skill_name": "calculator"})
+
+        assert result.status == "success"
+        assert result.metadata["tool_names"] == ["calculator_tool"]
+        assert self.tool_registry.get_deferred_expanded_tool_names() == ["calculator_tool"]
+        blocks = self.manager.build_runtime_skill_context_blocks()
+        assert len(blocks) == 1
+        assert blocks[0].metadata["request_layer"] == "on_demand_expansion"
 
     def test_skill_tool_restores_pre_registered_inactive_skill(self):
         from skill.meta_tools import SkillTool

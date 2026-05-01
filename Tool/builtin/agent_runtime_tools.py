@@ -346,15 +346,16 @@ def register_agent_runtime_tools(
     *,
     agent_runtime: AgentRuntimeManager,
     parent_agent: Any | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> tuple[AgentGetTool, AgentListTool, AgentWaitTool, AgentStopTool]:
     get_tool = AgentGetTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
     list_tool = AgentListTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
     wait_tool = AgentWaitTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
     stop_tool = AgentStopTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    registry.register_tool(get_tool)
-    registry.register_tool(list_tool)
-    registry.register_tool(wait_tool)
-    registry.register_tool(stop_tool)
+    registry.register_tool(get_tool, expose_in_deferred=expose_in_deferred)
+    registry.register_tool(list_tool, expose_in_deferred=expose_in_deferred)
+    registry.register_tool(wait_tool, expose_in_deferred=expose_in_deferred)
+    registry.register_tool(stop_tool, expose_in_deferred=expose_in_deferred)
     return get_tool, list_tool, wait_tool, stop_tool
 
 

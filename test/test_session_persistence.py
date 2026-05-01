@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from pydantic import BaseModel
 
@@ -51,6 +52,19 @@ class DummyLLM(EasyLLM):
         self.api_key = "mock-key"
         self.max_tokens = 256
         self.last_messages = []
+        self._provider = SimpleNamespace(
+            get_cache_capability=lambda: SimpleNamespace(
+                to_dict=lambda: {
+                    "supports_explicit_cache_control": False,
+                    "supports_message_level_breakpoint": False,
+                    "supports_tool_cache_marker": False,
+                    "supports_usage_cache_fields": False,
+                    "supports_cached_content_objects": False,
+                    "supports_deferred_tools": True,
+                    "usage_semantics": "unknown",
+                }
+            )
+        )
 
     def invoke(self, messages, temperature=None, **kwargs):
         self.last_messages = list(messages)
@@ -71,6 +85,19 @@ class ReplayAwareDummyLLM(DummyLLM):
         self.temperature = 0.7
         self.timeout = 60
         self.kwargs = {}
+        self._provider = SimpleNamespace(
+            get_cache_capability=lambda: SimpleNamespace(
+                to_dict=lambda: {
+                    "supports_explicit_cache_control": False,
+                    "supports_message_level_breakpoint": False,
+                    "supports_tool_cache_marker": False,
+                    "supports_usage_cache_fields": False,
+                    "supports_cached_content_objects": False,
+                    "supports_deferred_tools": True,
+                    "usage_semantics": "unknown",
+                }
+            )
+        )
 
 
 class ClosableDummyLLM(DummyLLM):
@@ -422,7 +449,7 @@ class SessionPersistenceTestCase(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             agent._build_start_messages("next turn")
 
-    def test_basic_agent_restore_without_tool_registry_downgrades_to_plain_mode(self):
+    def test_basic_agent_restore_without_tool_registry_attempts_builtin_tool_recovery(self):
         registry = build_registry()
         agent = BasicAgent(
             name="assistant",
@@ -439,8 +466,12 @@ class SessionPersistenceTestCase(unittest.TestCase):
             store=self.session_store,
         )
 
-        self.assertFalse(restored.enable_tool)
-        self.assertIsNone(restored.tool_registry)
+        self.assertTrue(restored.enable_tool)
+        self.assertIsNotNone(restored.tool_registry)
+        report = restored.get_last_restore_report()
+        self.assertIsNotNone(report)
+        issues = list((report or {}).get("issues") or [])
+        self.assertTrue(any(item.get("code") == "missing_tools" for item in issues))
 
     def test_basic_agent_context_usage_persists_across_session(self):
         manager = ContextManager(max_tokens=80, auto_history=True)

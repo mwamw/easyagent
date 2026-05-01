@@ -291,7 +291,7 @@ class TodoWriteTool(Tool):
     ):
         super().__init__(
             name="TodoWrite",
-            description="维护当前任务的完整 todo 列表，并返回更新前后的状态。",
+            description="维护当前任务的完整 todo 列表。",
             parameters=ClaudeTodoWriteInput,
             guidance="每次传入完整 todo 列表；适合把任务拆成 pending / in_progress / completed 三种状态。",
             read_only=False,
@@ -360,9 +360,10 @@ def register_todo_write_tool(
     service: "TaskService | None" = None,
     scope_key: str = "todo_write_default",
     owner: str | None = None,
+    expose_in_deferred: bool | None = True,
 ) -> TodoWriteTool:
     registered = tool or TodoWriteTool(service=service, scope_key=scope_key, owner=owner)
-    registry.register_tool(registered)
+    registry.register_tool(registered, expose_in_deferred=expose_in_deferred)
     return registered
 
 

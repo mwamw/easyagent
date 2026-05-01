@@ -250,7 +250,7 @@ class FileWriteTool(_WorkspaceWriteTool):
     ):
         super().__init__(
             name="FileWrite",
-            description="创建新文件或整体覆盖已有文件内容。",
+            description="创建新文件或整体覆盖已有文件。",
             parameters=ClaudeFileWriteInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -324,9 +324,10 @@ def register_file_write_tool(
     *,
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> FileWriteTool:
     tool = FileWriteTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

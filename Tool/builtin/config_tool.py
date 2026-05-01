@@ -108,9 +108,14 @@ class ConfigTool(Tool):
         )
 
 
-def register_config_tool(registry: ToolRegistry, *, config: Optional[Config] = None) -> ConfigTool:
+def register_config_tool(
+    registry: ToolRegistry,
+    *,
+    config: Optional[Config] = None,
+    expose_in_deferred: bool | None = True,
+) -> ConfigTool:
     tool = ConfigTool(config=config)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 

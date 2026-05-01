@@ -22,6 +22,7 @@
 
 这类示例更像“基于框架做出的具体助手/工作流”。
 
+- `example_code_agent_product_bootstrap.py`
 - `example_coding_workflow.py`
 - `example_research_and_memory.py`
 - `example_mcp_filesystem_updated.py`
@@ -42,14 +43,16 @@
 如果你是第一次接触当前框架，建议按这个顺序看：
 
 1. `example_phaseg_sdk_release.py`
-2. `example_phase1a_permission_task_session.py`
-3. `example_phase23_mailbox_collaboration_complete.py`
-4. `example_phasec_restore_report_lifecycle.py`
-5. `example_phased_codeintel_lsp_v1.py`
-6. `example_phaseh_codeintel_workspace_cache.py`
-7. `example_phasei_observability_metrics.py`
-8. `example_phasej_provider_usage_extraction.py`
-9. `example_phasef_mcp_engineering.py`
+2. `example_code_agent_product_bootstrap.py`
+3. `example_phase1a_permission_task_session.py`
+4. `example_phase23_mailbox_collaboration_complete.py`
+5. `example_phasec_restore_report_lifecycle.py`
+6. `example_research_and_memory.py`
+7. `example_phased_codeintel_lsp_v1.py`
+8. `example_phaseh_codeintel_workspace_cache.py`
+9. `example_phasei_observability_metrics.py`
+10. `example_phasej_provider_usage_extraction.py`
+11. `example_phasef_mcp_engineering.py`
 
 ## 说明
 

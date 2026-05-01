@@ -183,7 +183,7 @@ class BashTool(_ShellToolBase):
     ):
         super().__init__(
             name="Bash",
-            description="执行本地 shell 命令，支持前台执行和后台任务。",
+            description="执行本地 shell 命令。支持前台执行和后台任务。",
             parameters=ClaudeBashInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -316,6 +316,7 @@ def register_bash_tool(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    expose_in_deferred: bool | None = True,
 ) -> BashTool:
     tool = BashTool(
         workspace_root=workspace_root,
@@ -327,7 +328,7 @@ def register_bash_tool(
         max_output_chars=max_output_chars,
         process_manager=process_manager,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -342,6 +343,7 @@ def register_shell_tools(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    expose_in_deferred: bool | None = True,
 ):
     from .task_output import TaskOutputTool
     from .task_stop import TaskStopTool
@@ -357,6 +359,7 @@ def register_shell_tools(
         max_background_tasks=max_background_tasks,
         max_output_chars=max_output_chars,
         process_manager=manager,
+        expose_in_deferred=expose_in_deferred,
     )
     task_output_tool = TaskOutputTool(
         workspace_root=workspace_root,
@@ -378,8 +381,8 @@ def register_shell_tools(
         max_output_chars=max_output_chars,
         process_manager=manager,
     )
-    registry.register_tool(task_output_tool)
-    registry.register_tool(task_stop_tool)
+    registry.register_tool(task_output_tool, expose_in_deferred=expose_in_deferred)
+    registry.register_tool(task_stop_tool, expose_in_deferred=expose_in_deferred)
     return bash_tool, task_output_tool, task_stop_tool
 
 

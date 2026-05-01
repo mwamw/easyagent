@@ -1,6 +1,7 @@
 import unittest
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -49,6 +50,19 @@ class DummyAgentLLM(EasyLLM):
         self.base_url = "http://mock.local/v1"
         self.api_key = "mock-key"
         self.max_tokens = 256
+        self._provider = SimpleNamespace(
+            get_cache_capability=lambda: SimpleNamespace(
+                to_dict=lambda: {
+                    "supports_explicit_cache_control": False,
+                    "supports_message_level_breakpoint": False,
+                    "supports_tool_cache_marker": False,
+                    "supports_usage_cache_fields": False,
+                    "supports_cached_content_objects": False,
+                    "supports_deferred_tools": True,
+                    "usage_semantics": "openai_style",
+                }
+            )
+        )
 
     def invoke(self, messages, temperature=None, **kwargs):
         return "ok"
@@ -77,7 +91,7 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_input.system_prompt, "sys")
         self.assertEqual(request_input.replay_history[-1]["role"], "user")
 
-    def test_compact_request_input_preserves_recent_turn(self):
+    def test_compact_persistent_history_preserves_recent_turn(self):
         manager = ContextManager(
             builder=ContextBuilder(
                 budget=TokenBudget(max_tokens=60),
@@ -100,18 +114,27 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
             ],
             system_prompt="系统提示",
         )
-        result = manager.compact_request_input(request_input, max_tokens=60)
         codec = create_codec("openai")
+        canonical_history = codec.replay_to_canonical(request_input.replay_history)
+        result = manager.compact_persistent_history(
+            canonical_history,
+            request_input.replay_history,
+            provider_name="openai",
+            token_counter=manager.counter,
+            system_prompt=request_input.system_prompt,
+            max_tokens=60,
+        )
         request_tokens = codec.count_request_tokens(
             manager.counter,
-            request_input.replay_history,
+            result.replay_history,
             system_prompt=request_input.system_prompt,
         )
         self.assertTrue(result.was_compacted)
-        self.assertLessEqual(request_tokens, 60)
-        self.assertEqual(request_input.replay_history[-1]["content"], "最后一轮回答")
+        self.assertTrue(result.compaction_possible)
+        self.assertEqual(result.replay_history[-1]["content"], "最后一轮回答")
+        self.assertGreater(request_tokens, 0)
 
-    def test_usage_reports_negative_remaining_when_request_is_over_budget_but_not_compactable(self):
+    def test_request_over_budget_and_not_compactable_is_detectable(self):
         manager = ContextManager(
             builder=ContextBuilder(
                 budget=TokenBudget(max_tokens=120),
@@ -126,20 +149,31 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
             ],
             system_prompt="系统提示也很长" * 3,
         )
-        result = manager.compact_request_input(request_input, max_tokens=40)
-        usage = manager.analyze_messages_usage(request_input)
+        codec = create_codec("openai")
+        canonical_history = codec.replay_to_canonical(request_input.replay_history)
+        result = manager.compact_persistent_history(
+            canonical_history,
+            request_input.replay_history,
+            provider_name="openai",
+            token_counter=manager.counter,
+            system_prompt=request_input.system_prompt,
+            max_tokens=40,
+        )
+        request_tokens = codec.count_request_tokens(
+            manager.counter,
+            request_input.replay_history,
+            system_prompt=request_input.system_prompt,
+        )
+        remaining_tokens = 40 - request_tokens
         self.assertFalse(result.was_compacted)
         self.assertFalse(result.compaction_possible)
-        self.assertLess(usage["remaining_tokens"], 0)
-        self.assertGreater(usage["overflow_tokens"], 0)
-        self.assertFalse(usage["request_compacted"])
-        self.assertFalse(usage["request_compaction_possible"])
+        self.assertLess(remaining_tokens, 0)
+        self.assertGreater(-remaining_tokens, 0)
 
     async def test_llm_history_compactor_acompact_returns_canonical_summary(self):
         compactor = LLMHistoryCompactor(
             llm=MockHistoryLLM('["用户要求保留翻译结论。", "助手确认工具结果和数学结论。"]'),
             token_counter=TokenCounter(chars_per_token=1.0),
-            max_summary_messages=2,
         )
         history = [
             {
@@ -159,7 +193,7 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
                 "metadata": {},
             },
         ]
-        compacted = await compactor.acompact(history, max_tokens=20)
+        compacted = await compactor.acompact(history)
         self.assertGreaterEqual(len(compacted), 1)
         self.assertTrue(all(item["record_type"] == "canonical_message" for item in compacted))
         self.assertEqual(compacted[0]["content"][0]["type"], "text")

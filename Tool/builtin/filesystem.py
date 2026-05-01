@@ -169,7 +169,7 @@ class FileReadTool(_WorkspaceTool):
         self.max_output_chars = max_output_chars
         super().__init__(
             name="FileRead",
-            description="读取本地文件内容，支持按行窗口读取文本文件和按页读取 PDF。",
+            description="读取本地文件。支持按行窗口读取文本文件，按页读取 PDF。",
             parameters=ClaudeFileReadInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -294,7 +294,7 @@ class ListTool(_WorkspaceTool):
         self.max_results = max_results
         super().__init__(
             name="List",
-            description="列出本地目录结构，适合替代 `ls` / `ls -al` 查看项目结构。",
+            description="列出本地目录内容。适合替代 `ls` 查看项目结构。",
             parameters=ClaudeListInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -576,7 +576,7 @@ class GrepTool(_WorkspaceTool):
         self.max_output_chars = max_output_chars
         super().__init__(
             name="Grep",
-            description="在本地文件内容中按模式检索，支持返回命中内容、文件列表或计数。",
+            description="在本地文件内容中按模式检索。",
             parameters=ClaudeGrepInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -837,9 +837,10 @@ def register_file_read_tool(
     *,
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> FileReadTool:
     tool = FileReadTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -849,9 +850,10 @@ def register_list_tool(
     *,
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> ListTool:
     tool = ListTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -861,9 +863,10 @@ def register_glob_tool(
     *,
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> GlobTool:
     tool = GlobTool(workspace_root=workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -874,6 +877,7 @@ def register_grep_tool(
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
     rg_binary: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> GrepTool:
     tool = GrepTool(
         workspace_root=workspace_root,
@@ -881,7 +885,7 @@ def register_grep_tool(
         cwd=cwd,
         rg_binary=rg_binary,
     )
-    registry.register_tool(tool)
+    registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 
 
@@ -892,16 +896,18 @@ def register_filesystem_tools(
     allowed_roots: Optional[Iterable[str]] = None,
     cwd: Optional[str] = None,
     rg_binary: Optional[str] = None,
+    expose_in_deferred: bool | None = True,
 ) -> tuple[FileReadTool, ListTool, GlobTool, GrepTool]:
-    file_read = register_file_read_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    list_tool = register_list_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
-    glob_tool = register_glob_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd)
+    file_read = register_file_read_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd, expose_in_deferred=expose_in_deferred)
+    list_tool = register_list_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd, expose_in_deferred=expose_in_deferred)
+    glob_tool = register_glob_tool(registry, workspace_root, allowed_roots=allowed_roots, cwd=cwd, expose_in_deferred=expose_in_deferred)
     grep_tool = register_grep_tool(
         registry,
         workspace_root,
         allowed_roots=allowed_roots,
         cwd=cwd,
         rg_binary=rg_binary,
+        expose_in_deferred=expose_in_deferred,
     )
     return file_read, list_tool, glob_tool, grep_tool
 
