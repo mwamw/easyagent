@@ -44,7 +44,19 @@ from .mcp import (
     MCPToolManager,
     register_mcp_tools,
 )
-from .observability import BaseObservabilityRecorder, InMemoryObservabilityRecorder
+from .observability import (
+    AgentRunRecord,
+    BaseObservabilityRecorder,
+    EvalCase,
+    EvalResult,
+    EvalTrace,
+    InMemoryObservabilityRecorder,
+    OfflineEvalHarness,
+    PreferencePairRecord,
+    RunOutcomeReport,
+    SFTDatasetRecord,
+    TrainingExample,
+)
 from .permissions import (
     PermissionBehavior,
     PermissionContext,
@@ -67,6 +79,7 @@ from .version import __version__
 
 __all__ = [
     "__version__",
+    "AgentRunRecord",
     "BaseAgent",
     "BaseCallback",
     "BaseHook",
@@ -87,6 +100,9 @@ __all__ = [
     "DangerousCommandGuardrail",
     "DefaultPromptComposer",
     "EasyLLM",
+    "EvalCase",
+    "EvalResult",
+    "EvalTrace",
     "ExecutionContext",
     "HookAction",
     "HookDecision",
@@ -107,6 +123,8 @@ __all__ = [
     "MCPToolManager",
     "BaseObservabilityRecorder",
     "InMemoryObservabilityRecorder",
+    "OfflineEvalHarness",
+    "PreferencePairRecord",
     "PermissionBehavior",
     "PermissionContext",
     "PermissionDecision",
@@ -121,6 +139,8 @@ __all__ = [
     "PromptBlock",
     "ReactAgent",
     "RiskCategory",
+    "RunOutcomeReport",
+    "SFTDatasetRecord",
     "RuntimeReminder",
     "SecretLeakGuardrail",
     "SessionRestoreReport",
@@ -132,6 +152,7 @@ __all__ = [
     "TaskService",
     "TaskStatus",
     "TeamManager",
+    "TrainingExample",
     "Tool",
     "ToolConflictPolicy",
     "ToolRegistry",

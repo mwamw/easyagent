@@ -3623,7 +3623,12 @@ class BaseAgent(ABC):
         }
         self._maybe_record_cache_signature_change(
             cache_signature,
-            metadata={"requestKind": request_kind, "stream": stream, "toolsEnabled": tools_enabled},
+            metadata={
+                "turnId": turn_id,
+                "requestKind": request_kind,
+                "stream": stream,
+                "toolsEnabled": tools_enabled,
+            },
         )
         return self.observability_recorder.begin_llm_request(
             turn_id=turn_id,
@@ -3749,6 +3754,234 @@ class BaseAgent(ABC):
         trace_history = trace_history_getter() if callable(trace_history_getter) else []
         return self._make_json_safe(
             self.observability_recorder.get_trace_summary(trace_history, limit_turns=limit_turns)
+        )
+
+    def list_agent_runs(self) -> list[dict[str, Any]]:
+        getter = getattr(self.observability_recorder, "list_agent_runs", None)
+        if not callable(getter):
+            return []
+        return self._make_json_safe(getter())
+
+    def get_agent_run(self, run_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        getter = getattr(self.observability_recorder, "get_agent_run", None)
+        if not callable(getter):
+            return None
+        run = getter(run_id)
+        return self._make_json_safe(run) if run is not None else None
+
+    def export_run_record(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_run_record", None)
+        if not callable(exporter):
+            return None
+        payload = exporter(trace_history, run_id=run_id, redact=redact)
+        return self._make_json_safe(payload) if payload is not None else None
+
+    def export_eval_trace(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> Optional[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_eval_trace", None)
+        if not callable(exporter):
+            return None
+        payload = exporter(trace_history, run_id=run_id, redact=redact)
+        return self._make_json_safe(payload) if payload is not None else None
+
+    def export_run_record_jsonl(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> str:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_run_record_jsonl", None)
+        if not callable(exporter):
+            return ""
+        return str(exporter(trace_history, run_id=run_id, redact=redact) or "")
+
+    def export_eval_trace_jsonl(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> str:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_eval_trace_jsonl", None)
+        if not callable(exporter):
+            return ""
+        return str(exporter(trace_history, run_id=run_id, redact=redact) or "")
+
+    def export_training_examples(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> list[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_training_examples", None)
+        if not callable(exporter):
+            return []
+        return self._make_json_safe(exporter(trace_history, run_id=run_id, redact=redact))
+
+    def export_training_examples_jsonl(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        redact: bool = False,
+    ) -> str:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_training_examples_jsonl", None)
+        if not callable(exporter):
+            return ""
+        return str(exporter(trace_history, run_id=run_id, redact=redact) or "")
+
+    def export_sft_dataset(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        run_ids: Optional[list[str]] = None,
+        redact: bool = False,
+        example_types: Optional[list[str]] = None,
+    ) -> list[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_sft_dataset", None)
+        if not callable(exporter):
+            return []
+        return self._make_json_safe(
+            exporter(
+                trace_history,
+                run_id=run_id,
+                run_ids=run_ids,
+                redact=redact,
+                example_types=example_types,
+            )
+        )
+
+    def export_sft_dataset_jsonl(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        run_ids: Optional[list[str]] = None,
+        redact: bool = False,
+        example_types: Optional[list[str]] = None,
+    ) -> str:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_sft_dataset_jsonl", None)
+        if not callable(exporter):
+            return ""
+        return str(
+            exporter(
+                trace_history,
+                run_id=run_id,
+                run_ids=run_ids,
+                redact=redact,
+                example_types=example_types,
+            )
+            or ""
+        )
+
+    def export_preference_pairs(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        run_ids: Optional[list[str]] = None,
+        chosen_run_ids: Optional[list[str]] = None,
+        rejected_run_ids: Optional[list[str]] = None,
+        redact: bool = False,
+    ) -> list[dict[str, Any]]:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_preference_pairs", None)
+        if not callable(exporter):
+            return []
+        return self._make_json_safe(
+            exporter(
+                trace_history,
+                run_id=run_id,
+                run_ids=run_ids,
+                chosen_run_ids=chosen_run_ids,
+                rejected_run_ids=rejected_run_ids,
+                redact=redact,
+            )
+        )
+
+    def export_preference_pairs_jsonl(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        run_ids: Optional[list[str]] = None,
+        chosen_run_ids: Optional[list[str]] = None,
+        rejected_run_ids: Optional[list[str]] = None,
+        redact: bool = False,
+    ) -> str:
+        trace_history_getter = getattr(self, "get_trace_history", None)
+        trace_history = trace_history_getter() if callable(trace_history_getter) else []
+        exporter = getattr(self.observability_recorder, "export_preference_pairs_jsonl", None)
+        if not callable(exporter):
+            return ""
+        return str(
+            exporter(
+                trace_history,
+                run_id=run_id,
+                run_ids=run_ids,
+                chosen_run_ids=chosen_run_ids,
+                rejected_run_ids=rejected_run_ids,
+                redact=redact,
+            )
+            or ""
+        )
+
+    def label_run_outcome(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        status: str,
+        success: bool,
+        failure_stage: Optional[str] = None,
+        root_cause_tags: Optional[list[str]] = None,
+        changed_files: Optional[list[str]] = None,
+        tools_used: Optional[list[str]] = None,
+        tests_attempted: Optional[list[str]] = None,
+        tests_passed: Optional[list[str]] = None,
+        tests_failed: Optional[list[str]] = None,
+        user_approval_count: Optional[int] = None,
+        user_deny_count: Optional[int] = None,
+        notes: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        return self._make_json_safe(
+            self.observability_recorder.label_run_outcome(
+                run_id=run_id,
+                status=status,
+                success=success,
+                failure_stage=failure_stage,
+                root_cause_tags=root_cause_tags,
+                changed_files=changed_files,
+                tools_used=tools_used,
+                tests_attempted=tests_attempted,
+                tests_passed=tests_passed,
+                tests_failed=tests_failed,
+                user_approval_count=user_approval_count,
+                user_deny_count=user_deny_count,
+                notes=notes,
+                metadata=metadata,
+            )
         )
 
     def clear_observability(self) -> None:

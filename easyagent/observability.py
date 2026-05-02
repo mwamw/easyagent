@@ -1,5 +1,29 @@
 """Stable public observability exports."""
 
-from observability import BaseObservabilityRecorder, InMemoryObservabilityRecorder
+from observability import (
+    AgentRunRecord,
+    BaseObservabilityRecorder,
+    EvalCase,
+    EvalResult,
+    EvalTrace,
+    InMemoryObservabilityRecorder,
+    OfflineEvalHarness,
+    PreferencePairRecord,
+    RunOutcomeReport,
+    SFTDatasetRecord,
+    TrainingExample,
+)
 
-__all__ = ["BaseObservabilityRecorder", "InMemoryObservabilityRecorder"]
+__all__ = [
+    "AgentRunRecord",
+    "BaseObservabilityRecorder",
+    "EvalCase",
+    "EvalResult",
+    "EvalTrace",
+    "InMemoryObservabilityRecorder",
+    "OfflineEvalHarness",
+    "PreferencePairRecord",
+    "RunOutcomeReport",
+    "SFTDatasetRecord",
+    "TrainingExample",
+]

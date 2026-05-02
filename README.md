@@ -1,5 +1,21 @@
-# EasyAgent
+# EasyAgent 🚀
 
+**一个轻量、透明、为真实工程和长程任务而生的 AI Agent 运行时框架。**
+
+### 💡 为什么我们需要 EasyAgent？
+
+在市面上已经有 LangChain、LlamaIndex 等优秀框架的今天，为什么还要重造轮子？
+
+因为当我们真正尝试在本地构建类似 Devin 的高阶 Code Agent（如 [S4Code](https://github.com/mwamw/S4Code)）时，我们发现现有的工具链存在严重的**“过度封装”**与**“状态脆弱性”**。当 Agent 需要在你的真实代码仓库中执行长达数十步的阅读、修改、测试和提交操作时，你最需要的不再是一个快速搭建 Demo 的黑盒玩具，而是一个**极致可控的底层 Runtime**。
+
+EasyAgent 放弃了臃肿的抽象层，回归工程本质，为你提供以下核心能力：
+
+* **🔍 拒绝黑盒，极致的透明度：** 将 Tool Loop、Output Parser 与 Hooks 彻底解耦。内置 Trace Recorder 让你能精准追踪每一轮 Reasoning 和 Tool Result。Agent 为什么死循环？哪一步参数传错了？一目了然。
+* **💾 原生状态管理与断点续跑：** 复杂的长程任务最怕在第 49 步因为网络波动或 Token 超载而崩溃。EasyAgent 独创 `ExecutionContext` 与会话快照，记录完整的工具调用链路。崩溃了？直接从错误点秒级重建上下文继续跑，告别 Token 浪费。
+* **🛡️ “人在回路”的安全权限引擎：** 大模型绝不能在没有授权的情况下裸奔。内置首创的 `PermissionContext`，在涉及文件覆写、Shell 执行、Git 修改等高危动作前，原生支持 **Ask / Allow / Deny** 拦截策略，兼顾自动化与绝对安全。
+* **🔌 干净的抽象与前沿协议支持：** 抹平 OpenAI、Anthropic、Google 御三家在 Tool Calling 和结构化输出上的底座差异，并且**原生支持 MCP (Model Context Protocol)** 接入，以最轻的姿态拥抱最新的工具链生态。
+
+**简而言之：如果你只是想花 5 分钟写一个聊天的 Demo，请使用 LangChain；如果你想构建一个在真实文件系统里跑满 10 分钟不出错、高度可控且安全的工业级 Agent 工具，欢迎使用 EasyAgent。**
 EasyAgent 是一个面向通用 Agent、Code Agent 和多 Agent 协作场景的 Python 框架。
 它关注的不是“怎么调用一次模型”，而是“怎么把模型、工具、权限、会话、上下文、运行时和可观测性组装成可持续维护的 Agent 产品”。
 
