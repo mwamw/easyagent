@@ -52,10 +52,15 @@ def _normalize_cache_accounting(item: dict[str, Any]) -> tuple[int, int, int]:
     input_tokens = int(item.get("inputTokens") or 0)
     cached_input_tokens = int(item.get("cachedInputTokens") or 0)
     cache_read_tokens = int(item.get("cacheReadTokens") or 0)
+    cache_creation_tokens = int(item.get("cacheCreationTokens") or 0)
 
     if semantics == "anthropic_style":
         prompt_cached = cache_read_tokens
-        prompt_uncached = input_tokens
+        if input_tokens >= cache_read_tokens + cache_creation_tokens and prompt_cached > 0:
+            prompt_total = input_tokens
+            prompt_uncached = max(0, prompt_total - prompt_cached)
+            return prompt_total, prompt_uncached, prompt_cached
+        prompt_uncached = input_tokens + cache_creation_tokens
         prompt_total = prompt_cached + prompt_uncached
         return prompt_total, prompt_uncached, prompt_cached
 

@@ -555,6 +555,43 @@ class SessionPersistenceTestCase(unittest.TestCase):
             + usage["tokenBreakdown"]["reasoningTokens"],
         )
 
+    def test_get_context_usage_keeps_request_and_compaction_estimates_separate(self):
+        manager = ContextManager(max_tokens=100, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=ReplayAwareDummyLLM(provider_name="openai"),
+            system_prompt="test prompt",
+            context_manager=manager,
+        )
+        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
+
+        agent._append_query_history("old question")
+        agent._capture_response_usage_for_history_anchor(
+            {
+                "inputTokens": 80,
+                "outputTokens": 15,
+                "totalTokens": 95,
+                "usageSource": "provider",
+            }
+        )
+        agent._append_assistant_message_history(content="old answer")
+        agent._append_query_history("x" * 20)
+
+        usage = agent.get_context_usage()
+
+        self.assertEqual(usage["requestEstimate"]["source"], "local_request_estimate")
+        self.assertEqual(
+            usage["requestEstimate"]["estimatedRequestTokens"],
+            usage["tokenBreakdown"]["historyTokens"]
+            + usage["tokenBreakdown"]["systemTokens"]
+            + usage["tokenBreakdown"]["toolTokens"]
+            + usage["tokenBreakdown"]["reasoningTokens"],
+        )
+        self.assertEqual(usage["compaction"]["tokenSource"], "provider_usage_plus_delta_estimate")
+        self.assertIsInstance(usage["cache"]["requestPrefixSignature"], dict)
+        self.assertIn("persistentReplayTokens", usage["requestLayers"])
+        self.assertIn("effectiveReplayTokens", usage["requestLayers"])
+
     def test_history_compaction_estimate_uses_provider_usage_anchor_plus_delta(self):
         manager = ContextManager(max_tokens=100, auto_history=True)
         manager.set_history_compactor(

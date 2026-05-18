@@ -3386,6 +3386,7 @@ class BaseAgent(ABC):
         """获取当前稳定上下文的 token 使用情况。"""
         max_tokens = self._request_budget_max_tokens()
         history_budget = self._history_budget_max_tokens()
+        from core.cache_policy import build_cache_signature
         from core.request_compiler import compile_prompt_blocks
         from core.request_input import ReplayRequestInput
 
@@ -3407,6 +3408,23 @@ class BaseAgent(ABC):
         request_input.apply_runtime_layers()
         system_prompt = request_input.render_system_prompt()
         tools = self._stable_tools()
+        request_input.cache_signature = build_cache_signature(
+            provider=getattr(self.llm, "provider_name", None),
+            model=getattr(self.llm, "model", None),
+            system_blocks=[
+                *request_input.system_prompt_blocks,
+                *request_input.runtime_reminder_blocks,
+            ],
+            tools=tools,
+            reasoning=self.reasoning,
+            extra={
+                "runtime_reminders": [
+                    block.to_dict() for block in request_input.runtime_reminder_blocks
+                    if block.cacheable
+                ],
+            },
+            cache_policy=request_input.cache_policy,
+        ).to_dict()
         reminder_text = request_input.render_runtime_reminders()
         expansion_text = request_input.render_on_demand_expansions()
         dynamic_tail_text = request_input.render_dynamic_tail()
@@ -3417,11 +3435,20 @@ class BaseAgent(ABC):
             reasoning=self.reasoning,
         )
         compaction_token_state = self._estimate_history_compaction_token_state()
-        estimate_tokens = compaction_token_state.get("tokens")
-        if estimate_tokens is None:
-            estimate_tokens = breakdown["estimated_request_tokens"]
-        estimate_source = compaction_token_state.get("source") or "local_request_estimate"
-        estimate_metadata = compaction_token_state.get("metadata") or {}
+        estimate_tokens = breakdown["estimated_request_tokens"]
+        estimate_source = "local_request_estimate"
+        estimate_metadata = {"source": "local_request_estimate"}
+
+        def _count_replay_tokens(messages: list[Any]) -> int:
+            try:
+                return int(self.llm.count_request_tokens(self._context_usage_counter, messages))
+            except Exception:
+                return 0
+
+        persistent_replay_tokens = _count_replay_tokens(request_input.persistent_replay_history)
+        prepended_replay_tokens = _count_replay_tokens(request_input.prepended_replay_history)
+        appended_replay_tokens = _count_replay_tokens(request_input.appended_replay_history)
+        runtime_layer_tokens = max(0, breakdown["history_tokens"] - persistent_replay_tokens)
         anchor = self._history_usage_anchor if isinstance(self._history_usage_anchor, dict) else None
         pending_anchor = (
             self._pending_response_usage_anchor
@@ -3463,6 +3490,11 @@ class BaseAgent(ABC):
                 "runtimeReminderTokens": self._context_usage_counter.count(reminder_text),
                 "onDemandExpansionTokens": self._context_usage_counter.count(expansion_text),
                 "dynamicTailTokens": self._context_usage_counter.count(dynamic_tail_text),
+                "effectiveReplayTokens": breakdown["history_tokens"],
+                "persistentReplayTokens": persistent_replay_tokens,
+                "prependedReplayTokens": prepended_replay_tokens,
+                "appendedReplayTokens": appended_replay_tokens,
+                "runtimeLayerTokens": runtime_layer_tokens,
             },
             canonical_history_messages=len(self._history),
             replay_history_messages=len(request_input.replay_history),
@@ -3525,7 +3557,7 @@ class BaseAgent(ABC):
     ) -> Optional[int]:
         try:
             request_input = self.llm._prepare_request_input(messages)
-            tools = self.tool_registry if tools_enabled and self.tool_registry is not None else None
+            tools = self._stable_tools() if tools_enabled and self.tool_registry is not None else None
             return self.llm.count_request_tokens(
                 self._context_usage_counter,
                 request_input.replay_history,

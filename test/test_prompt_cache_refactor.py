@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from agent.BasicAgent import BasicAgent
+from core.Config import Config
 from core.cache_policy import CacheableBlock, PromptCachePolicy
 from core.llm import EasyLLM
 from core.providers.cache_adapter import create_cache_adapter
@@ -198,6 +199,41 @@ def test_builtin_registration_can_override_deferred_exposure():
     assert names == []
 
 
+def test_agent_request_token_estimate_respects_deferred_tool_schema_mode():
+    registry = ToolRegistry()
+    register_tool_schema_tool(registry)
+    registry.register_tool(DummyTool("resident_a"))
+    registry.register_tool(DummyTool("resident_b"))
+    agent = BasicAgent(
+        name="deferred-estimate-agent",
+        llm=EasyLLM(provider="openai", base_url="http://127.0.0.1:5124/v1", api_key="x", model="m1"),
+        config=Config(tool_schema_mode="deferred"),
+        enable_tool=True,
+        tool_registry=registry,
+    )
+    request = ReplayRequestInput(
+        provider_name="openai",
+        replay_history=[{"role": "user", "content": "hello"}],
+    )
+
+    estimate = agent._estimate_llm_request_tokens(request, tools_enabled=True)
+    deferred_tools = agent.get_provider_tools()
+    full_tool_estimate = agent.llm.count_request_tokens(
+        agent._context_usage_counter,
+        request.replay_history,
+        tools=registry,
+    )
+    deferred_tool_estimate = agent.llm.count_request_tokens(
+        agent._context_usage_counter,
+        request.replay_history,
+        tools=deferred_tools,
+    )
+
+    assert [item["function"]["name"] for item in deferred_tools] == ["tool_schema_tool"]
+    assert estimate == deferred_tool_estimate
+    assert full_tool_estimate > deferred_tool_estimate
+
+
 def test_anthropic_cache_adapter_applies_system_tool_and_message_cache_markers():
     registry = ToolRegistry()
     registry.register_tool(DummyTool("alpha"))
@@ -357,3 +393,34 @@ def test_summary_normalizes_anthropic_cache_hit_ratio():
     assert summary["promptTokensUncached"] == 10
     assert summary["promptTokensCached"] == 90
     assert summary["cacheHitTokenRatio"] == 0.9
+
+
+def test_summary_normalizes_anthropic_compatible_total_input_cache_hit_ratio():
+    recorder = InMemoryObservabilityRecorder(agent_name="compat-ratio-agent")
+    event_id = recorder.begin_llm_request(
+        turn_id="t1",
+        request_kind="invoke",
+        stream=False,
+        tools_enabled=False,
+        provider_name="anthropic_native",
+        model="claude-compatible",
+        input_tokens=100,
+        metadata={"cacheUsageSemantics": "anthropic_style"},
+    )
+    recorder.end_llm_request(
+        event_id,
+        input_tokens=100,
+        output_tokens=5,
+        total_tokens=105,
+        cache_read_tokens=98,
+        cached_input_tokens=98,
+        usage_source="provider",
+        success=True,
+        metadata={"cacheUsageSemantics": "anthropic_style"},
+    )
+
+    summary = recorder.get_summary()
+    assert summary["promptTokensTotal"] == 100
+    assert summary["promptTokensUncached"] == 2
+    assert summary["promptTokensCached"] == 98
+    assert summary["cacheHitTokenRatio"] == 0.98
