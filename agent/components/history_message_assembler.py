@@ -63,6 +63,7 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
         if self.use_context_history(agent):
             return
         self._ensure_replay_history(agent)
+        agent.sanitize_replay_history()
         for message in agent.replay_history:
             messages.append(message)
 
@@ -88,6 +89,7 @@ class DefaultHistoryMessageAssembler(BaseHistoryMessageAssembler):
             cache_turn_skills=bool(getattr(agent.config, "cache_turn_skills", False)),
         )
         self._ensure_replay_history(agent)
+        agent.sanitize_replay_history()
         provider_name = getattr(agent.llm, "provider_name", None)
         cache_metadata = dict(compiled_prompt.metadata or {})
         google_cached_content_name = getattr(getattr(agent, "config", None), "google_cached_content_name", None)

@@ -1346,6 +1346,7 @@ class DefaultToolLoopEngine(BaseToolLoopEngine):
                 "thinking": "",
             }
         except Exception as e:
+            agent._clear_pending_step_state()
             agent.callback_manager.on_agent_end(agent.name, "", success=False, error=e)
             agent._observe_agent_run_end(agent_run_id, output="", success=False, error=e, turn_id=turn_id)
             yield {

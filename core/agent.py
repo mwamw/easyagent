@@ -1104,6 +1104,18 @@ class BaseAgent(ABC):
             self._shift_history_usage_anchor(replay_trimmed)
         self._check_and_trigger_background_memory()
 
+    def sanitize_replay_history(self) -> int:
+        """Drop provider-invalid replay entries before they reach the next request."""
+        self._assert_replay_history_ready_for_current_provider()
+        before = list(self.replay_history)
+        sanitized = self.llm.prepare_messages_for_request(before)
+        if sanitized == before:
+            return 0
+        self.replay_history = sanitized
+        self.replay_history_provider_name = getattr(self.llm, "provider_name", None)
+        self._invalidate_history_usage_anchor()
+        return max(0, len(before) - len(sanitized))
+
     @staticmethod
     def _contains_assistant_history_entry(entries: list[Any]) -> bool:
         for entry in entries or []:
@@ -1138,11 +1150,12 @@ class BaseAgent(ABC):
     def _usage_context_tokens(self, usage: dict[str, Any]) -> Optional[int]:
         input_tokens = self._usage_int(usage.get("inputTokens"))
         output_tokens = self._usage_int(usage.get("outputTokens"))
-        cache_read_tokens = self._usage_int(usage.get("cacheReadTokens")) or 0
-        cache_creation_tokens = self._usage_int(usage.get("cacheCreationTokens")) or 0
+        total_tokens = self._usage_int(usage.get("totalTokens"))
+        if total_tokens is not None:
+            return total_tokens
         if input_tokens is not None or output_tokens is not None:
-            return int(input_tokens or 0) + int(output_tokens or 0) + cache_read_tokens + cache_creation_tokens
-        return self._usage_int(usage.get("totalTokens"))
+            return int(input_tokens or 0) + int(output_tokens or 0)
+        return None
 
     def _capture_response_usage_for_history_anchor(self, usage: dict[str, Any]) -> None:
         if usage.get("usageSource") != "provider":
@@ -3435,9 +3448,13 @@ class BaseAgent(ABC):
             reasoning=self.reasoning,
         )
         compaction_token_state = self._estimate_history_compaction_token_state()
-        estimate_tokens = breakdown["estimated_request_tokens"]
-        estimate_source = "local_request_estimate"
-        estimate_metadata = {"source": "local_request_estimate"}
+        estimate_tokens = compaction_token_state.get("tokens")
+        estimate_source = compaction_token_state.get("source") or "local_request_estimate"
+        estimate_metadata = dict(compaction_token_state.get("metadata") or {})
+        if estimate_tokens is None:
+            estimate_tokens = breakdown["estimated_request_tokens"]
+            estimate_source = "local_request_estimate"
+            estimate_metadata = {"source": "local_request_estimate"}
 
         def _count_replay_tokens(messages: list[Any]) -> int:
             try:
@@ -3495,6 +3512,7 @@ class BaseAgent(ABC):
                 "prependedReplayTokens": prepended_replay_tokens,
                 "appendedReplayTokens": appended_replay_tokens,
                 "runtimeLayerTokens": runtime_layer_tokens,
+                "tokenBreakdownSource": "local_request_estimate",
             },
             canonical_history_messages=len(self._history),
             replay_history_messages=len(request_input.replay_history),

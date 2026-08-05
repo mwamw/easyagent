@@ -579,14 +579,12 @@ class SessionPersistenceTestCase(unittest.TestCase):
 
         usage = agent.get_context_usage()
 
-        self.assertEqual(usage["requestEstimate"]["source"], "local_request_estimate")
+        self.assertEqual(usage["requestEstimate"]["source"], "provider_usage_plus_delta_estimate")
         self.assertEqual(
             usage["requestEstimate"]["estimatedRequestTokens"],
-            usage["tokenBreakdown"]["historyTokens"]
-            + usage["tokenBreakdown"]["systemTokens"]
-            + usage["tokenBreakdown"]["toolTokens"]
-            + usage["tokenBreakdown"]["reasoningTokens"],
+            usage["compaction"]["estimatedRequestTokens"],
         )
+        self.assertEqual(usage["requestLayers"]["tokenBreakdownSource"], "local_request_estimate")
         self.assertEqual(usage["compaction"]["tokenSource"], "provider_usage_plus_delta_estimate")
         self.assertIsInstance(usage["cache"]["requestPrefixSignature"], dict)
         self.assertIn("persistentReplayTokens", usage["requestLayers"])
@@ -682,6 +680,36 @@ class SessionPersistenceTestCase(unittest.TestCase):
         self.assertEqual(state["metadata"]["provider_usage_tokens"], 60)
         self.assertEqual(state["metadata"]["delta_replay_messages"], 1)
         self.assertGreater(state["metadata"]["delta_tokens"], 0)
+
+    def test_provider_usage_context_tokens_do_not_double_count_cache_fields(self):
+        manager = ContextManager(max_tokens=300000, auto_history=True)
+        agent = BasicAgent(
+            name="assistant",
+            llm=ReplayAwareDummyLLM(provider_name="claude_native"),
+            context_manager=manager,
+        )
+        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
+        agent._append_query_history("cached prompt")
+        agent._capture_response_usage_for_history_anchor(
+            {
+                "inputTokens": 99578,
+                "outputTokens": 2120,
+                "totalTokens": 101405,
+                "cacheReadTokens": 98200,
+                "cacheCreationTokens": 0,
+                "usageSource": "provider",
+            }
+        )
+        agent._append_assistant_message_history(content="answer")
+
+        usage = agent.get_context_usage()
+
+        self.assertEqual(usage["requestEstimate"]["source"], "provider_usage_plus_delta_estimate")
+        self.assertLess(usage["requestEstimate"]["estimatedRequestTokens"], 110000)
+        self.assertEqual(
+            usage["requestEstimate"]["metadata"]["provider_usage_tokens"],
+            101405,
+        )
 
     def test_reasoning_history_persistence_can_be_disabled(self):
         agent = BasicAgent(

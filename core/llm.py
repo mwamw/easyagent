@@ -800,7 +800,18 @@ class EasyLLM:
                 raise RuntimeError(
                     f"请求缓冲区属于 provider={messages.provider_name}，当前 LLM provider={provider_name}。"
                 )
-            return messages
+            request_input = messages.clone()
+            request_input.persistent_replay_history = self._convert_messages(
+                request_input.persistent_replay_history
+            )
+            request_input.prepended_replay_history = self._convert_messages(
+                request_input.prepended_replay_history
+            )
+            request_input.appended_replay_history = self._convert_messages(
+                request_input.appended_replay_history
+            )
+            request_input._rebuild_replay_history()
+            return request_input
 
         # 兼容模块
         prepared = self._convert_messages(messages) # type: ignore[arg-type]

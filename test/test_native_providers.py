@@ -1020,11 +1020,24 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(signature_events, [])
         self.assertEqual(state["thinking_parts"], ["plan"])
         assistant_message = codec._build_stream_assistant_message(state)
+        self.assertIsNone(assistant_message)
+        self.assertEqual(codec._stream_assistant_items(state), [])
+
+    def test_anthropic_provider_rejects_empty_assistant_replay_messages(self):
+        codec = create_codec("claude_native")
+
+        self.assertEqual(codec.assistant_message_to_replay(content="", thinking="hidden"), [])
+        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": []}))
+        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": ""}))
         self.assertEqual(
-            assistant_message["content"][0],
-            {"type": "thinking", "thinking": "plan", "signature": "sig-1"},
+            codec.prepare_messages(
+                [
+                    {"role": "assistant", "content": []},
+                    {"role": "user", "content": "next"},
+                ]
+            ),
+            [{"role": "user", "content": "next"}],
         )
-        self.assertEqual(assistant_message["reasoning_content"], "plan")
 
     def test_anthropic_provider_stream_builds_thinking_block_from_accumulated_text(self):
         codec = create_codec("anthropic_native")

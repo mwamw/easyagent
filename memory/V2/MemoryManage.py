@@ -298,3 +298,4 @@ class MemoryManage:
         for memory_type,memory_instance in self.memory_types.items():
             memory_instance.load_from_store()
         logger.info("Loaded all memories")
+

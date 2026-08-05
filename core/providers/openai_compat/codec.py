@@ -151,6 +151,8 @@ def _canonical_to_openai_like_message(
             )
 
     if canonical.role == "assistant":
+        if not text_parts and not tool_calls:
+            return []
         payload: dict[str, Any] = {
             "role": "assistant",
             "content": "".join(text_parts) if text_parts else None,
@@ -304,10 +306,22 @@ class OpenAIChatCodec(BaseProviderCodec):
             provider_payload_allowed=self._canonical_origin_matches_current_provider(canonical),
         )
 
+    @staticmethod
+    def _has_content(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value != ""
+        if isinstance(value, list):
+            return len(value) > 0
+        return True
+
     def is_request_ready_message(self, message: Any) -> bool:
-        return isinstance(message, dict) and "role" in message and (
-            "content" in message or "tool_calls" in message
-        )
+        if not isinstance(message, dict) or "role" not in message:
+            return False
+        if message.get("role") == "assistant":
+            return bool(message.get("tool_calls")) or self._has_content(message.get("content"))
+        return "content" in message
 
     def build_assistant_message(
         self,
@@ -315,7 +329,9 @@ class OpenAIChatCodec(BaseProviderCodec):
         content: Optional[str] = None,
         tool_calls: Optional[list[dict[str, Any]]] = None,
         thinking: Optional[str] = None,
-    ) -> dict[str, Any]:
+    ) -> Optional[dict[str, Any]]:
+        if not tool_calls and not self._has_content(content):
+            return None
         message: dict[str, Any] = {"role": "assistant", "content": content or None}
         if thinking:
             message["reasoning_content"] = thinking

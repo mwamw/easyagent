@@ -209,12 +209,27 @@ class ScriptedStreamingProviderMultiToolRounds:
         return _stream()
 
 
+class ScriptedStreamingProviderEmptyFinal:
+    def build_request(self, messages, *, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
+        return {"messages": list(messages), "stream": stream}
+
+    async def async_stream_raw(self, request):
+        async def _stream():
+            yield _openai_reasoning_chunk("only thinking")
+            yield _openai_text_chunk("", finish_reason="stop")
+        return _stream()
+
+
 class DummyLLM(EasyLLM):
     def __init__(self, provider):
         self.provider_name = "mock"
         self.model = "mock-model"
         self.base_url = "http://mock.local/v1"
         self.api_key = "mock-key"
+        if not hasattr(provider, "apply_cache_policy"):
+            provider.apply_cache_policy = lambda request, request_input: request
+        if not hasattr(provider, "build_tool_payload"):
+            provider.build_tool_payload = lambda tools: list(tools or [])
         self._provider = provider
         self.client = None
 
@@ -439,6 +454,34 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_pre_tool["round"], 2)
         self.assertEqual(trace[8]["metadata"]["stage"], "final")
 
+    async def test_empty_final_response_does_not_pollute_replay_history(self):
+        from agent.BasicAgent import BasicAgent
+
+        llm = DummyLLM(ScriptedStreamingProviderEmptyFinal())
+        agent = BasicAgent(name="streamer", llm=llm, enable_tool=True, tool_registry=ToolRegistry())
+
+        events = [event async for event in agent.astream_invoke_with_tool("think only")]
+
+        self.assertEqual(events[-1]["type"], "final")
+        self.assertEqual(events[-1]["content"], "")
+        self.assertEqual(agent.replay_history, [{"role": "user", "content": "think only"}])
+
+    def test_openai_codec_rejects_empty_assistant_replay_messages(self):
+        codec = create_codec("deepseek")
+
+        self.assertEqual(codec.assistant_message_to_replay(content="", thinking="hidden"), [])
+        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": None}))
+        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": ""}))
+        self.assertEqual(
+            codec.prepare_messages(
+                [
+                    {"role": "assistant", "content": None},
+                    {"role": "user", "content": "next"},
+                ]
+            ),
+            [{"role": "user", "content": "next"}],
+        )
+
     async def test_stream_invoke_tool_mode_rejects_running_event_loop(self):
         from agent.BasicAgent import BasicAgent
 
@@ -558,7 +601,6 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
 class TestProviderStreamingHelpers(unittest.TestCase):
     def test_openai_compatible_tool_call_aggregation(self):
         codec = create_codec("openai")
-        state = codec._init_chat_tool_stream_state()
 
         chunk1 = SimpleNamespace(
             choices=[
@@ -599,13 +641,11 @@ class TestProviderStreamingHelpers(unittest.TestCase):
             ]
         )
 
-        events1 = codec._extract_chat_stream_events(chunk1, state)
-        events2 = codec._extract_chat_stream_events(chunk2, state)
+        events = list(codec.stream_events([chunk1, chunk2], tools=True))
 
-        self.assertEqual(events1, [])
-        self.assertEqual(events2[0]["type"], "tool_calls")
-        self.assertEqual(events2[0]["tool_calls"][0]["name"], "search")
-        self.assertEqual(events2[0]["tool_calls"][0]["arguments"], "{\"q\": \"ai\"}")
+        self.assertEqual(events[0]["type"], "tool_calls")
+        self.assertEqual(events[0]["tool_calls"][0]["name"], "search")
+        self.assertEqual(events[0]["tool_calls"][0]["arguments"], "{\"q\": \"ai\"}")
 
     def test_base_provider_thinking_does_not_fallback_to_content(self):
         codec = create_codec("openai")

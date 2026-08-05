@@ -145,8 +145,22 @@ class AnthropicNativeCodec(BaseProviderCodec):
             return
         prepared.append(item)
 
+    @staticmethod
+    def _has_request_content(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return value != ""
+        if isinstance(value, list):
+            return len(value) > 0
+        return True
+
     def is_request_ready_message(self, message: Any) -> bool:
-        return isinstance(message, dict) and message.get("role") in {"system", "user", "assistant"} and "content" in message
+        if not isinstance(message, dict) or message.get("role") not in {"system", "user", "assistant"}:
+            return False
+        if message.get("role") == "assistant":
+            return self._has_request_content(message.get("content"))
+        return "content" in message
 
     @staticmethod
     def _is_tool_result_turn(message: Any) -> bool:
@@ -282,7 +296,9 @@ class AnthropicNativeCodec(BaseProviderCodec):
         content: Optional[str] = None,
         tool_calls: Optional[list[dict[str, Any]]] = None,
         thinking: Optional[str] = None,
-    ) -> dict[str, Any]:
+    ) -> Optional[dict[str, Any]]:
+        if not content and not tool_calls:
+            return None
         blocks: list[dict[str, Any]] = []
         if thinking:
             blocks.append({"type": "thinking", "thinking": thinking})
@@ -301,6 +317,8 @@ class AnthropicNativeCodec(BaseProviderCodec):
                     "input": arguments,
                 }
             )
+        if not blocks:
+            return None
         return {"role": "assistant", "content": blocks}
 
     def get_thinking_content(self, response: Any) -> Optional[str]:
@@ -478,6 +496,10 @@ class AnthropicNativeCodec(BaseProviderCodec):
 
         if not blocks:
             return []
+        if canonical.role == "assistant" and not any(
+            isinstance(block, dict) and block.get("type") in {"text", "tool_use"} for block in blocks
+        ):
+            return []
 
         if canonical.role == "system":
             text = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
@@ -609,7 +631,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
             logger.warning("Failed to parse Anthropic tool_use input_json delta: %s", value)
         return {}
 
-    def _build_stream_assistant_message(self, state: dict[str, Any]) -> dict[str, Any]:
+    def _build_stream_assistant_message(self, state: dict[str, Any]) -> Optional[dict[str, Any]]:
         content: list[dict[str, Any]] = []
         finalized_tool_calls = {
             item["id"]: item for item in self._finalize_stream_tool_calls(state) if item.get("id")
@@ -624,10 +646,20 @@ class AnthropicNativeCodec(BaseProviderCodec):
             content.append(block)
         if state["thinking_parts"] and not has_thinking_block:
             content.insert(0, {"type": "thinking", "thinking": "".join(state["thinking_parts"])})
+        if not any(
+            block.get("type") == "tool_use"
+            or (block.get("type") == "text" and bool(block.get("text")))
+            for block in content
+        ):
+            return None
         message: dict[str, Any] = {"role": "assistant", "content": content}
         if state["thinking_parts"]:
             message["reasoning_content"] = "".join(state["thinking_parts"])
         return message
+
+    def _stream_assistant_items(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        message = self._build_stream_assistant_message(state)
+        return [message] if message is not None else []
 
     def _extract_anthropic_stream_events(self, event: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
         payload = self._as_dict(event)
@@ -715,7 +747,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                         "tool_calls": self._finalize_stream_tool_calls(state),
                         "content": "".join(state["text_parts"]),
                         "thinking": "".join(state["thinking_parts"]),
-                        "assistant_items": [self._build_stream_assistant_message(state)],
+                        "assistant_items": self._stream_assistant_items(state),
                         "usage": state.get("usage"),
                     }
                 )
@@ -727,7 +759,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                     "type": "final_response",
                     "content": "".join(state["text_parts"]),
                     "thinking": "".join(state["thinking_parts"]),
-                    "assistant_items": [self._build_stream_assistant_message(state)],
+                    "assistant_items": self._stream_assistant_items(state),
                     "usage": state.get("usage"),
                 }
             )
@@ -745,14 +777,14 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 "tool_calls": tool_calls,
                 "content": "".join(state["text_parts"]),
                 "thinking": "".join(state["thinking_parts"]),
-                "assistant_items": [self._build_stream_assistant_message(state)],
+                "assistant_items": self._stream_assistant_items(state),
                 "usage": state.get("usage"),
             }
         return {
             "type": "final_response",
             "content": "".join(state["text_parts"]),
             "thinking": "".join(state["thinking_parts"]),
-            "assistant_items": [self._build_stream_assistant_message(state)],
+            "assistant_items": self._stream_assistant_items(state),
             "usage": state.get("usage"),
         }
 
