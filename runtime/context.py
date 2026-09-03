@@ -53,9 +53,10 @@ class ExecutionContext:
             or (getattr(config, "get_allowed_roots", lambda: [])() if config is not None else None),
             resolved_workspace,
         )
-        mode_controller = getattr(agent, "mode_controller", None)
         permission_context = getattr(agent, "permission_context", None)
-        mode_value = execution_mode or getattr(getattr(mode_controller, "mode", None), "value", None) or "execute"
+        get_execution_mode = getattr(agent, "get_execution_mode", None)
+        current_mode = get_execution_mode() if callable(get_execution_mode) else None
+        mode_value = execution_mode or getattr(current_mode, "value", current_mode) or "execute"
         permission_value = (
             permission_mode
             or getattr(getattr(permission_context, "mode", None), "value", None)

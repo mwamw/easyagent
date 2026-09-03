@@ -3,7 +3,6 @@ EasyLLM - 统一的 LLM 接口
 
 提供对不同 LLM 服务的统一访问接口。
 """
-from .Message import Message
 from .history import CanonicalMessage
 from .providers import BaseProvider, BaseProviderCodec, create_codec, create_provider, provider_requires_base_url
 from .request_input import ReplayRequestInput
@@ -111,7 +110,6 @@ class EasyLLM:
         )
         self.codec: BaseProviderCodec = create_codec(self.provider_name)
         
-        # 保持向后兼容
         self.client = self._provider.client
         
         logger.info(f"EasyLLM 初始化完成: provider={self.provider_name}, model={self.model}")
@@ -614,33 +612,6 @@ class EasyLLM:
         async for event in self._get_codec().astream_events(raw_stream, tools=True):
             yield event
 
-    # ==================== 向后兼容的方法 ====================
-    
-    def think(
-        self,
-        messages: list[dict[str, str]] | ReplayRequestInput,
-        temperature: Optional[float] = None ,
-        reasoning: Optional[dict[str, Any]] = None,
-    ) -> Generator[str, None, None]:
-        """流式输出（向后兼容）"""
-        request_input = self._prepare_request_input(messages) # type: ignore[arg-type]
-        for chunk in self.stream(request_input, temperature=temperature,reasoning=reasoning):
-            print(chunk, end="", flush=True)
-            yield chunk
-    
-    def stream_invoke(
-        self,
-        messages: list[dict[str, str]],
-        temperature: Optional[float] = None,
-        reasoning: Optional[dict[str, Any]] = None,
-    ) -> Generator[str, None, None]:
-        """流式调用（向后兼容）"""
-        yield from self.think(messages, temperature,reasoning)
-    
-    def get_client(self):
-        """获取底层客户端（向后兼容）"""
-        return self.client
-
     def close(self) -> None:
         """关闭底层 Provider 客户端。"""
         provider = getattr(self, "_provider", None)
@@ -757,7 +728,7 @@ class EasyLLM:
             reasoning=reasoning,
         )
     
-    def _convert_messages(self, messages: list[dict[str, str] | Message]) -> list[Any]:
+    def _convert_messages(self, messages: list[Any]) -> list[Any]:
         """转换为当前 provider 的 request-ready replay 消息。"""
         return self._get_codec().prepare_messages(list(messages)) # type: ignore[arg-type]
 
@@ -962,29 +933,3 @@ class EasyLLM:
     def get_tool_calls(self, response: Any) -> list:
         """获取工具调用列表"""
         return self._get_codec().response_tool_calls(response)
-    
-    def create_client(self):
-        """创建客户端（向后兼容）"""
-        return self._provider.client
-
-    # ==================== 向后兼容属性 ====================
-
-    @property
-    def provide(self) -> str|None:
-        """向后兼容：旧属性名 provide，请改用 provider_name"""
-        return self.provider_name
-
-    @provide.setter
-    def provide(self, value: str | None) -> None:
-        """向后兼容：允许旧测试/Mock 通过 provide 写入 provider_name。"""
-        self.provider_name = value
-
-    @property
-    def resovle_api_key(self) -> str:
-        """向后兼容：旧属性名 resovle_api_key，请改用 resolve_api_key"""
-        return self.resolve_api_key
-
-    @property
-    def resovle_base_url(self) -> str:
-        """向后兼容：旧属性名 resovle_base_url，请改用 resolve_base_url"""
-        return self.resolve_base_url

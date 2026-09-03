@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_DIR = PROJECT_ROOT / "example"
 ARTIFACT = EXAMPLE_DIR / "_artifacts" / "agent_cache_realworld_probe.json"
-REAL_SKILLS_DIR = PROJECT_ROOT / "test" / "real_skills"
+REAL_SKILLS_DIR = EXAMPLE_DIR / "skills"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -21,9 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from agent.BasicAgent import BasicAgent
 from Tool.ToolRegistry import ToolRegistry
 from core.llm import EasyLLM
-from skill.builtin.calculator_skill import CalculatorSkill
-from skill.meta_tools import MetaSkill
-from skill.registry import SkillRegistry
+from observability import InMemoryObservabilityStore
 
 
 MODEL = "deepseek-v4-flash:zenmux:claude"
@@ -144,8 +142,45 @@ def _collect_new_events(
     seen_ids: set[str],
     limit: int = 500,
 ) -> list[dict[str, Any]]:
-    events = agent.get_recent_observability_events(limit=limit, event_type=event_type)
-    new_events = [dict(event) for event in events if str(event.get("id")) not in seen_ids]
+    if agent.observability is None:
+        raise RuntimeError("cache probe requires the Observability module")
+    events: list[dict[str, Any]] = []
+    for invoke in agent.observability.list()[-limit:]:
+        if event_type == "llm":
+            for llm_invoke in invoke.llm_invokes:
+                stats = llm_invoke.stats
+                events.append(
+                    {
+                        "id": llm_invoke.invoke_id,
+                        "requestKind": llm_invoke.metadata.get("request_kind"),
+                        "providerName": llm_invoke.metadata.get("provider_name"),
+                        "model": llm_invoke.metadata.get("model"),
+                        "toolsEnabled": bool(llm_invoke.tools),
+                        "inputTokens": stats.input_tokens,
+                        "outputTokens": stats.output_tokens,
+                        "totalTokens": stats.total_tokens,
+                        "cachedInputTokens": stats.cached_input_tokens,
+                        "cacheReadTokens": stats.cache_read_tokens,
+                        "cacheCreationTokens": stats.cache_creation_tokens,
+                        "reasoningTokens": stats.reasoning_tokens,
+                        "metadata": llm_invoke.metadata,
+                        "endedAt": stats.ended_at,
+                    }
+                )
+        elif event_type == "cache_break":
+            for index, item in enumerate(invoke.metadata.get("cache_breaks", [])):
+                events.append(
+                    {
+                        "id": f"{invoke.invoke_id}:cache-break:{index}",
+                        "reason": item.get("reason"),
+                        "changedFields": item.get("changed_fields", []),
+                        "previousCacheReadTokens": item.get("previous_cache_read_tokens"),
+                        "currentCacheReadTokens": item.get("current_cache_read_tokens"),
+                        "metadata": item.get("metadata", {}),
+                        "createdAt": item.get("created_at"),
+                    }
+                )
+    new_events = [event for event in events if str(event.get("id")) not in seen_ids]
     for event in new_events:
         seen_ids.add(str(event.get("id")))
     new_events.sort(key=_event_time)
@@ -203,14 +238,15 @@ def _new_agent(
     enable_tool: bool = False,
     scenario_tag: str,
 ) -> BasicAgent:
-    return BasicAgent(
+    agent = BasicAgent(
         name=name,
         llm=llm or _build_llm(),
         system_prompt=f"{STABLE_SYSTEM_PROMPT}\n\n## Cache Probe Tag\n{RUN_SALT}:{scenario_tag}",
-        enable_tool=enable_tool,
-        tool_registry=ToolRegistry() if enable_tool else None,
-        verbose_thinking=False,
     )
+    if enable_tool:
+        agent.with_tool(ToolRegistry())
+    agent.with_observability(store=InMemoryObservabilityStore())
+    return agent
 
 
 def scenario_stateless_repeated() -> dict[str, Any]:
@@ -234,7 +270,7 @@ def scenario_stateless_repeated() -> dict[str, Any]:
         "scenario": "stateless_repeated",
         "description": "每次 invoke 前清空 history，观察稳定 system prompt 下的 provider prompt cache 命中。",
         "invokes": invokes,
-        "summary": _json_safe(agent.get_observability_summary()),
+        "summary": _json_safe(agent.observability.summary()),
     }
 
 
@@ -262,11 +298,11 @@ def scenario_growing_history() -> dict[str, Any]:
         "scenario": "growing_history",
         "description": "保留完整对话历史，观察 history 增长时的 cache 命中比例变化。",
         "invokes": invokes,
-        "summary": _json_safe(agent.get_observability_summary()),
+        "summary": _json_safe(agent.observability.summary()),
     }
 
 
-def scenario_resident_skill_toggle() -> dict[str, Any]:
+def scenario_skill_module_install() -> dict[str, Any]:
     agent = _new_agent(name="cache-resident-skill", enable_tool=True, scenario_tag="resident-skill")
     seen_llm_ids: set[str] = set()
     seen_break_ids: set[str] = set()
@@ -283,14 +319,14 @@ def scenario_resident_skill_toggle() -> dict[str, Any]:
         )
     )
 
-    agent.with_skill(CalculatorSkill())
+    agent.with_skill(REAL_SKILLS_DIR)
     invokes.append(
         _invoke_and_collect(
             agent,
             query=query,
             seen_llm_ids=seen_llm_ids,
             seen_break_ids=seen_break_ids,
-            note="after_skill_activation",
+            note="after_skill_module_install",
         )
     )
     invokes.append(
@@ -303,39 +339,25 @@ def scenario_resident_skill_toggle() -> dict[str, Any]:
         )
     )
 
-    agent.remove_skill("calculator")
-    invokes.append(
-        _invoke_and_collect(
-            agent,
-            query=query,
-            seen_llm_ids=seen_llm_ids,
-            seen_break_ids=seen_break_ids,
-            note="after_skill_removal",
-        )
-    )
     return {
-        "scenario": "resident_skill_toggle",
-        "description": "常驻 skill 改变 system/tools 签名，再移除 skill 观察是否恢复旧前缀 cache。",
+        "scenario": "skill_module_install",
+        "description": "安装目录型 Skill 模块后，观察 skill listing 和 skill_tool 对 cache 签名的影响。",
         "invokes": invokes,
-        "summary": _json_safe(agent.get_observability_summary()),
+        "summary": _json_safe(agent.observability.summary()),
     }
 
 
 def scenario_runtime_skill_ephemeral() -> dict[str, Any]:
-    SkillRegistry.reset()
-    registry = SkillRegistry.instance()
-    registry.discover_from_directory(str(REAL_SKILLS_DIR))
-
     agent = _new_agent(name="cache-runtime-skill", enable_tool=True, scenario_tag="runtime-skill")
-    agent.with_skill(MetaSkill(registry, agent.skill_manager))
+    agent.with_skill(REAL_SKILLS_DIR)
 
     seen_llm_ids: set[str] = set()
     seen_break_ids: set[str] = set()
     query = (
         "必须真实使用工具，并严格按流程执行："
-        "1. 先调用 skill_tool，skill_name=crypto_skill；"
-        "2. 再调用该 skill 暴露的 hash_calculator，计算字符串 Autonomous Mode 的 SHA-256；"
-        "3. 最后只输出最终哈希值。"
+        "1. 先调用 skill_tool，skill=repository-review，args=skill/manager.py；"
+        "2. 按加载的评审流程分析该文件；"
+        "3. 最后输出评审结论。"
     )
 
     invokes = []
@@ -348,18 +370,20 @@ def scenario_runtime_skill_ephemeral() -> dict[str, Any]:
             note=f"runtime_skill_round_{round_index + 1}",
         )
         result["postInvokeState"] = {
-            "hasRuntimeSkillContext": agent.skill_manager.has_runtime_skill_context(),
-            "cryptoSkillRegistered": agent.skill_manager.has_skill("crypto_skill"),
-            "cryptoSkillActive": agent.skill_manager.is_active("crypto_skill") if agent.skill_manager.has_skill("crypto_skill") else False,
-            "activeSkills": list(agent.skill_manager.active_skill_names),
+            "repositoryReviewIndexed": agent.skill_manager.has_skill("repository-review"),
+            "skillNames": list(agent.skill_manager.skill_names),
+            "temporaryMetaMessages": [
+                item.message.name
+                for item in agent.metamessage_manager.list_injections()
+                if item.message.lifecycle.value == "invocation"
+            ],
         }
         invokes.append(result)
 
-    summary = _json_safe(agent.get_observability_summary())
-    SkillRegistry.reset()
+    summary = _json_safe(agent.observability.summary())
     return {
         "scenario": "runtime_skill_ephemeral",
-        "description": "按需 skill_tool 注入 crypto_skill 正文和工具，再检查 invoke 结束后临时 skill/context 是否清理，以及下一轮 cache 命中是否恢复稳定前缀。",
+        "description": "按需 skill_tool 注入 SKILL.md 正文，再检查 invoke 结束后 INVOCATION MetaMessage 是否自动清理。",
         "invokes": invokes,
         "summary": summary,
     }
@@ -373,7 +397,7 @@ def main() -> None:
         "scenarios": [
             scenario_stateless_repeated(),
             scenario_growing_history(),
-            scenario_resident_skill_toggle(),
+            scenario_skill_module_install(),
             scenario_runtime_skill_ephemeral(),
         ],
     }

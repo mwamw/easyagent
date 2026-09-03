@@ -37,11 +37,7 @@ from .mailbox_tools import MailboxAckTool, MailboxReadTool, register_mailbox_too
 from .notebook_edit import NotebookEditTool, register_notebook_edit_tool
 from .interaction_tools import (
     AskUserQuestionTool,
-    EnterPlanModeTool,
-    ExitPlanModeTool,
     register_ask_user_question_tool,
-    register_enter_plan_mode_tool,
-    register_exit_plan_mode_tool,
 )
 from .task_tools import (
     TaskCreateTool,
@@ -109,8 +105,6 @@ __all__ = [
     "MailboxAckTool",
     "NotebookEditTool",
     "AskUserQuestionTool",
-    "EnterPlanModeTool",
-    "ExitPlanModeTool",
     "TaskCreateTool",
     "TaskGetTool",
     "TaskUpdateTool",
@@ -150,8 +144,6 @@ __all__ = [
     "register_mailbox_tools",
     "register_notebook_edit_tool",
     "register_ask_user_question_tool",
-    "register_enter_plan_mode_tool",
-    "register_exit_plan_mode_tool",
     "register_task_tools",
     "register_config_tool",
     "register_enter_worktree_tool",

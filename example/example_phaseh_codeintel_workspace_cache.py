@@ -16,7 +16,6 @@ from __future__ import annotations
 import os
 
 from easyagent import BasicAgent, EasyLLM, SessionStore, ToolRegistry
-from Tool.builtin import register_codeintel_tools
 from codeintel import LSPCodeIntelProvider
 from core.Config import Config
 
@@ -42,22 +41,16 @@ def main() -> None:
     agent = BasicAgent(
         name="phaseh-codeintel-cache",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         config=Config(
             workspace_root=PROJECT_ROOT,
             allowed_roots=[PROJECT_ROOT],
         ),
-    )
+    ).with_tool(registry)
 
     # Use the default LSP-backed provider first. If the local environment has a
     # matching language server, this will prewarm real symbol/diagnostic data.
-    codeintel_manager = register_codeintel_tools(
-        registry,
+    agent.with_codeintel(
         provider=LSPCodeIntelProvider(),
-        parent_agent=agent,
-        workspace_root=PROJECT_ROOT,
-        allowed_roots=(PROJECT_ROOT,),
     )
 
     before = registry.execute_tool_result("CodeIntelCacheStatus", {})
@@ -122,8 +115,7 @@ def main() -> None:
     print("=== Workspace Symbols (Offline Cache Fallback) ===")
     print(offline_symbols.to_display_string())
 
-    restored.close(close_worktree=False)
-    codeintel_manager.close()
+    restored.close()
 
 
 if __name__ == "__main__":

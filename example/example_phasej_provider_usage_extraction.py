@@ -23,6 +23,7 @@ if project_root not in sys.path:
 
 from agent import BasicAgent
 from core.llm import EasyLLM
+from observability import InMemoryObservabilityStore
 
 
 OPENAI_COMPAT_CONFIG = {
@@ -49,15 +50,19 @@ def demo_openai_chat_usage() -> None:
     print("=== OpenAI Chat Raw Usage ===")
     print(usage)
 
-    agent = BasicAgent(name="provider-usage-openai-chat", llm=llm)
-    result = agent.stream_invoke("请再用两句话介绍一下你自己。")
+    agent = BasicAgent(name="provider-usage-openai-chat", llm=llm).with_observability(
+        store=InMemoryObservabilityStore(),
+    )
+    events = list(agent.stream("请再用两句话介绍一下你自己。"))
 
-    print("=== OpenAI Chat Stream Result ===")
-    print(result)
-    print("=== OpenAI Chat Recent LLM Event ===")
-    print(agent.get_recent_observability_events(limit=1, event_type="llm")[0])
+    print("=== OpenAI Chat Stream Events ===")
+    print(events)
+    assert agent.observability is not None
+    latest = agent.observability.latest()
+    print("=== OpenAI Chat Latest LLM Invoke ===")
+    print(latest.llm_invokes[-1] if latest and latest.llm_invokes else None)
     print("=== OpenAI Chat Summary ===")
-    print(agent.get_observability_summary())
+    print(agent.observability.summary())
 
 
 def demo_openai_responses_usage() -> None:

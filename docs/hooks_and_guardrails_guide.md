@@ -131,7 +131,7 @@ class BlockDangerousShellHook(BaseHook):
 from easyagent.hooks import HookManager
 
 hook_manager = HookManager([BlockDangerousShellHook()])
-agent = BasicAgent(..., hook_manager=hook_manager)
+agent = BasicAgent(...).with_hooks(hook_manager)
 ```
 
 ## 6. 和 Permission / Callback 的区别

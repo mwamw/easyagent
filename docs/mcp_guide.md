@@ -57,7 +57,7 @@ MCP 模块的职责，就是把这些差异吸收掉，向 Agent 暴露统一的
 
 - Tool
 - Resource tool
-- Prompt-based skill
+- Remote prompt template
 
 ## 3. `MCPToolManager` 做什么
 
@@ -70,7 +70,7 @@ MCP 模块的职责，就是把这些差异吸收掉，向 Agent 暴露统一的
 3. 把远程 annotations 归一化为本地风险/指导信息
 4. 生成 `MCPWrappedTool`
 5. 生成 resource tools
-6. 把远程 prompt 映射到本地 `SkillRegistry`
+6. 维护 MCP capability snapshot、连接状态和策略上下文
 
 推荐理解：
 
@@ -114,19 +114,11 @@ EasyAgent 把它们包装成两类工具：
 
 这与 deferred resource discovery 的理念一致。
 
-## 6. Remote prompt / skill 是什么
+## 6. Remote prompt 是什么
 
-有些 MCP server 不只是暴露 tool，还会暴露 prompt 模板。EasyAgent 的处理思路不是简单把 prompt 文本塞进 system，而是更接近 Skill：
+有些 MCP server 不只暴露 tool，还会暴露 prompt 模板。当前 MCP 模块保持远程 prompt 与目录式 Skill 分离，不自动把远程内容写入 Skill listing 或 Agent history。
 
-- 远程 prompt 列表先做 listing
-- 真要用时再展开 prompt body
-
-这使它和本地 Skill 系统天然适配。
-
-因此从产品视角看，MCP prompt 更像：
-
-- “远程 skill”
-- “远程能力模板”
+应用可以通过 MCP client 显式读取 prompt，并决定把它作为普通输入、MetaMessage 或经过审计后生成本地 `SKILL.md`。这一步必须由产品层明确选择，避免远程 prompt 绕过本地 Skill 的来源和生命周期边界。
 
 ## 7. 一次典型执行流程
 
@@ -139,7 +131,7 @@ EasyAgent 把它们包装成两类工具：
 5. Agent 运行时看到这些工具，按普通 Tool 方式调用
 6. 真正执行时，`MCPWrappedTool` 把参数发给远程 MCP server
 7. 若有 resources，模型可先 list 再 read
-8. 若有 prompt skill，可映射到 SkillRegistry 做按需能力展开
+8. 若 server 暴露 prompt，由应用显式读取和消费，不与目录式 Skill 隐式混合
 
 对应的本地实际执行代码示例如下（以连接官方 SQLite MCP Server 为例）：
 
@@ -179,13 +171,12 @@ async def main():
             agent = BasicAgent(
                 name="mcp_agent",
                 llm=EasyLLM(),
-                enable_tool=True,
-                tool_registry=registry
-            )
+            ).with_tool(registry)
             
             # 6. 执行时，模型大喊“帮我查表”，本地的 MCPWrappedTool 便会通过 session 把参数发给远端执行
             print("开始对话...")
-            await agent.astream_invoke("帮我看看数据库里有哪些表？")
+            async for event in agent.astream("帮我看看数据库里有哪些表？"):
+                print(event)
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -209,16 +200,10 @@ register_mcp_tools(registry, mcp_client=my_mcp_client)
 agent = BasicAgent(
     name="assistant",
     llm=EasyLLM(),
-    enable_tool=True,
-    tool_registry=registry,
-)
+).with_tool(registry)
 ```
 
-更完整的产品接法通常还会同时注入：
-
-- `SkillRegistry`
-- `PermissionContext`
-- `MCPPolicyContext`
+更完整的产品接法通常还会同时注入 `PermissionContext` 和 `MCPPolicyContext`。
 
 ## 9. `MCPAuthConfig` 和 `MCPPolicyContext`
 

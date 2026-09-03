@@ -5,7 +5,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
-from typing import Any, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, List, Literal, Mapping, Optional, Sequence
+
+
+PromptPlacement = Literal["system", "system_reminder"]
+PROMPT_PLACEMENTS: frozenset[str] = frozenset({"system", "system_reminder"})
 
 
 @dataclass(slots=True)
@@ -15,21 +19,46 @@ class PromptBlock:
 
     Attributes:
         name: 分块名称，便于调试和测试
-        content: 分块正文
+        content: 分块正文，或接收当前 PromptBuildContext 并返回正文的函数
+        placement: system 进入 provider 原生系统提示；system_reminder
+            作为本次请求的 `<system-reminder>` user message 注入
         order: 拼装顺序，数值越小越靠前
         enabled: 是否启用该分块
         metadata: 附加元数据，默认不参与渲染
     """
 
     name: str
-    content: str
+    content: str | Callable[[Any], str]
+    placement: PromptPlacement = "system"
     order: int = 0
     enabled: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def render(self) -> str:
+    def __post_init__(self) -> None:
+        self.name = str(self.name or "").strip()
+        if not self.name:
+            raise ValueError("PromptBlock.name must be a non-empty string")
+        if self.placement not in PROMPT_PLACEMENTS:
+            supported = ", ".join(sorted(PROMPT_PLACEMENTS))
+            raise ValueError(
+                f"Unsupported PromptBlock placement {self.placement!r}; expected: {supported}"
+            )
+
+    def render(self, context: Any = None) -> str:
         """渲染单个分块。"""
-        return self.content.strip()
+        content = self.content(context) if callable(self.content) else self.content
+        return str(content or "").strip()
+
+    def resolve(self, context: Any) -> "PromptBlock":
+        """Resolve dynamic content into an immutable request-time block value."""
+        return PromptBlock(
+            name=self.name,
+            content=self.render(context),
+            placement=self.placement,
+            order=self.order,
+            enabled=self.enabled,
+            metadata=dict(self.metadata),
+        )
 
 
 class SystemPromptTemplate:
@@ -51,25 +80,54 @@ class SystemPromptTemplate:
         self._blocks.extend(blocks)
         return self
 
-    def get_blocks(self) -> List[PromptBlock]:
-        """返回启用后的分块列表。"""
-        blocks = [
-            block for block in self._blocks
-            if block.enabled and block.render()
-        ]
+    def get_blocks(
+        self,
+        placement: Optional[PromptPlacement] = None,
+        *,
+        context: Any = None,
+    ) -> List[PromptBlock]:
+        """返回已求值的启用分块列表，可按请求位置筛选。"""
+        if placement is not None and placement not in PROMPT_PLACEMENTS:
+            raise ValueError(f"Unsupported prompt placement: {placement!r}")
+        blocks: list[PromptBlock] = []
+        for block in self._blocks:
+            if not block.enabled or (placement is not None and block.placement != placement):
+                continue
+            resolved = block.resolve(context)
+            if resolved.content:
+                blocks.append(resolved)
         return sorted(blocks, key=lambda block: block.order)
 
-    def render(self, separator: str = "\n\n") -> str:
-        """拼装完整系统提示词。"""
-        return separator.join(block.render() for block in self.get_blocks())
+    def render(
+        self,
+        separator: str = "\n\n",
+        *,
+        placement: Optional[PromptPlacement] = None,
+        context: Any = None,
+    ) -> str:
+        """按 placement 拼装提示词；为空时渲染全部块用于调试。"""
+        return separator.join(
+            block.render() for block in self.get_blocks(placement=placement, context=context)
+        )
+
+    def render_system(self, separator: str = "\n\n") -> str:
+        return self.render(separator, placement="system")
+
+    def render_system_reminders(self, separator: str = "\n\n") -> str:
+        return self.render(separator, placement="system_reminder")
 
 
 def build_system_prompt(
     blocks: Iterable[PromptBlock],
     separator: str = "\n\n",
+    *,
+    placement: Optional[PromptPlacement] = None,
 ) -> str:
     """便捷函数：直接由分块列表拼装完整系统提示词。"""
-    return SystemPromptTemplate(blocks).render(separator=separator)
+    return SystemPromptTemplate(blocks).render(
+        separator=separator,
+        placement=placement,
+    )
 
 
 def format_tool_inventory(
@@ -96,11 +154,6 @@ def format_tool_inventory(
             parts.append(f"- {name}: {description}")
 
     return "\n".join(parts)
-
-
-def format_tool_catalog(tool_descriptions: Sequence[Mapping[str, Any]]) -> str:
-    """向后兼容：保留完整工具清单格式化接口。"""
-    return format_tool_inventory(tool_descriptions, include_parameters=True)
 
 
 def build_visibility_section() -> str:

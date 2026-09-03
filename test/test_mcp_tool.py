@@ -9,11 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_resource_hub_tools, register_mcp_tools
-from mcp import MCPHub
-from skill.builtin.mcp_skill import MCPSkill
-from skill.manager import SkillManager
-from skill.meta_tools import SkillTool
-from skill.registry import SkillRegistry
+from Emcp import MCPHub
 
 
 class FakeMCPClient:
@@ -171,11 +167,11 @@ class TestMCPToolIntegration(unittest.TestCase):
         manager = MCPToolManager(server_source="unused", client=self.fake_client)
         manager.register_to_registry(self.registry)
 
-        result = self.registry.executeTool("echo", {"text": "hello"})
+        result = self.registry.execute_tool("echo", {"text": "hello"})
         self.assertEqual(result, "hello")
         self.assertEqual(self.fake_client.called[-1][0], "echo")
 
-        result2 = self.registry.executeTool("sum_two", {"a": 2, "b": 5})
+        result2 = self.registry.execute_tool("sum_two", {"a": 2, "b": 5})
         self.assertEqual(result2, "7")
         self.assertEqual(self.fake_client.called[-1], ("sum_two", {"a": 2, "b": 5}))
 
@@ -184,7 +180,7 @@ class TestMCPToolIntegration(unittest.TestCase):
         manager.register_to_registry(self.registry)
 
         with self.assertRaises(ValueError):
-            self.registry.executeTool("sum_two", {"a": 2})
+            self.registry.execute_tool("sum_two", {"a": 2})
 
     def test_manual_connect_mode(self):
         manager = MCPToolManager(
@@ -231,10 +227,10 @@ class TestMCPToolIntegration(unittest.TestCase):
         self.assertIn("mcp_list_mcp_resources", self.registry.tools)
         self.assertIn("mcp_read_mcp_resource", self.registry.tools)
 
-        listing = self.registry.executeTool("mcp_list_mcp_resources", {})
+        listing = self.registry.execute_tool("mcp_list_mcp_resources", {})
         self.assertIn("memo://alpha", listing)
 
-        content = self.registry.executeTool("mcp_read_mcp_resource", {"uri": "memo://alpha"})
+        content = self.registry.execute_tool("mcp_read_mcp_resource", {"uri": "memo://alpha"})
         self.assertEqual(content, "alpha body")
 
     def test_mcp_hub_resource_tools_aggregate_servers(self):
@@ -327,63 +323,6 @@ class TestMCPToolIntegration(unittest.TestCase):
         self.assertTrue(write_spec.metadata["mcp_open_world"])
         self.assertIn("远程副作用", write_spec.build_schema_description())
         self.assertIn("外部世界", write_spec.build_schema_description())
-
-    def test_register_prompt_skills(self):
-        manager = MCPToolManager(server_source="unused", client=self.fake_client)
-        registry = SkillRegistry()
-
-        names = manager.register_prompt_skills(registry, skill_prefix="mcp_unused_")
-        self.assertEqual(names, ["mcp_unused_review_notes"])
-        self.assertTrue(registry.has("mcp_unused_review_notes"))
-
-        manifest = registry.get_manifest("mcp_unused_review_notes")
-        self.assertEqual(manifest.source_type, "mcp_prompt")
-        self.assertEqual(manifest.exposure_mode, "on_demand")
-
-        skill = registry.create("mcp_unused_review_notes", prompt_arguments={"language": "英文"})
-        body = skill.get_body_prompt()
-        self.assertIn("MCP Prompt: review_notes", body)
-        self.assertIn("英文", body)
-
-    def test_skill_tool_passes_arguments_to_mcp_prompt_skill(self):
-        registry = SkillRegistry()
-        manager = MCPToolManager(server_source="unused", client=self.fake_client)
-        manager.register_prompt_skills(registry, skill_prefix="mcp_unused_")
-
-        skill_manager = SkillManager()
-        tool = SkillTool(registry, skill_manager, set())
-        result = tool.run(
-            {
-                "skill_name": "mcp_unused_review_notes",
-                "skill_arguments": {"language": "英文"},
-            }
-        )
-
-        self.assertEqual(result.status, "success")
-        prompt_call = self.fake_client.called[-1]
-        self.assertEqual(prompt_call[0], "get_prompt")
-        self.assertEqual(prompt_call[1]["arguments"], {"language": "英文"})
-        runtime_prompt = skill_manager.build_runtime_skill_context_prompt()
-        self.assertIn("英文", runtime_prompt)
-
-    def test_mcp_skill_registers_and_cleans_prompt_skills(self):
-        registry = SkillRegistry()
-        skill = MCPSkill(
-            server_source="unused",
-            auto_connect=True,
-            include_resource_tools=False,
-            prompt_registry=registry,
-            register_prompt_skills=True,
-        )
-        skill._manager = MCPToolManager(server_source="unused", client=self.fake_client)
-
-        skill.on_activate(agent=None)
-        registered = registry.list_available_names()
-        self.assertIn("mcp_unused_review_notes", registered)
-
-        skill.on_deactivate(agent=None)
-        self.assertNotIn("mcp_unused_review_notes", registry.list_available_names())
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -6,8 +6,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 import time
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
+from core.Exception import ToolNotFoundError
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
 from Tool.AsyncToolExecutor import AsyncToolExecutor
@@ -56,9 +57,9 @@ class FailTool(Tool):
 def registry():
     """创建并注册工具的 ToolRegistry"""
     reg = ToolRegistry()
-    reg.registerTool(AddTool("add", "两数相加", AddParams))
-    reg.registerTool(SlowTool("slow_task", "模拟耗时任务", SlowTaskParams))
-    reg.registerTool(FailTool("fail", "会失败的工具", FailParams))
+    reg.register_tool(AddTool("add", "两数相加", AddParams))
+    reg.register_tool(SlowTool("slow_task", "模拟耗时任务", SlowTaskParams))
+    reg.register_tool(FailTool("fail", "会失败的工具", FailParams))
     return reg
 
 
@@ -82,13 +83,13 @@ class TestAsyncToolExecutor:
     @pytest.mark.asyncio
     async def test_execute_tool_async_not_found(self, executor):
         """测试执行不存在的工具"""
-        with pytest.raises(ValueError, match="Tool .* not found"):
+        with pytest.raises(ToolNotFoundError, match="Tool .* not found"):
             await executor.execute_tool_async("nonexistent", {})
 
     @pytest.mark.asyncio
     async def test_execute_tool_async_invalid_params(self, executor):
         """测试传递无效参数"""
-        with pytest.raises(ValueError, match="Invalid parameters"):
+        with pytest.raises(ValidationError):
             await executor.execute_tool_async("add", {"a": "not_a_number", "b": 20})
 
     @pytest.mark.asyncio

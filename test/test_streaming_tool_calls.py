@@ -4,8 +4,6 @@
 import os
 import sys
 import unittest
-import io
-from contextlib import redirect_stdout
 from types import SimpleNamespace
 
 from pydantic import BaseModel
@@ -14,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm import EasyLLM
 from core.providers import AnthropicProvider, GoogleProvider, OpenAIProvider, OpenAIResponsesProvider, create_codec
+from runtime import AgentStreamEvent, AgentStreamEventType
 from Tool.ToolRegistry import ToolRegistry
 
 
@@ -222,7 +221,7 @@ class ScriptedStreamingProviderEmptyFinal:
 
 class DummyLLM(EasyLLM):
     def __init__(self, provider):
-        self.provider_name = "mock"
+        self.provider_name = "openai"
         self.model = "mock-model"
         self.base_url = "http://mock.local/v1"
         self.api_key = "mock-key"
@@ -259,9 +258,10 @@ class PlainThinkingProvider:
         return SimpleNamespace(content="hello", reasoning_content="先想一想")
 
 
-class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
-    async def test_basic_agent_streaming_tool_loop(self):
-        from agent.BasicAgent import BasicAgent
+class TestAgentStreamingContract(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _tool_agent(provider):
+        from agent import BasicAgent
 
         registry = ToolRegistry()
 
@@ -269,333 +269,82 @@ class TestStreamingToolCalls(unittest.IsolatedAsyncioTestCase):
         def echo(text: str) -> str:
             return f"tool:{text}"
 
-        llm = DummyLLM(ScriptedStreamingProvider())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            verbose_thinking=True,
-        )
+        return BasicAgent(name="streamer", llm=DummyLLM(provider)).with_tool(registry)
 
-        events = []
-        async for event in agent.astream_invoke_with_tool("say hi"):
-            events.append(event)
+    async def test_astream_emits_structured_tool_loop_events(self):
+        agent = self._tool_agent(ScriptedStreamingProvider())
+
+        events = [event async for event in agent.astream("say hi")]
+
+        self.assertTrue(all(isinstance(event, AgentStreamEvent) for event in events))
+        self.assertEqual(
+            [event.type for event in events],
+            [
+                AgentStreamEventType.REASONING_DELTA,
+                AgentStreamEventType.TOOL_CALL,
+                AgentStreamEventType.TOOL_RESULT,
+                AgentStreamEventType.TEXT_DELTA,
+                AgentStreamEventType.FINAL,
+            ],
+        )
+        self.assertEqual(events[1].data["tool_name"], "echo")
+        self.assertEqual(events[2].data["status"], "success")
+        self.assertIn("tool:ping", events[2].content)
+        self.assertEqual(events[-1].content, "pong")
+        self.assertEqual([message.role for message in agent.history], ["user", "assistant", "tool", "assistant"])
+
+    def test_stream_uses_the_same_structured_contract(self):
+        agent = self._tool_agent(ScriptedStreamingProvider())
+
+        events = list(agent.stream("say hi"))
+
+        self.assertEqual(events[-1].type, AgentStreamEventType.FINAL)
+        self.assertEqual(events[-1].content, "pong")
+        self.assertEqual([event.sequence for event in events], list(range(1, len(events) + 1)))
+        serialized = events[0].to_dict()
+        self.assertEqual(AgentStreamEvent.from_dict(serialized), events[0])
+
+    async def test_empty_final_response_keeps_only_the_user_turn(self):
+        from agent import BasicAgent
+
+        agent = BasicAgent(
+            name="empty-final",
+            llm=DummyLLM(ScriptedStreamingProviderEmptyFinal()),
+        ).with_tool(ToolRegistry())
+
+        events = [event async for event in agent.astream("think only")]
+
+        self.assertEqual(events[-1].type, AgentStreamEventType.FINAL)
+        self.assertEqual(events[-1].content, "")
+        self.assertEqual([message.role for message in agent.history], ["user"])
+
+    def test_plain_stream_emits_text_and_final_without_printing(self):
+        from agent import BasicAgent
+
+        agent = BasicAgent(name="plain-streamer", llm=DummyLLM(PlainStreamingProvider()))
+
+        events = list(agent.stream("say hi"))
 
         self.assertEqual(
-            [event["type"] for event in events],
-            ["round_start", "thinking_delta", "tool_call", "tool_result", "round_start", "text_delta", "final"],
+            [event.type for event in events],
+            [AgentStreamEventType.TEXT_DELTA, AgentStreamEventType.TEXT_DELTA, AgentStreamEventType.FINAL],
         )
-        self.assertEqual(events[0]["round"], 1)
-        self.assertEqual(events[2]["tool_name"], "echo")
-        self.assertEqual(events[3]["content"], "tool:ping")
-        self.assertEqual(events[4]["round"], 2)
-        self.assertEqual(events[-1]["content"], "pong")
-        self.assertEqual(agent.get_history_length(), 4)
-        trace = agent.get_trace_history()
-        reasoning = [event["content"] for event in trace if event["type"] == "reasoning"]
-        self.assertEqual(reasoning, ["need tool"])
-        trace_types = [event["type"] for event in trace]
-        self.assertEqual(trace_types[0], "user_message")
-        self.assertIn("reasoning", trace_types)
-        self.assertIn("assistant_message", trace_types)
-        self.assertIn("tool_call", trace_types)
-        self.assertIn("tool_result", trace_types)
-        self.assertEqual(trace_types[-1], "turn_end")
-        history = agent.get_history()
-        self.assertEqual(history[0]["role"], "user")
-        self.assertEqual(history[0]["content"], "say hi")
-        self.assertEqual(history[1]["tool_calls"][0]["function"]["name"], "echo")
-        self.assertEqual(history[2]["tool_call_id"], "call_1")
-        self.assertEqual(history[3]["role"], "assistant")
-        self.assertEqual(history[3]["content"], "pong")
+        self.assertEqual("".join(event.content or "" for event in events[:-1]), "hello world")
+        self.assertEqual(events[-1].content, "hello world")
 
-    async def test_astream_invoke_tool_mode_returns_final_text(self):
-        from agent.BasicAgent import BasicAgent
+    def test_invoke_preserves_reasoning_in_canonical_history(self):
+        from agent import BasicAgent
 
-        registry = ToolRegistry()
+        agent = BasicAgent(name="plain-thinking", llm=DummyLLM(PlainThinkingProvider()))
 
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProvider())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
-
-        result = await agent.astream_invoke("say hi")
-        self.assertEqual(result, "pong")
-
-    async def test_astream_invoke_tool_mode_displays_thinking_and_final(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProvider())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            verbose_thinking=True,
-        )
-
-        stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            result = await agent.astream_invoke("say hi")
-
-        self.assertEqual(result, "pong")
-        self.assertEqual(
-            stdout.getvalue(),
-            "round 1\n\nthinking content:\nneed tool\ntool_calls:\necho : {'text': 'ping'}\n\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
-        )
-        trace = agent.get_trace_history()
-        self.assertEqual(
-            [event["content"] for event in trace if event["type"] == "reasoning"],
-            ["need tool"],
-        )
-
-    async def test_astream_invoke_with_tool_preserves_assistant_items_order(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProviderWithAssistantItems())
-        llm.provider_name = "openai_responses"
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
-
-        async for _ in agent.astream_invoke_with_tool("say hi"):
-            pass
-
-        history = agent.get_history()
-        self.assertEqual(history[0]["role"], "user")
-        self.assertEqual(history[0]["content"], "say hi")
-        self.assertEqual(history[1]["type"], "message")
-        self.assertEqual(history[2]["type"], "function_call")
-        self.assertEqual(history[3]["type"], "function_call_output")
-        self.assertEqual(history[-1]["role"], "assistant")
-
-    async def test_astream_invoke_with_tool_records_empty_pre_tool_assistant_nodes(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        class TranslateParams(BaseModel):
-            text: str
-            target_lang: str
-
-        class CalculatorParams(BaseModel):
-            expression: str
-
-        @registry.tool("translate_tool", "Translate text", TranslateParams)
-        def translate_tool(text: str, target_lang: str) -> str:
-            return f"Translated: {text}"
-
-        @registry.tool("calculator", "Calculate expression", CalculatorParams)
-        def calculator(expression: str) -> str:
-            return str(eval(expression, {"__builtins__": {}}, {}))
-
-        llm = DummyLLM(ScriptedStreamingProviderMultiToolRounds())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            verbose_thinking=True,
-        )
-
-        async for _ in agent.astream_invoke_with_tool("执行多轮工具"):
-            pass
-
-        trace = agent.get_trace_history()
-        self.assertEqual([event["type"] for event in trace], [
-            "user_message",
-            "reasoning",
-            "assistant_message",
-            "tool_call",
-            "tool_result",
-            "assistant_message",
-            "tool_call",
-            "tool_result",
-            "assistant_message",
-            "turn_end",
-        ])
-
-        first_pre_tool = trace[2]
-        second_pre_tool = trace[5]
-        first_tool_result = trace[4]
-        second_tool_call = trace[6]
-
-        self.assertEqual(first_pre_tool["metadata"]["stage"], "pre_tool")
-        self.assertEqual(second_pre_tool["metadata"]["stage"], "pre_tool")
-        self.assertEqual(first_pre_tool["content"], "")
-        self.assertEqual(second_pre_tool["content"], "")
-        self.assertEqual(first_pre_tool["parent_id"], trace[1]["id"])
-        self.assertEqual(trace[3]["parent_id"], first_pre_tool["id"])
-        self.assertEqual(second_pre_tool["parent_id"], first_tool_result["id"])
-        self.assertEqual(second_tool_call["parent_id"], second_pre_tool["id"])
-        self.assertEqual(second_pre_tool["round"], 2)
-        self.assertEqual(trace[8]["metadata"]["stage"], "final")
-
-    async def test_empty_final_response_does_not_pollute_replay_history(self):
-        from agent.BasicAgent import BasicAgent
-
-        llm = DummyLLM(ScriptedStreamingProviderEmptyFinal())
-        agent = BasicAgent(name="streamer", llm=llm, enable_tool=True, tool_registry=ToolRegistry())
-
-        events = [event async for event in agent.astream_invoke_with_tool("think only")]
-
-        self.assertEqual(events[-1]["type"], "final")
-        self.assertEqual(events[-1]["content"], "")
-        self.assertEqual(agent.replay_history, [{"role": "user", "content": "think only"}])
-
-    def test_openai_codec_rejects_empty_assistant_replay_messages(self):
-        codec = create_codec("deepseek")
-
-        self.assertEqual(codec.assistant_message_to_replay(content="", thinking="hidden"), [])
-        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": None}))
-        self.assertFalse(codec.is_request_ready_message({"role": "assistant", "content": ""}))
-        self.assertEqual(
-            codec.prepare_messages(
-                [
-                    {"role": "assistant", "content": None},
-                    {"role": "user", "content": "next"},
-                ]
-            ),
-            [{"role": "user", "content": "next"}],
-        )
-
-    async def test_stream_invoke_tool_mode_rejects_running_event_loop(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProvider())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
-
-        with self.assertRaisesRegex(RuntimeError, "active event loop"):
-            agent.stream_invoke("say hi")
-
-    def test_stream_invoke_tool_mode_returns_final_text(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProvider())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
-
-        result = agent.stream_invoke("say hi")
-        self.assertEqual(result, "pong")
-
-    def test_stream_invoke_tool_mode_skips_empty_thinking_header(self):
-        from agent.BasicAgent import BasicAgent
-
-        registry = ToolRegistry()
-
-        @registry.tool("echo", "Echo tool", EchoParams)
-        def echo(text: str) -> str:
-            return text
-
-        llm = DummyLLM(ScriptedStreamingProviderNoThinking())
-        agent = BasicAgent(
-            name="streamer",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            verbose_thinking=True,
-        )
-
-        stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            result = agent.stream_invoke("say hi")
-
-        self.assertEqual(result, "pong")
-        self.assertEqual(
-            stdout.getvalue(),
-            "round 1\n\ncontent:\n准备调用工具\ntool_calls:\necho : {'text': 'ping'}\n\nround 2\n\ncontent:\npong\nfinal res:\npong\n",
-        )
-        trace = agent.get_trace_history()
-        self.assertEqual(
-            [event["content"] for event in trace if event["type"] == "reasoning"],
-            [],
-        )
-
-    def test_stream_invoke_plain_mode_displays_content_and_final(self):
-        from agent.BasicAgent import BasicAgent
-
-        llm = DummyLLM(PlainStreamingProvider())
-        agent = BasicAgent(
-            name="plain-streamer",
-            llm=llm,
-        )
-
-        stdout = io.StringIO()
-        with redirect_stdout(stdout):
-            result = agent.stream_invoke("say hi")
-
-        self.assertEqual(result, "hello world")
-        self.assertEqual(
-            stdout.getvalue(),
-            "content:\nhello world\nfinal res:\nhello world\n",
-        )
-        trace = agent.get_trace_history()
-        self.assertEqual(trace[0]["type"], "user_message")
-        self.assertEqual(trace[1]["type"], "assistant_message")
-        self.assertEqual(trace[-1]["type"], "turn_end")
-
-    def test_invoke_plain_mode_preserves_thinking_in_history(self):
-        from agent.BasicAgent import BasicAgent
-
-        llm = DummyLLM(PlainThinkingProvider())
-        agent = BasicAgent(
-            name="plain-thinking",
-            llm=llm,
-        )
-
-        result = agent.invoke("say hi")
-
-        self.assertEqual(result, "hello")
-        history = agent.get_history()
-        self.assertEqual(history[0]["role"], "user")
-        self.assertEqual(history[0]["content"], "say hi")
-        self.assertEqual(history[1]["role"], "assistant")
-        self.assertEqual(history[1]["content"], "hello")
-        self.assertEqual(history[1]["reasoning_content"], "先想一想")
+        self.assertEqual(agent.invoke("say hi"), "hello")
+        self.assertEqual([message.role for message in agent.history], ["user", "assistant"])
+        reasoning_blocks = [
+            block
+            for block in agent.history[-1].content
+            if block.type == "reasoning"
+        ]
+        self.assertEqual([block.text for block in reasoning_blocks], ["先想一想"])
 
 
 class TestProviderStreamingHelpers(unittest.TestCase):

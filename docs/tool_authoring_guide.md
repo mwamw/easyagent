@@ -185,15 +185,10 @@ class AddTool(Tool):
 
 - 较早期字段。现在主路径不建议依赖它来设计关键逻辑。
 
-#### `demand_skill_tool`
+#### `expose_in_deferred`
 
-- 表示这个工具是否由 on-demand skill 临时挂载。
-
-#### `demand_skill_name`
-
-- 记录这个工具来源于哪个 skill。
-
-这两个字段的意义是让 runtime 在 invoke 结束后正确清理临时工具。
+- 表示 deferred schema 模式下是否默认暴露该工具。
+- Skill 的 `allowed-tools` 可以在当前 invoke 中临时展开未默认暴露的工具。
 
 ### 3.5 风险标签与产品元信息
 
@@ -377,9 +372,7 @@ registry.register_tool(MyTool())
 agent = BasicAgent(
     name="assistant",
     llm=EasyLLM(),
-    enable_tool=True,
-    tool_registry=registry,
-)
+).with_tool(registry)
 ```
 
 ## 10. 推荐实践

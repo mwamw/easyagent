@@ -126,7 +126,7 @@ class PrintToolCallback(BaseCallback):
 from easyagent.callbacks import CallbackManager
 
 callback_manager = CallbackManager([PrintToolCallback()])
-agent = BasicAgent(..., callback_manager=callback_manager)
+agent = BasicAgent(...).with_callbacks(callback_manager)
 ```
 
 ## 8. 产品集成建议

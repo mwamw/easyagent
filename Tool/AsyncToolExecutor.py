@@ -13,14 +13,14 @@ class AsyncToolExecutor:
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
 
     async def execute_tool_async(self,tool_name:str,parameters:dict):
-        loop=asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         def _execute():
             return self.registry.execute_tool(tool_name,parameters)
         result=await loop.run_in_executor(self.executor,_execute)
         return result
 
     async def execute_tool_result_async(self, tool_name: str, parameters: dict) -> ToolResult:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _execute():
             return self.registry.execute_tool_result(tool_name, parameters)

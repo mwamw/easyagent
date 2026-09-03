@@ -1,7 +1,6 @@
 """MCP tool integration for EasyAgent.
 
-This module bridges MCP tools/resources into EasyAgent's ToolRegistry and
-maps MCP prompts into SkillRegistry on-demand skills.
+This module bridges MCP tools/resources into EasyAgent's ToolRegistry.
 """
 
 from __future__ import annotations
@@ -12,8 +11,6 @@ import logging
 from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, create_model
-
-from skill import SkillRegistry
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
@@ -44,10 +41,6 @@ def _sanitize_model_name(value: str) -> str:
             normalized.append("_")
     safe = "".join(normalized).strip("_")
     return safe or "mcp_item"
-
-
-def _normalize_registry_name(value: str) -> str:
-    return _sanitize_model_name(value).lower()
 
 
 def _prefixed_name(prefix: str, base_name: str) -> str:
@@ -169,47 +162,6 @@ def _build_mcp_guidance(
         lines.append("MCP prompt 是远程模板，不等于最终答案；应把它作为执行上下文的一部分来理解。")
 
     return "\n".join(line for line in lines if line)
-
-
-def _normalize_prompt_arguments(arguments: Any) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
-    if not isinstance(arguments, list):
-        return normalized
-
-    for item in arguments:
-        if isinstance(item, dict):
-            normalized.append(
-                {
-                    "name": str(item.get("name", "")),
-                    "description": str(item.get("description", "")),
-                    "required": bool(item.get("required", False)),
-                }
-            )
-            continue
-
-        normalized.append(
-            {
-                "name": str(getattr(item, "name", "")),
-                "description": str(getattr(item, "description", "")),
-                "required": bool(getattr(item, "required", False)),
-            }
-        )
-    return normalized
-
-
-def _build_prompt_listing_description(prompt_name: str, prompt_info: Dict[str, Any]) -> str:
-    description = str(prompt_info.get("description", "")).strip()
-    args = _normalize_prompt_arguments(prompt_info.get("arguments"))
-    if not args:
-        return description or f"MCP prompt `{prompt_name}`"
-
-    required = [item["name"] for item in args if item.get("required")]
-    arg_note = f"参数: {', '.join(item['name'] for item in args if item['name'])}"
-    if required:
-        arg_note = f"必填参数: {', '.join(required)}"
-    if description:
-        return f"{description}；{arg_note}"
-    return f"MCP prompt `{prompt_name}`；{arg_note}"
 
 
 class MCPListResourcesParams(BaseModel):
@@ -753,7 +705,6 @@ class MCPToolManager(MCPRuntimeManager):
         self.resource_tool_prefix = resource_tool_prefix
         self._wrapped_tools: List[MCPWrappedTool] = []
         self._resource_tools: List[Tool] = []
-        self._registered_prompt_skills: List[str] = []
         self._registered_server_name: Optional[str] = None
 
     @property
@@ -825,93 +776,11 @@ class MCPToolManager(MCPRuntimeManager):
 
         return wrapped
 
-    def register_prompt_skills(
-        self,
-        registry: "SkillRegistry",
-        *,
-        skill_prefix: Optional[str] = None,
-        replace_existing: bool = True,
-    ) -> List[str]:
-        from skill.builtin.mcp_skill import MCPPromptSkill
-
-        try:
-            prompt_infos = self.list_remote_prompts()
-        except Exception as e:
-            logger.debug(f"Failed to list remote prompts for {self.server_label}: {e}")
-            prompt_infos = []
-        prefix = skill_prefix if skill_prefix is not None else f"{self.server_label}_"
-
-        registered: List[str] = []
-        for prompt_info in prompt_infos:
-            prompt_name = str(prompt_info.get("name", "")).strip()
-            if not prompt_name:
-                continue
-
-            skill_name = _prefixed_name(prefix, _normalize_registry_name(prompt_name))
-            if registry.has(skill_name):
-                manifest = registry.get_manifest(skill_name)
-                if manifest.source_type != "mcp_prompt":
-                    logger.warning("Skill '%s' 已存在且不是 mcp_prompt，跳过注册", skill_name)
-                    continue
-                if replace_existing:
-                    registry.unregister(skill_name)
-                else:
-                    registered.append(skill_name)
-                    continue
-
-            normalized_prompt_info = {
-                "name": prompt_name,
-                "description": str(prompt_info.get("description", "") or ""),
-                "arguments": _normalize_prompt_arguments(prompt_info.get("arguments")),
-            }
-
-            def _factory(
-                _skill_name: str = skill_name,
-                _prompt_name: str = prompt_name,
-                _prompt_info: Dict[str, Any] = normalized_prompt_info,
-                **kwargs: Any,
-            ):
-                return MCPPromptSkill(
-                    manager=self,
-                    prompt_name=_prompt_name,
-                    prompt_info=_prompt_info,
-                    skill_name=_skill_name,
-                    prompt_arguments=kwargs.pop("prompt_arguments", None),
-                )
-
-            registry.register_factory(skill_name, _factory)
-            registry.update_metadata(
-                skill_name,
-                description=normalized_prompt_info["description"] or f"MCP prompt: {prompt_name}",
-                tags=["mcp", "prompt", self.server_label],
-                listing_description=_build_prompt_listing_description(prompt_name, normalized_prompt_info),
-                when_to_use=(
-                    normalized_prompt_info["description"]
-                    or f"当需要使用 MCP prompt `{prompt_name}` 的远程指令模板时"
-                ),
-                exposure_mode="on_demand",
-                execution_mode="inline",
-                source_type="mcp_prompt",
-                source_path=f"mcp://{self.server_label}/prompts/{prompt_name}",
-                tool_names=[],
-                mcp_server=self.server_label,
-                mcp_prompt_name=prompt_name,
-                mcp_prompt_arguments=normalized_prompt_info["arguments"],
-                source_identifier=f"mcp://{self.server_label}/prompts/{prompt_name}",
-            )
-            registered.append(skill_name)
-
-        self._registered_prompt_skills = list(registered)
-        return registered
-
     def get_wrapped_tools(self) -> List[MCPWrappedTool]:
         return list(self._wrapped_tools)
 
     def get_resource_tools(self) -> List[Tool]:
         return list(self._resource_tools)
-
-    def get_registered_prompt_skills(self) -> List[str]:
-        return list(self._registered_prompt_skills)
 
     def export_state(self) -> dict[str, Any]:
         payload = super().export_state()
@@ -920,7 +789,6 @@ class MCPToolManager(MCPRuntimeManager):
                 "includeResources": self.include_resources,
                 "resourceToolPrefix": self.resource_tool_prefix,
                 "registryServerName": self._registered_server_name,
-                "registeredPromptSkills": list(self._registered_prompt_skills),
                 "wrappedToolNames": [tool.name for tool in self._wrapped_tools],
                 "resourceToolNames": [tool.name for tool in self._resource_tools],
             }
@@ -933,11 +801,6 @@ class MCPToolManager(MCPRuntimeManager):
         self.include_resources = bool(state.get("includeResources", self.include_resources))
         self.resource_tool_prefix = state.get("resourceToolPrefix", self.resource_tool_prefix)
         self._registered_server_name = state.get("registryServerName", self._registered_server_name)
-        self._registered_prompt_skills = [
-            str(item).strip()
-            for item in list(state.get("registeredPromptSkills") or [])
-            if str(item).strip()
-        ]
         return report
 
     @classmethod

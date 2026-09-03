@@ -1,268 +1,214 @@
 # Agent Guide
 
-`BasicAgent` 是 EasyAgent 最常用的运行入口。  
-它建立在 `BaseAgent` 之上，把模型、工具、上下文、技能、会话、权限、回调、Hook、Runtime 组装成一个可工作的 Agent。
+EasyAgent 当前只维护 `BaseAgent` 和 `BasicAgent`。`BaseAgent` 定义稳定状态、模块装配和四种调用协议，`BasicAgent` 安装默认 executor，可以直接运行。
 
-相关文档：
+完整架构见 [Modular Agent Architecture](./modular_agent_architecture.md)。
 
-- [Config Reference](./config_reference.md)
-- [Tool System Guide](./tool_system_guide.md)
-- [Prompt System Guide](./prompt_system_guide.md)
-- [Session Restore Persistence Guide](./session_restore_persistence_guide.md)
-
-## 1. Agent 的职责
-
-一个 `BasicAgent` 主要负责：
-
-- 接收 query
-- 生成 request frame
-- 调模型
-- 处理中间 tool calls
-- 维护历史
-- 在需要时中断给上层做确认
-- 记录 callback / hook / observability
-- 按配置接入 skill、context、memory、session、runtime
-
-## 2. 最小用法
+## 1. 最小 Agent
 
 ```python
 from easyagent import BasicAgent, EasyLLM
 
-llm = EasyLLM(provider="openai", base_url="http://127.0.0.1:5124/v1", api_key="x", model="qwen3.5-9b")
+llm = EasyLLM(
+    provider="openai",
+    base_url="http://127.0.0.1:5124/v1",
+    api_key="122",
+    model="qwen3.5-9b",
+)
 agent = BasicAgent(name="assistant", llm=llm)
-result = agent.invoke("解释一下当前仓库做什么。")
+print(agent.invoke("用一句话介绍当前项目。"))
 ```
 
-## 3. `BasicAgent(...)` 常见初始化参数
-
-### 基础字段
-
-- `name`
-  - agent 名称
-- `llm`
-  - `EasyLLM` 实例
-- `system_prompt`
-  - 直接追加或替换的系统提示词文本
-- `description`
-  - agent 描述，常用于 runtime / task / UI 展示
-
-### 工具相关
-
-- `enable_tool`
-  - 是否启用 tool loop
-- `tool_registry`
-  - `ToolRegistry` 实例
-
-### 配置与上下文
-
-- `config`
-  - `Config` 对象
-- `memory_manage`
-  - `MemoryManage` 实例
-- `context_manager`
-  - `ContextManager` 实例
-- `history_via_context_manager`
-  - 是否将历史构建职责交给 context manager
-
-### 运行控制
-
-- `callback_manager`
-  - `CallbackManager`
-- `skill_manager`
-  - `SkillManager`
-- `permission_engine`
-  - `PermissionEngine`
-- `permission_context`
-  - `PermissionContext`
-- `hook_manager`
-  - `HookManager`
-- `task_service`
-  - `TaskService`
-- `agent_runtime`
-  - `AgentRuntimeManager`
-- `team_manager`
-  - `TeamManager`
-- `execution_context`
-  - `ExecutionContext`
-
-### 调试与推理
-
-- `verbose_thinking`
-  - 是否输出更完整的 thinking 流
-- `reasoning`
-  - provider-specific reasoning / thinking 配置
-- `trace_recorder`
-  - trace 记录器
-- `stream_renderer`
-  - 流式输出渲染器
-
-### 可替换内部组件
-
-- `prompt_composer`
-- `history_message_assembler`
-- `runtime_skill_context_bridge`
-- `tool_interrupt_controller`
-- `tool_loop_engine`
-- `invocation_runner`
-
-## 4. 一次 invoke 的主流程
-
-1. 用户传入 query
-2. Agent 收集 prompt blocks、runtime reminders、dynamic tail、skills、context
-3. RequestCompiler 编译出 request frame
-4. `EasyLLM` 发请求
-5. 若模型返回 tool calls：
-   - 进行权限判定
-   - 可能触发确认中断
-   - 执行工具
-   - 把 tool result 追加回本轮
-6. 继续下一轮直到产出最终回答
-7. 记录 observability、callback、trace
-
-## 5. 和其他模块怎么接
-
-### 接 Tool
+构造器固定为：
 
 ```python
-agent = BasicAgent(
-    name="code-agent",
-    llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
+BasicAgent(name, llm, system_prompt=None, description=None, config=None)
+```
+
+Tool、Context、Plan、Task、Observability、MultiAgent、Memory、MCP、CodeIntel 和 Worktree 都不属于构造参数。
+
+## 2. 四种调用方式
+
+```python
+answer = agent.invoke(query)
+answer = await agent.ainvoke(query)
+
+for event in agent.stream(query):
+    consume(event)
+
+async for event in agent.astream(query):
+    consume(event)
+```
+
+`invoke/ainvoke` 返回最终字符串。`stream/astream` 产出 `AgentStreamEvent`，事件类型包括文本增量、推理增量、工具调用、工具结果、最终结果和错误。
+
+工具是否可用由当前安装的 `ToolRegistry` 决定，不存在额外的 `*_with_tool` 调用方式。
+
+## 3. 安装能力
+
+### Tool
+
+```python
+from easyagent.tools import ToolRegistry, register_filesystem_tools
+
+registry = ToolRegistry()
+register_filesystem_tools(registry, workspace_root=".")
+agent.with_tool(registry)
+```
+
+### Prompt
+
+```python
+from easyagent import PromptBlock, SystemPromptComposer
+
+agent.with_prompt(
+    SystemPromptComposer(
+        [PromptBlock("product", "你是产品专属 Agent。")]
+    )
 )
 ```
 
-详见：
+### MetaMessage runtime
 
-- [Tool System Guide](./tool_system_guide.md)
+MetaMessageManager 是 Agent 内建运行时基础设施，不通过 `with_*` 安装。Skill、Plan、mailbox 和自定义功能模块在事件触发后通过 `agent.emit_metamessage(...)` 注入临时上下文；普通 Agent 使用者应通过具体功能模块或 SystemPromptComposer 表达行为，而不是直接管理 MetaMessage。
 
-### 接 Prompt / Reminder
+### Context 和 compaction
 
 ```python
-agent.with_prompt_block(...)
-agent.with_runtime_reminder(...)
-agent.add_runtime_reminder_source(...)
+from easyagent.context import ContextManager
+
+agent.with_context(ContextManager(max_tokens=16000, auto_history=True))
 ```
 
-详见：
-
-- [Prompt System Guide](./prompt_system_guide.md)
-- [Runtime Reminders Guide](./runtime_reminders_guide.md)
-
-### 接 Skill
+### Permission 和 Hook
 
 ```python
-agent.skill_manager = skill_manager
+from easyagent import HookManager, PermissionContext, PermissionEngine
+
+agent.with_permissions(PermissionEngine(), PermissionContext())
+agent.with_hooks(HookManager())
 ```
 
-或在构造时传入 `skill_manager`。
+默认 Agent 已有权限和默认 guardrail。如果产品需要替换它们，使用上述接口显式替换。
 
-详见：
-
-- [Skill System Guide](./skill_system_guide.md)
-
-### 接 Permission
+### Plan
 
 ```python
-agent = BasicAgent(
-    ...,
-    permission_engine=PermissionEngine(),
-    permission_context=PermissionContext(),
+from easyagent import PlanModeConfig
+
+agent.with_plan(config=PlanModeConfig(register_tools=True))
+agent.enter_plan_mode()
+agent.exit_plan_mode()
+```
+
+Plan 通过 MetaMessage 记录进入和退出规则，通过 PermissionContext 切换执行权限。
+
+### Task
+
+```python
+from easyagent.tasks import InMemoryTaskStore, TaskService
+
+agent.with_task_service(TaskService(InMemoryTaskStore()))
+```
+
+该操作会安装 Tool 并注册 `TaskCreate/Get/Update/List` 与 `TodoWrite`。
+
+### Observability 和 Training
+
+```python
+from easyagent import TrainingExporter
+
+agent.with_observability(path=".easyagent/observability.sqlite3")
+agent.invoke("完成任务")
+TrainingExporter.from_agent(agent).export(".easyagent/training")
+```
+
+### MultiAgent
+
+```python
+agent.with_multi_agent(
+    workspace_root=".",
+    storage_dir=".easyagent/agents",
 )
 ```
 
-详见：
+该模块统一提供 subagent、team、mailbox 和对应控制工具。
 
-- [Permissions Guide](./permissions_guide.md)
-
-### 接 Callback / Hook
+### Code Agent 能力
 
 ```python
-agent = BasicAgent(
-    ...,
-    callback_manager=CallbackManager(),
-    hook_manager=HookManager(),
+agent.with_codeintel()
+agent.with_worktree()
+```
+
+CodeIntel 不可用时保留 FileRead/Grep/Glob fallback。Worktree 只应在 Git 仓库中安装。
+
+### MCP 和 Memory
+
+```python
+agent.with_mcp(server_source=["npx", "-y", "@modelcontextprotocol/server-filesystem", "."])
+agent.with_memory(memory_manager)
+```
+
+两者会安装各自真正需要的 Tool/Context 依赖。
+
+## 4. History 与 Trace
+
+Agent history 使用 `ConversationHistory`：
+
+- `agent.history`：`list[CanonicalMessage]`
+- `agent.replay_history`：当前 provider 可直接发送的 replay
+- `agent.get_history()`：可序列化 canonical dict
+- `agent.get_trace_history()`：可序列化 RuntimeEvent dict
+- `agent.clear_history()`：清空对话历史
+- `agent.clear_trace_history()`：清空事件历史
+
+切换模型使用 `agent.change_model(llm)`。canonical history 保持不变，replay 会按新 provider 重建。
+
+## 5. 工具确认中断
+
+当权限结果要求确认时，executor 抛出 `ToolConfirmationRequired`，不会先伪造 tool result。上层可以读取：
+
+```python
+pending = agent.get_pending_interruption()
+```
+
+用户批准并得到真实工具结果后，通过：
+
+```python
+agent.resolve_pending_interruption(
+    content="真实工具结果",
+    ephemeral_context={"approval": "granted"},
 )
 ```
 
-详见：
+再发起下一次 invoke。自定义中断存储通过 `with_interruptions()` 安装。
 
-- [Callbacks And Streaming Guide](./callbacks_and_streaming_guide.md)
-- [Hooks And Guardrails Guide](./hooks_and_guardrails_guide.md)
-
-### 接 Session / Runtime / Task
-
-这三类通常不一定直接在 `BasicAgent(...)` 初始阶段全部装上，但在产品级集成中很常见。
-
-详见：
-
-- [Session Restore Persistence Guide](./session_restore_persistence_guide.md)
-- [Runtime Collaboration Guide](./runtime_collaboration_guide.md)
-- [Tasks Guide](./tasks_guide.md)
-
-## 6. 什么时候需要替换内部组件
-
-### `prompt_composer`
-
-当你要彻底控制 system prompt 的块级结构时。
-
-### `history_message_assembler`
-
-当你要改变 replay history 的构造逻辑时。
-
-### `runtime_skill_context_bridge`
-
-当你要改变临时 skill 正文如何注入当前请求时。
-
-### `tool_loop_engine`
-
-当你要改变工具调用循环策略时。
-
-### `invocation_runner`
-
-当你要改变 invoke / stream / error handling 的顶层运行方式时。
-
-## 7. 推荐的最小产品装配
-
-对多数产品，推荐这样起步：
+## 6. Session 与关闭
 
 ```python
-BasicAgent(
-    name="product-agent",
-    llm=llm,
-    config=config,
-    enable_tool=True,
-    tool_registry=registry,
-    callback_manager=callback_manager,
-    permission_engine=permission_engine,
-    permission_context=permission_context,
-    observability_recorder=observability_recorder,
-)
+agent.save_session("session-id")
+restored = BasicAgent.load_session("session-id", llm=llm)
+print(restored.get_last_restore_report())
+
+report = agent.close()
 ```
 
-然后按需再接：
+自定义模块恢复时需要向 `load_session` 显式提供对应实例。关闭返回结构化报告，并按依赖顺序释放重模块。
 
-- skill
-- session
-- runtime
-- memory
-- MCP
-- codeintel
+## 7. 自定义 Agent 行为
 
-## 8. 常见误区
+大多数产品不需要再创建新的 Agent 类型。优先替换具体模块：
 
-### 只改 `system_prompt` 就够了吗
+- Prompt：继承 `BaseSystemPromptComposer`
+- MetaMessage：继承 `BaseMetaMessageManager`
+- Plan：继承 `BasePlanMode`
+- Executor：继承 `BaseAgentExecutor`
+- Observability：继承 `BaseObservabilityManager`
+- MultiAgent：继承 `BaseMultiAgentRuntime`
 
-通常不够。  
-产品级 Agent 还应考虑：
+只有调用协议本身需要变化时才继承 `BaseAgent`；此时必须实现 `invoke`、`ainvoke`、`stream` 和 `astream`。
 
-- tool registry
-- permission policy
-- prompt composer
-- runtime reminder
-- callback / hook / observability
+## 8. 已删除接口
 
-### `BasicAgent` 和 `BaseAgent` 该直接用哪个
-
-大多数场景直接用 `BasicAgent`。  
-只有在做框架级二次开发时，才会直接围绕 `BaseAgent` 搭建。
+`ReactAgent`、`PlanningAgent`、`ConversationalAgent` 和 `StructuredOutputAgent` 已删除。旧构造器模块参数、`stream_invoke`、`astream_invoke`、`invoke_with_tool` 及旧执行组件也不再提供兼容层。

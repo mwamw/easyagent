@@ -1,7 +1,7 @@
 """
 LLM 实体关系提取器实现
 基于结构化输出和解析
-复用StructuredOutputAgent
+使用 BasicAgent 与 Pydantic parser 组合结构化提取流程
 
 包含两阶段流程：
 1. 提取 Agent：从文本中提取实体和关系
@@ -11,6 +11,9 @@ from typing import Optional, Any
 from core.llm import EasyLLM
 from datetime import datetime
 from pydantic import BaseModel, Field
+from agent import BasicAgent
+from output import PydanticOutputParser
+from output.base import OutputParseError
 import uuid
 import logging
 from ..Store.GraphStore import Entity, Relation
@@ -66,6 +69,44 @@ class ExtractionOutput(BaseModel):
     relations: list[ExtractedRelation] = Field(description="关系列表")
 
 
+class _StructuredInvoker:
+    """Memory-local structured output workflow built on the maintained Agent."""
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        llm: EasyLLM,
+        system_prompt: str,
+        max_retries: int = 3,
+    ) -> None:
+        self.agent = BasicAgent(name=name, llm=llm, system_prompt=system_prompt)
+        self.parser = PydanticOutputParser(ExtractionOutput)
+        self.max_retries = max(1, int(max_retries))
+
+    def invoke(self, query: str) -> ExtractionOutput:
+        instructions = self.parser.get_format_instructions()
+        current_query = f"{query}\n\n{instructions}"
+        last_error: Exception | None = None
+        last_output = ""
+        for _ in range(self.max_retries):
+            last_output = self.agent.invoke(current_query)
+            try:
+                return self.parser.parse(last_output)
+            except OutputParseError as exc:
+                last_error = exc
+                current_query = (
+                    "The previous response did not satisfy the required JSON schema.\n"
+                    f"Parse error: {exc}\n"
+                    f"Previous response:\n{last_output}\n\n"
+                    f"Return a corrected response only.\n{instructions}"
+                )
+        raise OutputParseError(
+            f"Unable to parse structured output after {self.max_retries} attempts: {last_error}",
+            last_output,
+        )
+
+
 class Extractor:
     def __init__(self, llm: EasyLLM, enable_verification: bool = True):
         """
@@ -77,22 +118,17 @@ class Extractor:
         self.llm = llm
         self.enable_verification = enable_verification
 
-        # 提取 Agent
-        from agent import StructuredOutputAgent
-        
-        self.extract_agent = StructuredOutputAgent(
+        self.extract_agent = _StructuredInvoker(
             name="extractor",
             llm=llm,
-            output_model=ExtractionOutput,
             system_prompt=EXTRACTOR_SYSTEM_PROMPT
         )
 
         # 验证 Agent
         if enable_verification:
-            self.verify_agent = StructuredOutputAgent(
+            self.verify_agent = _StructuredInvoker(
                 name="verifier",
                 llm=llm,
-                output_model=ExtractionOutput,
                 system_prompt=VERIFIER_SYSTEM_PROMPT
             )
 

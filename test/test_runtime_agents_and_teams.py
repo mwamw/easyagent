@@ -23,7 +23,7 @@ from Tool.runtime import SubagentRequest
 from agent import BasicAgent
 from core.Exception import AgentStopRequested
 from core.llm import EasyLLM
-from runtime import AgentRuntimeManager, ExecutionContext, TeamManager
+from runtime import AgentRuntimeManager, ExecutionContext, MultiAgentRuntime, TeamManager
 from task import InMemoryTaskStore, TaskService
 
 
@@ -46,7 +46,12 @@ class FakeSubagent:
     def __init__(self, response_prefix: str = "handled", *, delay_s: float = 0.0):
         self.response_prefix = response_prefix
         self.delay_s = delay_s
-        self.trace_history = [{"type": "tool_call", "tool_name": "WebSearch"}]
+        self.trace_history = [
+            {
+                "type": "tool.invoke.started",
+                "data": {"tool_name": "WebSearch"},
+            }
+        ]
 
     def invoke(self, prompt: str) -> str:
         if self.delay_s:
@@ -55,11 +60,10 @@ class FakeSubagent:
 
     def get_context_usage(self) -> dict:
         return {
-            "version": 2,
-            "requestEstimate": {"estimatedRequestTokens": 21, "source": "test", "metadata": {}},
-            "budget": {},
-            "compaction": {"last": {}, "estimatedRequestTokens": 21, "tokenSource": "test", "metadata": {}},
-            "cache": {},
+            "estimatedRequestTokens": 21,
+            "canonicalMessages": 0,
+            "replayMessages": 0,
+            "provider": "mock",
         }
 
     def get_trace_history(self):
@@ -384,18 +388,14 @@ class TestCollaborationTools(unittest.TestCase):
             worker = BasicAgent(
                 name="worker",
                 llm=DummyLLM(),
-                enable_tool=True,
-                tool_registry=worker_registry,
+            ).with_tool(worker_registry).with_multi_agent(
+                MultiAgentRuntime(
+                    workspace_root=tempdir,
+                    storage_dir=os.path.join(tempdir, ".agents"),
+                    agent_runtime=runtime,
+                )
             )
-            register_mailbox_tools(
-                worker_registry,
-                agent_runtime=runtime,
-                parent_agent=worker,
-            )
-            worker.bind_runtime(
-                agent_runtime=runtime,
-                execution_context=handle.execution_context,
-            )
+            worker.execution_context = handle.execution_context
 
             runtime.send_message(
                 recipient_type="agent",
@@ -404,9 +404,22 @@ class TestCollaborationTools(unittest.TestCase):
                 sender_id="manager",
             )
 
-            prompt = worker.get_enhanced_prompt()
-            self.assertIn("## 协作邮箱", prompt)
-            self.assertIn("收到消息后先调整计划，再决定是否改文件", prompt)
+            worker.multi_agent.sync_mailbox(
+                execution_context=worker.execution_context,
+                metamessage_manager=worker.metamessage_manager,
+            )
+            worker.metamessage_manager.flush()
+            self.assertNotIn("## 协作邮箱", worker.get_enhanced_prompt())
+            mailbox_messages = [
+                message
+                for message in worker.history
+                if getattr(message, "metadata", {}).get("source") == "mailbox"
+            ]
+            self.assertEqual(len(mailbox_messages), 1)
+            self.assertIn(
+                "收到消息后先调整计划，再决定是否改文件",
+                mailbox_messages[0].text_content(),
+            )
 
             delivered = runtime.list_mailbox(handle.agent_id, include_consumed=False)
             self.assertEqual(delivered[0].status, "delivered")
@@ -422,8 +435,17 @@ class TestCollaborationTools(unittest.TestCase):
             self.assertEqual(ack_result.structured_data["messages"][0]["status"], "consumed")
             self.assertIn('"ackedAll"', ack_result.to_display_string())
 
-            prompt_after_ack = worker.get_enhanced_prompt()
-            self.assertNotIn("收到消息后先调整计划，再决定是否改文件", prompt_after_ack)
+            worker.multi_agent.sync_mailbox(
+                execution_context=worker.execution_context,
+                metamessage_manager=worker.metamessage_manager,
+            )
+            worker.metamessage_manager.flush()
+            mailbox_messages_after_ack = [
+                message
+                for message in worker.history
+                if getattr(message, "metadata", {}).get("source") == "mailbox"
+            ]
+            self.assertEqual(len(mailbox_messages_after_ack), 1)
             runtime.close()
 
     def test_agent_tool_uses_runtime_and_returns_execution_context(self):
@@ -536,10 +558,7 @@ class TestCollaborationTools(unittest.TestCase):
             parent = BasicAgent(
                 name="manager",
                 llm=llm,
-                enable_tool=True,
-                tool_registry=registry,
-                task_service=service,
-            )
+            ).with_tool(registry).with_task_service(service)
             root_task = service.create_task(title="Parent task", owner="manager")
             parent.set_current_task(root_task.task_id)
 

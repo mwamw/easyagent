@@ -23,13 +23,18 @@ from Tool.builtin import (
 )
 from Tool.builtin.agent_tool import clone_tool_registry_for_workspace
 from Tool.runtime import WorktreeManager
+from agent import BasicAgent
+from core.Config import Config
+from core.llm import EasyLLM
 
 
 class FakeSubagent:
     def __init__(self, response_prefix: str = "handled", *, delay_s: float = 0.0):
         self.response_prefix = response_prefix
         self.delay_s = delay_s
-        self.trace_history = [{"type": "tool_call", "tool_name": "WebSearch"}]
+        self.trace_history = [
+            {"type": "tool.invoke.started", "data": {"tool_name": "WebSearch"}}
+        ]
 
     def invoke(self, prompt: str) -> str:
         if self.delay_s:
@@ -38,11 +43,10 @@ class FakeSubagent:
 
     def get_context_usage(self) -> dict:
         return {
-            "version": 2,
-            "requestEstimate": {"estimatedRequestTokens": 42, "source": "test", "metadata": {}},
-            "budget": {},
-            "compaction": {"last": {}, "estimatedRequestTokens": 42, "tokenSource": "test", "metadata": {}},
-            "cache": {},
+            "estimatedRequestTokens": 42,
+            "canonicalMessages": 0,
+            "replayMessages": 0,
+            "provider": "mock",
         }
 
     def get_trace_history(self):
@@ -63,6 +67,32 @@ def _init_git_repo(root: str) -> str:
 
 
 class TestAgentTool(unittest.TestCase):
+    def test_multi_agent_module_reuses_parent_worktree_manager(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = _init_git_repo(tempdir)
+            manager = WorktreeManager(
+                repo,
+                storage_dir=os.path.join(tempdir, "worktrees"),
+                original_cwd=repo,
+            )
+            agent = BasicAgent(
+                name="manager",
+                llm=EasyLLM(provider="openai", api_key="test", model="test-model"),
+                config=Config(
+                    workspace_root=repo,
+                    allowed_roots=[repo],
+                    enable_worktree=True,
+                ),
+            )
+            agent.with_tool().with_worktree(manager).with_multi_agent(
+                workspace_root=repo,
+                storage_dir=os.path.join(tempdir, "agents"),
+            )
+
+            agent_tool = agent.tool_registry.get_tool("Agent")
+            self.assertIs(agent_tool.worktree_manager, manager)
+            agent.close()
+
     def test_agent_tool_runs_subagent_synchronously(self):
         with tempfile.TemporaryDirectory() as tempdir:
             captured_requests = []

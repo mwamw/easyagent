@@ -10,20 +10,20 @@
 
 ### 1. `session_store.py: SessionStore` 
 负责 Agent 会话生命周期与核心状态的管理。
-- **快照存储 (Snapshot)**: 持久化 Agent 的各类变量（例如 `PlanningAgent` 的 `current_plan` 与 `execution_log`、`ReactAgent` 的 `scratchpad`）。
+- **快照存储 (Snapshot)**: 使用 `SessionSnapshotV3` 持久化 BasicAgent 的 canonical history、runtime events 和已安装模块状态。
 - **生命周期**: 自动记录创建 (`created_at`)、更新 (`updated_at`) 与最后访问时间 (`last_accessed_at`)。
 - **过期管理**: 支持为特定会话设置 `expires_at`，并提供了 `cleanup_expired_sessions()` 定期清理失效数据。
 
 ### 2. `conversation_store.py: ConversationStore`
 专门负责对话历史 (Message List) 的持久化落地。
-- **高阶类型支持**: 完美支持复杂对消息树的存储，包括 `ToolMessage`、`SystemMessage` 以及 `AssistantMessage` 等包含 `tool_call_id` 和复杂 `metadata` 嵌套的数据结构。
+- **Canonical 消息**: 统一存储 `CanonicalMessage` 与其 text/reasoning/tool_call/tool_result 内容块，不依赖任一 provider 的消息类。
 - **增量式管理**: 通过 `replace_messages` 与 `load_messages` 控制对话窗口的重建。
 
 ---
 
 ## 🚀 快速入门
 
-为了降低开发者心智负担，持久化能力已无缝集成至所有继承了 `BaseAgent` 体系的 Agent 中（如 `BasicAgent`, `ConversationalAgent`, `ReactAgent`, `PlanningAgent`）。
+持久化能力由 `BaseAgent` 提供，当前唯一维护的可实例化实现是 `BasicAgent`。
 
 ### 保存会话
 只要调用实例的 `save_session` 方法，Agent 就会自动将内部状态快照和消息列表存入本地 `SQLite` 环境（默认路径为 `db/easyagent_sessions.db`）。
@@ -48,7 +48,7 @@ agent.save_session("session_1001")
 ```python
 from agent import BasicAgent
 
-# 能够自动还原所有的 Memory, Prompt, History 以及特殊的专有参数
+# 内置轻量模块可自动恢复；Tool、Context、Memory、MCP 等外部依赖需显式传入
 restored_agent = BasicAgent.load_session(
     session_id="session_1001",
     llm=llm
@@ -87,5 +87,5 @@ print(f"清除了 {removed_count} 条过期会话记录。")
 目前的实现基于 SQLite 本地化，能够满足单节点应用 99% 的核心需求：
 - [x] 基于 SQLite 的会话持久化与恢复。
 - [x] `SessionStore` 与 `ConversationStore` 生命周期管理。
-- [x] `BasicAgent, ConversationalAgent, ReactAgent, PlanningAgent` 的内置无缝接入。
+- [x] `BasicAgent` 与模块化 `with_*` 能力的显式快照/恢复。
 - [ ] 考虑到分布式部署，未来将可能扩展 **Redis 存储后端**，提供 `RedisSessionStore` 与 `RedisConversationStore` 抽象类。

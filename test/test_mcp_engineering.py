@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agent import BasicAgent
 from core.llm import EasyLLM
 from core.permissions import PermissionBehavior, PermissionContext, PermissionRule
-from mcp import MCPPolicyContext, MCPPolicyRule
+from Emcp import MCPPolicyContext, MCPPolicyRule
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_tools
 
@@ -183,9 +183,7 @@ class TestMCPEngineering(unittest.TestCase):
     def test_session_restore_rebuilds_mcp_runtime_from_snapshot(self):
         with tempfile.TemporaryDirectory() as tempdir:
             db_path = os.path.join(tempdir, "sessions.db")
-            registry = ToolRegistry()
-            register_mcp_tools(
-                registry,
+            manager = MCPToolManager(
                 server_source="alpha",
                 client=FakeMCPClient(),
                 include_resources=True,
@@ -193,9 +191,7 @@ class TestMCPEngineering(unittest.TestCase):
             agent = BasicAgent(
                 name="assistant",
                 llm=DummyLLM(),
-                tool_registry=registry,
-                enable_tool=True,
-            )
+            ).with_mcp(manager)
             session_id = "mcp-phase-f"
             agent.save_session(session_id, store=db_path)
 
@@ -203,19 +199,24 @@ class TestMCPEngineering(unittest.TestCase):
                 session_id,
                 llm=DummyLLM(),
                 store=db_path,
-                mcp_client_overrides={"alpha": FakeMCPClient()},
+                mcp_managers=[
+                    MCPToolManager(
+                        server_source="alpha",
+                        client=FakeMCPClient(),
+                        include_resources=True,
+                    )
+                ],
             )
 
             self.assertIsNotNone(restored.tool_registry)
             self.assertTrue(restored.tool_registry.has_tool("echo"))
             self.assertTrue(restored.tool_registry.has_tool("alpha_list_mcp_resources"))
-            result = restored.tool_registry.executeTool("echo", {"text": "hello"})
+            result = restored.tool_registry.execute_tool("echo", {"text": "hello"})
             self.assertEqual(result, "hello")
 
             report = restored.get_last_restore_report()
             self.assertIsNotNone(report)
-            self.assertEqual(report["components"]["mcp_runtime"]["status"], "restored")
-            self.assertIn("alpha", report["components"]["mcp_runtime"]["restoredItems"])
+            self.assertEqual(report["components"]["mcp:alpha"]["status"], "restored")
 
     def test_permission_rules_can_target_mcp_server(self):
         registry = ToolRegistry()
@@ -246,23 +247,18 @@ class TestMCPEngineering(unittest.TestCase):
         self.assertIn("alpha server is blocked", result.to_display_string())
 
     def test_agent_close_reports_mcp_runtime_component(self):
-        registry = ToolRegistry()
-        register_mcp_tools(
-            registry,
+        manager = MCPToolManager(
             server_source="alpha",
             client=FakeMCPClient(),
         )
         agent = BasicAgent(
             name="assistant",
             llm=DummyLLM(),
-            tool_registry=registry,
-            enable_tool=True,
-        )
+        ).with_mcp(manager)
 
         report = agent.close(close_llm=False)
 
-        self.assertEqual(report["components"]["mcp_runtime"]["status"], "closed")
-        self.assertEqual(report["components"]["mcp_runtime"]["metadata"]["managerCount"], 1)
+        self.assertEqual(report["components"]["mcp[0]"]["status"], "closed")
 
 
 if __name__ == "__main__":

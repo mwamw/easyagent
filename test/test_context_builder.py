@@ -1,798 +1,137 @@
-"""
-ContextBuilder / ContextManager 集成测试
-"""
-import unittest
-import sys
-import os
-import uuid
+from __future__ import annotations
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-
-from context.window import ContextItem, ContextWindow
 from context.builder import ContextBuilder
-from context.manager import ContextManager
-from core.providers import create_codec
-from core.replay_converter import canonical_to_replay_history
-from context.source.base import BaseContextSource
-from context.source.history_source import HistoryContextSource
-from context.source.memory_source import MemoryContextSource
-from context.compressor.token_budget import TokenBudgetCompressor
 from context.compressor.sliding_window import SlidingWindowCompressor
-from context.compressor.history import RuleBasedHistoryCompactor, LLMHistoryCompactor
-from context.formatter.plain import PlainFormatter
-from context.formatter.xml import XMLFormatter
+from context.compressor.token_budget import TokenBudgetCompressor
 from context.formatter.markdown import MarkdownFormatter
+from context.formatter.xml import XMLFormatter
+from context.manager import ContextManager
+from context.source.base import BaseContextSource
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
-from manual_test_runner import run_manual_tests, exit_with_status
+from context.window import ContextItem
+from core.cache_policy import CacheableBlock
+from core.request_input import ReplayRequestInput
 
 
-# ============================================================
-# 测试用的 Mock Source
-# ============================================================
-class MockSource(BaseContextSource):
-    """测试用的模拟来源"""
-
-    def __init__(self, name: str, items_data: list):
+class StubSource(BaseContextSource):
+    def __init__(self, name: str, values: list[dict]):
         self._name = name
-        self._items_data = items_data
-
-    def fetch(self, query, max_tokens=0, **kwargs):
-        return [
-            ContextItem(
-                content=d["content"],
-                source=self._name,
-                priority=d.get("priority", 0.5),
-                token_count=d.get("token_count", 10),
-            )
-            for d in self._items_data
-        ]
+        self._values = values
 
     @property
-    def source_name(self):
+    def source_name(self) -> str:
         return self._name
 
-
-class MockMemoryItem:
-    def __init__(self, content: str, importance: float = 0.5, memory_id: str = ""):
-        self.content = content
-        self.importance = importance
-        self.id = memory_id
-
-
-class MockWorkingMemory:
-    def __init__(self, memories):
-        self._memories = memories
-
-    def get_all_memories(self):
-        return list(self._memories)
-
-
-class MockMemoryManage:
-    def __init__(self, memories):
-        self.memory_types = {
-            "working": MockWorkingMemory(memories)
-        }
-
-
-class MockHistoryLLM:
-    def __init__(self, response: str):
-        self.response = response
-        self.last_messages = None
-
-    def invoke(self, messages, **kwargs):
-        self.last_messages = messages
-        return self.response
-
-
-# ============================================================
-# ContextBuilder 测试
-# ============================================================
-class TestContextBuilder(unittest.TestCase):
-    """ContextBuilder 测试"""
-
-    def test_empty_builder(self):
-        """无来源时返回空窗口"""
-        builder = ContextBuilder()
-        window = builder.build("查询")
-        self.assertEqual(len(window), 0)
-
-    def test_single_source(self):
-        """单来源"""
-        builder = ContextBuilder()
-        source = MockSource("rag", [
-            {"content": "结果一", "priority": 0.8, "token_count": 10},
-            {"content": "结果二", "priority": 0.6, "token_count": 10},
-        ])
-        builder.add_source(source)
-        window = builder.build("查询")
-        self.assertEqual(len(window), 2)
-
-    def test_multiple_sources(self):
-        """多来源"""
-        builder = ContextBuilder()
-        builder.add_source(MockSource("rag", [
-            {"content": "检索结果", "token_count": 10},
-        ]))
-        builder.add_source(MockSource("memory", [
-            {"content": "记忆内容", "token_count": 10},
-        ]))
-        window = builder.build("查询")
-        print(window.items)
-        self.assertEqual(len(window), 2)
-        sources = {it.source for it in window.items}
-        self.assertIn("rag", sources)
-        self.assertIn("memory", sources)
-
-    def test_weight_affects_priority(self):
-        """权重影响优先级"""
-        builder = ContextBuilder()
-        builder.add_source(
-            MockSource("high", [{"content": "高权重", "priority": 0.5, "token_count": 10}]),
-            weight=2.0,
-        )
-        builder.add_source(
-            MockSource("low", [{"content": "低权重", "priority": 0.5, "token_count": 10}]),
-            weight=0.3,
-        )
-        window = builder.build("查询")
-        items = window.items
-        # 高权重来源的优先级应该更高
-        high_item = [it for it in items if it.source == "high"][0]
-        low_item = [it for it in items if it.source == "low"][0]
-        self.assertGreater(high_item.priority, low_item.priority)
-
-    def test_global_compressor(self):
-        """全局压缩器"""
-        builder = ContextBuilder()
-        builder.add_source(MockSource("rag", [
-            {"content": f"项{i}", "token_count": 10, "priority": i * 0.1}
-            for i in range(10)
-        ]))
-        builder.set_compressor(TokenBudgetCompressor(max_tokens=30))
-        window = builder.build("查询")
-        total = sum(it.token_count for it in window.items)
-        self.assertLessEqual(total, 30)
-
-    def test_source_level_compressor(self):
-        """来源级压缩器"""
-        builder = ContextBuilder()
-        builder.add_source(
-            MockSource("history", [
-                {"content": f"消息{i}", "token_count": 10} for i in range(10)
-            ]),
-            compressor=SlidingWindowCompressor(max_items=3),
-        )
-        window = builder.build("查询")
-        self.assertLessEqual(len(window), 3)
-
-    def test_build_text(self):
-        """构建文本输出"""
-        builder = ContextBuilder()
-        builder.add_source(MockSource("rag", [
-            {"content": "检索内容一", "token_count": 10},
-        ]))
-        builder.add_source(MockSource("rag", [
-            {"content": "检索结果", "token_count": 10},
-        ]))
-        builder.add_source(MockSource("memory", [
-            {"content": "记忆内容", "token_count": 10},
-        ]))
-        builder.add_source(
-            MockSource("history", [
-                {"content": f"消息{i}", "token_count": 10} for i in range(10)
-            ]),
-        )
-
-        builder.set_formatter(PlainFormatter())
-        text = builder.build_text("查询")
-        print("text1111:", text)
-        self.assertIn("检索内容一", text)
-
-    def test_build_text_xml(self):
-        """XML 格式输出"""
-        builder = ContextBuilder()
-        builder.add_source(MockSource("rag", [
-            {"content": "检索内容", "token_count": 10},
-        ]))
-        builder.set_formatter(XMLFormatter())
-        text = builder.build_text("查询")
-        self.assertIn("<rag>", text)
-
-    def test_build_messages_history_and_system_context(self):
-        """build_messages: history 保持多轮，非 history 聚合为一条 system"""
-        builder = ContextBuilder()
-        builder.add_source(MockSource("rag", [{"content": "检索内容", "token_count": 10}]))
-
-        history = [
-            {"role": "user", "content": "你好"},
-            {"role": "assistant", "content": "你好，有什么可以帮你？"},
-        ]
-
-        messages = builder.build_messages(
-            query="什么是RAG?",
-            history=history,
-            system_prompt="你是测试助手",
-        )
-        print(messages)
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("你是测试助手", messages[0]["content"])
-        self.assertIn("检索内容", messages[0]["content"])
-        self.assertEqual(messages[1]["role"], "user")
-        self.assertEqual(messages[2]["role"], "assistant")
-        self.assertEqual(messages[-1], {"role": "user", "content": "什么是RAG?"})
-
-    def test_build_messages_preserves_history_tool_fields(self):
-        """build_messages 会保留 history 中的工具消息附加字段。"""
-        builder = ContextBuilder()
-        history = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "calc", "arguments": "{\"x\":1}"},
-                    }
-                ],
-            },
-            {
-                "role": "function",
-                "content": "2",
-                "tool_call_id": "call_1",
-                "name": "calc",
-            },
-        ]
-
-        messages = builder.build_messages(
-            query="继续",
-            history=history,
-            system_prompt="你是测试助手",
-        )
-
-        self.assertEqual(messages[1]["tool_calls"][0]["id"], "call_1")
-        self.assertEqual(messages[2]["tool_call_id"], "call_1")
-        self.assertEqual(messages[2]["name"], "calc")
-
-    def test_build_messages_preserves_non_string_history_content(self):
-        """Claude/Responses 风格的 list content 不应在 build_messages 中被拍平。"""
-        builder = ContextBuilder()
-        history = [
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "checking"},
-                    {"type": "tool_use", "id": "call_1", "name": "weather", "input": {"city": "Beijing"}},
-                ],
-            }
-        ]
-
-        messages = builder.build_messages(
-            query="继续",
-            history=history,
-            system_prompt="你是测试助手",
-        )
-
-        self.assertIsInstance(messages[1]["content"], list)
-        self.assertEqual(messages[1]["content"][1]["type"], "tool_use")
-
-    def test_build_messages_compacts_history_into_summary_and_preserves_order(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=260),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        history = [
-            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
-            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
-            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
-            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
-            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
-            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
-            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
-            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
-            {"role": "user", "content": "u5"},
-            {"role": "assistant", "content": "a5"},
-        ]
-
-        messages = builder.build_messages(
-            query="q",
-            history=history,
-            system_prompt="sys",
-        )
-
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertTrue(any(message["content"].startswith("历史摘要：") for message in messages[1:-1]))
-        self.assertIn({"role": "user", "content": "u5"}, messages)
-        self.assertIn({"role": "assistant", "content": "a5"}, messages)
-        self.assertEqual(messages[-1]["content"], "q")
-
-    def test_build_messages_respects_final_budget(self):
-        #测试 最终的 token 预算
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=70),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        builder.add_source(MockSource("rag", [
-            {"content": "R" * 30, "token_count": 30, "priority": 0.9},
-        ]))
-        history = [
-            {"role": "user", "content": "U" * 20},
-            {"role": "assistant", "content": "A" * 20},
-            {"role": "user", "content": "B" * 20},
-            {"role": "assistant", "content": "C" * 20},
-        ]
-
-        messages = builder.build_messages(
-            query="Q" * 10,
-            history=history,
-            system_prompt="S" * 20,
-        )
-
-        self.assertLessEqual(builder.budget.max_tokens, 120)
-        self.assertLessEqual(builder._counter.count_messages(messages), 120)
-
-    def test_build_messages_exposes_last_compacted_history(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=260),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        history = [
-            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
-            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
-            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
-            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
-            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
-            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
-            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
-            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
-            {"role": "user", "content": "u5"},
-            {"role": "assistant", "content": "a5"},
-        ]
-
-        builder.build_messages(
-            query="q",
-            history=history,
-            system_prompt="sys",
-        )
-
-        self.assertTrue(builder._last_history_was_compacted)
-        self.assertTrue(builder._last_compacted_history)
-        self.assertTrue(builder._last_compacted_history[0]["content"].startswith("历史摘要："))
-
-    def test_build_messages_compacts_canonical_history_without_downgrading_schema(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=190),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        canonical_history = []
-        for message in [
-            {"role": "user", "content": "用户第一轮描述了一个非常长的上下文背景，希望系统压缩历史。"},
-            {"role": "assistant", "content": "助手第一轮确认需要压缩 canonical history，但不能破坏结构。"},
-            {"role": "user", "content": "用户第二轮补充更多限制，要求切换 provider 后也要能重建 replay。"},
-            {"role": "assistant", "content": "助手第二轮总结限制条件，并说明 replay tail 需要原样保留。"},
-            {"role": "user", "content": "u5"},
-            {"role": "assistant", "content": "a5"},
-        ]:
-            canonical_history.extend(create_codec("mock").history_entry_to_canonical(message))
-
-        messages = builder.build_messages(
-            query="q",
-            history=canonical_history,
-            system_prompt="sys",
-        )
-
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertTrue(builder._last_history_was_compacted)
-        self.assertTrue(all(item["record_type"] == "canonical_message" for item in builder._last_compacted_history))
-        self.assertTrue(
-            any(
-                item["content"][0]["type"] == "text"
-                and item["content"][0]["text"].startswith("历史摘要：")
-                for item in builder._last_compacted_history
+    def fetch(self, query: str, max_tokens: int = 0, **kwargs):
+        return [
+            ContextItem(
+                content=item["content"],
+                source=self._name,
+                priority=item.get("priority", 0.5),
+                token_count=item.get("token_count", 0),
             )
-        )
-        self.assertEqual(messages[-1]["content"], "q")
-
-    def test_build_messages_preserves_exact_native_replay_tail(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=220),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        replay_history = [
-            {"role": "user", "content": "old question with a lot of context that should be compacted"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "text": "old plan", "thought_signature": "sig-old"},
-                    {"type": "text", "text": "old answer"},
-                ],
-                "reasoning_content": "old plan",
-            },
-            {"role": "user", "content": "recent question"},
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "text": "recent plan", "thought_signature": "sig-recent"},
-                    {"type": "function_call", "id": "call_recent", "name": "weather", "args": {"city": "Beijing"}},
-                ],
-                "reasoning_content": "recent plan",
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "function_response", "id": "call_recent", "name": "weather", "response": {"result": "sunny"}}
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "recent answer"}],
-            },
-        ]
-        canonical_history = []
-        for message in replay_history:
-            canonical_history.extend(create_codec("google_native").history_entry_to_canonical(message))
-
-        messages = builder.build_messages(
-            query="follow-up",
-            history=canonical_history,
-            replay_history=replay_history,
-            history_converter=lambda items: canonical_to_replay_history(items, "google_native"),
-            system_prompt="sys",
-        )
-
-        self.assertEqual(messages[-1], {"role": "user", "content": "follow-up"})
-        self.assertIn(
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "text": "recent plan", "thought_signature": "sig-recent"},
-                    {"type": "function_call", "id": "call_recent", "name": "weather", "args": {"city": "Beijing"}},
-                ],
-                "reasoning_content": "recent plan",
-            },
-            messages,
-        )
-        self.assertIn(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "function_response", "id": "call_recent", "name": "weather", "response": {"result": "sunny"}}
-                ],
-            },
-            messages,
-        )
-        self.assertEqual(builder._last_compacted_history[-2]["role"], "tool")
-
-    def test_compact_history_preserves_provider_specific_dicts(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=30),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        history = [
-            {
-                "id": "msg_1",
-                "type": "message",
-                "role": "assistant",
-                "phase": "commentary",
-                "content": [{"type": "output_text", "text": "先检查天气"}],
-            },
-            {
-                "type": "function_call",
-                "call_id": "call_1",
-                "name": "weather",
-                "arguments": "{\"city\":\"Shanghai\"}",
-            },
-            {
-                "type": "function_call_output",
-                "call_id": "call_1",
-                "output": "sunny",
-            },
-            {"role": "user", "content": "继续总结"},
-            {"role": "assistant", "content": "已完成"},
+            for item in self._values
         ]
 
-        compacted = builder.compact_history(history, max_tokens=30)
 
-        self.assertEqual(compacted[-2]["role"], "user")
-        self.assertEqual(compacted[-1]["role"], "assistant")
-        self.assertLessEqual(builder.counter.count_messages(compacted), 30)
+def test_builder_collects_weighted_sources_and_respects_budget():
+    builder = ContextBuilder(
+        budget=TokenBudget(max_tokens=30),
+        counter=TokenCounter(chars_per_token=1.0),
+    )
+    builder.add_source(
+        StubSource("high", [{"content": "high", "priority": 0.5, "token_count": 10}]),
+        weight=2.0,
+    )
+    builder.add_source(
+        StubSource("low", [{"content": "low", "priority": 0.5, "token_count": 10}]),
+        weight=0.25,
+    )
 
-    def test_llm_history_compactor_returns_summary_messages(self):
-        builder = ContextBuilder(
-            budget=TokenBudget(max_tokens=120),
-            counter=TokenCounter(chars_per_token=1.0),
-        )
-        mock_llm = MockHistoryLLM('[{"role":"user","content":"用户要求翻译并计算。"},{"role":"assistant","content":"之前已确认翻译工具不正确，3^22=31381059609。"}]')
-        builder.set_history_compactor(
-            LLMHistoryCompactor(
-                llm=mock_llm,
-                token_counter=builder.counter,
-                max_summary_messages=2,
-            )
-        )
-        history = [
-            {"role": "user", "content": "使用工具翻译下面的文字到英语并判断这个工具正确吗"},
-            {"role": "assistant", "content": "我先调用翻译工具和计算工具。"},
-            {"role": "user", "content": "并帮我计算3^22"},
-            {"role": "assistant", "content": "翻译工具不正确，3^22=31381059609"},
-        ]
+    window = builder.build("query")
 
-        compacted = builder.compact_history(history, max_tokens=80)
-
-        self.assertEqual(len(compacted), 2)
-        self.assertEqual(compacted[0]["role"], "user")
-        self.assertIn("3^22", compacted[1]["content"])
-
-    def test_budget_limits_window(self):
-        """预算限制窗口大小"""
-        budget = TokenBudget(max_tokens=50)
-        builder = ContextBuilder(budget=budget)
-        builder.add_source(MockSource("rag", [
-            {"content": f"项{i}", "token_count": 20} for i in range(10)
-        ]))
-        window = builder.build("查询")
-        self.assertLessEqual(window.total_tokens, 50)
-
-    def test_chain_api(self):
-        """链式调用 API"""
-        builder = (
-            ContextBuilder()
-            .add_source(MockSource("rag", [{"content": "内容", "token_count": 5}]))
-            .set_compressor(TokenBudgetCompressor())
-            .set_formatter(XMLFormatter())
-            .set_budget(TokenBudget(max_tokens=5000))
-        )
-        window = builder.build("查询")
-        self.assertGreater(len(window), 0)
-
-    def test_source_failure_graceful(self):
-        """来源异常时优雅降级"""
-        class FailingSource(BaseContextSource):
-            def fetch(self, query, max_tokens=0, **kwargs):
-                raise RuntimeError("来源失败")
-            @property
-            def source_name(self):
-                return "failing"
-
-        builder = ContextBuilder()
-        builder.add_source(FailingSource())
-        builder.add_source(MockSource("rag", [{"content": "正常结果", "token_count": 10}]))
-        window = builder.build("查询")
-        # 即使一个来源失败，另一个正常
-        self.assertEqual(len(window), 1)
+    assert len(window) == 2
+    assert window.items[0].source == "high"
+    assert sum(item.token_count for item in window.items) <= 30
 
 
-# ============================================================
-# ContextManager 测试
-# ============================================================
-class TestContextManager(unittest.TestCase):
-    """ContextManager 测试"""
+def test_builder_supports_source_and_global_compressors():
+    values = [
+        {"content": f"item-{index}", "priority": index / 10, "token_count": 10}
+        for index in range(10)
+    ]
+    builder = ContextBuilder()
+    builder.add_source(
+        StubSource("records", values),
+        compressor=SlidingWindowCompressor(max_items=5),
+    )
+    builder.set_compressor(TokenBudgetCompressor(max_tokens=20))
 
-    def test_simple_mode(self):
-        """简单模式"""
-        manager = ContextManager(max_tokens=4000)
-        text = manager.build_context("查询", history=[])
-        # 空来源应返回空（或仅历史）
-        self.assertIsInstance(text, str)
+    window = builder.build("query")
 
-    def test_manager_exposes_last_compacted_history(self):
-        manager = ContextManager(
-            max_tokens=260,
-            budget=TokenBudget(max_tokens=260),
-        )
-        manager.builder._counter = TokenCounter(chars_per_token=1.0)
-        manager.set_history_compactor(RuleBasedHistoryCompactor(token_counter=manager.builder.counter))
-        history = [
-            {"role": "user", "content": "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"},
-            {"role": "assistant", "content": "助手确认了第一轮需求，并详细解释了计划和限制条件。"},
-            {"role": "user", "content": "用户继续补充第二轮长约束，包括工具调用和恢复要求。"},
-            {"role": "assistant", "content": "助手总结第二轮长约束，并给出后续实现顺序。"},
-            {"role": "user", "content": "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"},
-            {"role": "assistant", "content": "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"},
-            {"role": "user", "content": "用户第四轮要求会话恢复后继续复用摘要缓存。"},
-            {"role": "assistant", "content": "助手第四轮确认恢复时需要保留压缩状态。"},
-            {"role": "user", "content": "u5"},
-            {"role": "assistant", "content": "a5"},
-        ]
-
-        manager.build_messages("q", system_prompt="sys", history=history)
-        self.assertTrue(manager.last_history_was_compacted)
-        self.assertTrue(manager.last_compacted_history)
-        self.assertTrue(manager.last_compacted_history[0]["content"].startswith("历史摘要："))
-
-    def test_with_source(self):
-        """添加来源"""
-        manager = ContextManager(max_tokens=4000)
-        manager.add_source(MockSource("rag", [
-            {"content": "检索结果", "token_count": 10},
-        ]))
-        text = manager.build_context("查询")
-        self.assertIn("检索结果", text)
-
-    def test_with_history(self):
-        """自动注入历史"""
-        manager = ContextManager(max_tokens=4000, auto_history=True)
-        history = [
-            {"role": "user", "content": "之前的问题"},
-            {"role": "assistant", "content": "之前的回答"},
-        ]
-        text = manager.build_context("新问题", history=history)
-        self.assertIn("之前的问题", text)
-
-    def test_no_auto_history(self):
-        """禁用自动历史"""
-        manager = ContextManager(max_tokens=4000, auto_history=False)
-        history = [{"role": "user", "content": "不该出现"}]
-        text = manager.build_context("查询", history=history)
-        self.assertNotIn("不该出现", text)
-
-    def test_explicit_disable_history_in_build(self):
-        """即使 auto_history=True，也可在单次构建中禁用历史注入"""
-        manager = ContextManager(max_tokens=4000, auto_history=True)
-        history = [{"role": "user", "content": "这段历史不应进入上下文"}]
-        text = manager.build_context("查询", history=history, include_history=False)
-        self.assertNotIn("这段历史不应进入上下文", text)
-
-    def test_history_not_stale_between_calls(self):
-        """上一轮 history 不应污染下一轮未传 history 的构建"""
-        manager = ContextManager(max_tokens=4000, auto_history=True)
-        history = [{"role": "user", "content": "第一轮历史"}]
-
-        text1 = manager.build_context("第一次", history=history)
-        self.assertIn("第一轮历史", text1)
-
-        text2 = manager.build_context("第二次", history=None)
-        self.assertNotIn("第一轮历史", text2)
-
-    def test_set_formatter(self):
-        """设置格式化器"""
-        manager = ContextManager(max_tokens=4000)
-        manager.add_source(MockSource("rag", [{"content": "内容", "token_count": 10}]))
-        manager.set_formatter(XMLFormatter())
-        text = manager.build_context("查询")
-        self.assertIn("<rag>", text)
-
-    def test_set_compressor(self):
-        """设置压缩器"""
-        manager = ContextManager(max_tokens=4000, auto_history=False)
-        manager.add_source(MockSource("rag", [
-            {"content": f"项{i}", "token_count": 10, "priority": i * 0.1}
-            for i in range(20)
-        ]))
-        manager.set_compressor(TokenBudgetCompressor(max_tokens=50))
-        text = manager.build_context("查询")
-        self.assertIsInstance(text, str)
-
-    def test_build_window(self):
-        """构建 ContextWindow 对象"""
-        manager = ContextManager(max_tokens=4000, auto_history=False)
-        manager.add_source(MockSource("rag", [
-            {"content": "结果", "token_count": 10},
-        ]))
-        window = manager.build_window("查询")
-        self.assertIsInstance(window, ContextWindow)
-        self.assertGreater(len(window), 0)
-
-    def test_chain_api(self):
-        """链式调用"""
-        manager = (
-            ContextManager(max_tokens=4000)
-            .add_source(MockSource("rag", [{"content": "内容", "token_count": 5}]))
-            .set_formatter(MarkdownFormatter())
-            .set_compressor(TokenBudgetCompressor())
-        )
-        text = manager.build_context("查询")
-        self.assertIsInstance(text, str)
-
-    def test_build_messages_returns_multiturn_messages(self):
-        """ContextManager.build_messages 返回多轮消息列表"""
-        manager = ContextManager(max_tokens=4000, auto_history=True)
-        manager.add_source(MockSource("rag", [{"content": "检索结果", "token_count": 10}]))
-
-        history = [
-            {"role": "user", "content": "历史问题"},
-            {"role": "assistant", "content": "历史回答"},
-        ]
-
-        messages = manager.build_messages(
-            "当前问题",
-            history=history,
-            system_prompt="系统提示",
-        )
-
-        self.assertGreaterEqual(len(messages), 4)
-        self.assertEqual(messages[0]["role"], "system")
-        self.assertIn("系统提示", messages[0]["content"])
-        self.assertIn("检索结果", messages[0]["content"])
-        self.assertEqual(messages[1]["content"], "历史问题")
-        self.assertEqual(messages[2]["content"], "历史回答")
-        self.assertEqual(messages[-1]["content"], "当前问题")
+    assert len(window) <= 2
+    assert sum(item.token_count for item in window.items) <= 20
 
 
-# ============================================================
-# 端到端集成测试
-# ============================================================
-class TestEndToEnd(unittest.TestCase):
-    """端到端集成测试"""
+def test_builder_formats_external_context_without_history_ownership():
+    builder = ContextBuilder().add_source(
+        StubSource("rag", [{"content": "retrieved fact", "token_count": 5}])
+    )
+    builder.set_formatter(XMLFormatter())
 
-    def test_full_pipeline_plain(self):
-        """完整流程 - PlainFormatter"""
-        manager = ContextManager(max_tokens=5000, auto_history=True)
-        manager.add_source(MockSource("rag", [
-            {"content": "人工智能是计算机科学的分支", "token_count": 15, "priority": 0.8},
-            {"content": "机器学习使用统计方法", "token_count": 12, "priority": 0.7},
-        ]))
-        manager.set_formatter(PlainFormatter())
-
-        history = [
-            {"role": "user", "content": "你好"},
-            {"role": "assistant", "content": "你好！有什么能帮你的？"},
-        ]
-
-        text = manager.build_context("什么是人工智能？", history=history)
-        self.assertIn("人工智能", text)
-        self.assertIn("你好", text)
-
-    def test_full_pipeline_xml(self):
-        """完整流程 - XMLFormatter"""
-        manager = ContextManager(max_tokens=5000, auto_history=False)
-        manager.add_source(MockSource("rag", [
-            {"content": "RAG是检索增强生成", "token_count": 10, "priority": 0.9},
-        ]))
-        manager.set_formatter(XMLFormatter())
-
-        text = manager.build_context("什么是RAG？")
-        self.assertIn("<rag>", text)
-        self.assertIn("RAG是检索增强生成", text)
-
-    def test_budget_respected(self):
-        """预算不超限"""
-        manager = ContextManager(max_tokens=50, auto_history=False)
-        manager.add_source(MockSource("rag", [
-            {"content": f"长内容{i}段", "token_count": 20} for i in range(10)
-        ]))
-
-        window = manager.build_window("查询")
-        self.assertLessEqual(window.total_tokens, 50)
-
-    def test_multi_source_priority(self):
-        """多来源优先级排序"""
-        manager = ContextManager(max_tokens=100, auto_history=False)
-        manager.add_source(
-            MockSource("rag", [{"content": "RAG高优", "priority": 0.9, "token_count": 30}]),
-            weight=1.0,
-        )
-        manager.add_source(
-            MockSource("memory", [{"content": "记忆低优", "priority": 0.3, "token_count": 30}]),
-            weight=0.5,
-        )
-
-        window = manager.build_window("查询")
-        items = window.items
-        if len(items) >= 2:
-            # 第一项应该是 RAG（优先级更高）
-            self.assertEqual(items[0].source, "rag")
+    assert "<rag>" in builder.build_text("query")
 
 
-class TestMemoryContextSource(unittest.TestCase):
-    def test_working_memory_respects_limit(self):
-        memories = [
-            MockMemoryItem(content=f"working-{i}", importance=0.5, memory_id=str(i))
-            for i in range(10)
-        ]
-        mm = MockMemoryManage(memories)
-        source = MemoryContextSource(memory_manage=mm, memory_types=["working"], limit=3)
+def test_build_request_input_preserves_replay_and_applies_runtime_layers():
+    builder = ContextBuilder().add_source(
+        StubSource("rag", [{"content": "retrieved fact", "token_count": 5}])
+    )
+    request = builder.build_request_input(
+        query="current question",
+        provider_name="openai",
+        system_prompt_blocks=[CacheableBlock("identity", "system", placement="system")],
+        system_reminder_blocks=[
+            CacheableBlock("runtime", "remember this", placement="system_reminder")
+        ],
+        replay_history=[{"role": "assistant", "content": "previous answer"}],
+    )
 
-        items = source.fetch("query")
-        self.assertEqual(len(items), 3)
-        self.assertTrue(items[-1].content.endswith("working-9"))
+    assert isinstance(request, ReplayRequestInput)
+    assert request.render_system_prompt() == "system"
+    assert request.persistent_replay_history == [
+        {"role": "assistant", "content": "previous answer"}
+    ]
+    rendered = "\n".join(str(item.get("content") or "") for item in request.replay_history)
+    assert "remember this" in rendered
+    assert "retrieved fact" in rendered
+    assert request.replay_history[-1] == {"role": "user", "content": "current question"}
 
 
-if __name__ == "__main__":
-    test=TestContextBuilder()
-    test.test_build_messages_history_and_system_context()
-    
+def test_context_manager_delegates_request_building_and_chain_configuration():
+    manager = ContextManager(max_tokens=200)
+    source = StubSource("docs", [{"content": "module docs", "token_count": 5}])
+
+    returned = manager.add_source(source).set_formatter(MarkdownFormatter())
+    request = manager.build_request_input(
+        "explain",
+        provider_name="openai",
+        system_prompt="assistant",
+    )
+
+    assert returned is manager
+    assert request.system_prompt == "assistant"
+    assert "module docs" in str(request.replay_history)
+    assert manager.builder.source_names == ["docs"]
+
+
+def test_memory_source_registration_replaces_existing_source():
+    builder = ContextBuilder()
+    first = StubSource("memory", [{"content": "old", "token_count": 5}])
+    second = StubSource("memory", [{"content": "new", "token_count": 5}])
+
+    builder.add_source(first).add_source(second)
+
+    assert builder.source_names == ["memory"]
+    assert "new" in builder.build_text("query")
+    assert "old" not in builder.build_text("query")

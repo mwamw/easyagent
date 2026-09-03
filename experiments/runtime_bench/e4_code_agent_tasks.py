@@ -76,14 +76,14 @@ def build_agent(workspace: Path, *, tool_schema_mode: str, permission_mode: str)
         tool_schema_mode=tool_schema_mode,
         command_timeout_ms=120000,
     )
-    return BasicAgent(
+    agent = BasicAgent(
         name="code_agent_bench",
         llm=create_llm(),
-        enable_tool=True,
-        tool_registry=registry,
         config=config,
-        permission_context=PermissionContext(mode=PermissionMode(permission_mode)),
         system_prompt="You are a local code agent. Make minimal edits and run targeted tests.",
+    )
+    return agent.with_tool(registry).with_permissions(
+        context=PermissionContext(mode=PermissionMode(permission_mode))
     )
 
 
@@ -100,7 +100,11 @@ def run_case(case: BenchCase, *, tool_schema_mode: str, permission_mode: str) ->
         test_result = workspace.run(["python", "-m", "pytest", "-q"], timeout=60)
         success = test_result.returncode == 0
         trace = getattr(agent, "trace_history", []) or []
-        tool_calls = sum(1 for event in trace if isinstance(event, dict) and event.get("type") == "tool_call")
+        tool_calls = sum(
+            1
+            for event in trace
+            if isinstance(event, dict) and event.get("type") == "tool.invoke.started"
+        )
         usage = {}
         try:
             usage = agent.get_context_usage()

@@ -144,31 +144,23 @@ class CodeIntelTestCase(unittest.TestCase):
         agent = BasicAgent(
             name="codeintel-manager",
             llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
             config=Config(
                 workspace_root=self.workspace,
                 allowed_roots=[self.workspace],
             ),
-        )
-        manager = register_codeintel_tools(
-            registry,
+        ).with_tool(registry)
+        agent.with_codeintel(
             provider=self._provider(),
-            parent_agent=agent,
-            workspace_root=self.workspace,
-            allowed_roots=(self.workspace,),
         )
         registry.execute_tool_result(
             "FindDefinition",
             {"file_path": "sample.py", "line": 1, "column": 5},
         )
 
-        report = agent.close(close_worktree=False)
+        report = agent.close()
 
         self.assertEqual(report["components"]["codeintel"]["status"], "closed")
-        self.assertEqual(report["components"]["codeintel"]["metadata"]["managerCount"], 1)
         self.assertTrue(llm.closed)
-        manager.close()
 
 
 if __name__ == "__main__":

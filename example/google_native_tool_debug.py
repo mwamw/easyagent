@@ -18,12 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from dotenv import load_dotenv
 
 from agent.BasicAgent import BasicAgent
+from Tool.builtin import CalculatorTool
 from Tool.ToolRegistry import ToolRegistry
 from core import enable_logging
 from core.callbacks import BaseCallback, CallbackManager
 from core.history import _json_safe
 from core.llm import EasyLLM
-from skill.builtin.calculator_skill import CalculatorSkill
 
 
 ARTIFACT_DIR = PROJECT_ROOT / "example" / "_artifacts"
@@ -307,12 +307,8 @@ async def run_attempt(attempt: int, query: str) -> tuple[bool, Path]:
     agent = BasicAgent(
         name=f"google-native-debug-{attempt}",
         llm=llm,
-        enable_tool=True,
-        verbose_thinking=True,
-        callback_manager=callback_manager,
-        tool_registry=ToolRegistry(),
-    )
-    agent.with_skill(CalculatorSkill())
+    ).with_tool(ToolRegistry()).with_callbacks(callback_manager)
+    agent.add_tool(CalculatorTool())
     _install_request_probe(llm, state)
 
     print(f"\n================ attempt {attempt} ================")
@@ -320,13 +316,13 @@ async def run_attempt(attempt: int, query: str) -> tuple[bool, Path]:
 
     final_chunks: list[str] = []
     try:
-        async for event in agent.astream_invoke_with_tool(query, max_iter=6):
-            safe_event = _json_safe(event)
+        async for event in agent.astream(query, max_iter=6):
+            safe_event = event.to_dict()
             state.stream_events.append(safe_event)
-            event_type = event.get("type")
-            if event_type in {"text_delta", "thinking_delta"}:
-                delta = event.get("delta", "")
-                prefix = "thinking" if event_type == "thinking_delta" else "text"
+            event_type = event.type.value
+            if event_type in {"text_delta", "reasoning_delta"}:
+                delta = event.content or ""
+                prefix = "thinking" if event_type == "reasoning_delta" else "text"
                 print(f"[event:{prefix}] {delta!r}")
                 continue
             if event_type == "tool_call":
@@ -334,9 +330,9 @@ async def run_attempt(attempt: int, query: str) -> tuple[bool, Path]:
                     "[event:tool_call]",
                     json.dumps(
                         {
-                            "tool_name": event.get("tool_name"),
-                            "tool_id": event.get("tool_id"),
-                            "tool_args": event.get("tool_args"),
+                            "tool_name": event.data.get("tool_name"),
+                            "tool_id": event.data.get("tool_id"),
+                            "tool_args": event.data.get("tool_args"),
                         },
                         ensure_ascii=False,
                     ),
@@ -347,17 +343,17 @@ async def run_attempt(attempt: int, query: str) -> tuple[bool, Path]:
                     "[event:tool_result]",
                     json.dumps(
                         {
-                            "tool_name": event.get("tool_name"),
-                            "tool_id": event.get("tool_id"),
-                            "status": event.get("status"),
-                            "content": event.get("content"),
+                            "tool_name": event.data.get("tool_name"),
+                            "tool_id": event.data.get("tool_id"),
+                            "status": event.data.get("status"),
+                            "content": event.content,
                         },
                         ensure_ascii=False,
                     ),
                 )
                 continue
             if event_type == "final":
-                final_chunks.append(event.get("content", "") or "")
+                final_chunks.append(event.content or "")
             print(f"[event:{event_type}] {json.dumps(safe_event, ensure_ascii=False)}")
         state.final_result = "".join(final_chunks) or None
         success = True
@@ -371,7 +367,7 @@ async def run_attempt(attempt: int, query: str) -> tuple[bool, Path]:
         state.raw_history = _json_safe(agent.get_raw_history())
         state.canonical_history = _json_safe(agent.get_canonical_history())
         state.trace_history = _json_safe(agent.get_trace_history())
-        state.pending_step_state = _json_safe(agent.get_pending_step_state())
+        state.pending_step_state = _json_safe(agent.get_pending_interruption())
         report_path = ARTIFACT_DIR / f"google_native_tool_debug_attempt_{attempt}.json"
         _json_dump(
             report_path,

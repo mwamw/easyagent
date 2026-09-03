@@ -67,14 +67,12 @@ def build_agent(workspace_root: str) -> BasicAgent:
     return BasicAgent(
         name="phasef-mcp-agent",
         llm=build_llm(),
-        tool_registry=registry,
-        enable_tool=True,
         system_prompt=(
             "你是一个会使用 MCP 远程能力的 code assistant。\n"
             "先确认当前问题是否真的需要 MCP；如果需要，再严格按 schema 调用。\n"
             "拿到远程结果后，优先引用结构化事实，不要自行改写关键字段。"
         ),
-    )
+    ).with_tool(registry)
 
 
 def main() -> None:

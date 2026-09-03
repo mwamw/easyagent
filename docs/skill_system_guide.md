@@ -1,448 +1,266 @@
 # Skill System Guide
 
-Skill 是 EasyAgent 的“能力包”机制。它的目标不是简单地往系统提示词里追加一段文本，而是把一组会一起出现的能力封装成统一单元：
+EasyAgent 的 Skill 是目录式、声明式、按需展开的 Agent 功能模块。一个 Skill 只需要一个目录和其中的 `SKILL.md`，用户通过 `agent.with_skill(dir)` 开启能力，不需要继承 Python 基类、注册全局单例或实现生命周期接口。
 
-- prompt / instruction
-- tool
-- context source
-- 生命周期钩子
-- 暴露方式与缓存生命周期
+Skill 系统采用三层渐进披露：
 
-如果你在做一个面向产品的 Agent，Skill 往往是“产品能力模块”的最佳承载层。比如：
+1. `skill_tool` 的 schema 描述提供通用调用规则。
+2. `<available_skills>` 以 `system_reminder` 告诉模型当前可用 Skill 的名称和用途，不加载正文。
+3. 模型调用 `skill_tool` 后，框架才读取完整 `SKILL.md`，并通过 `INVOCATION` MetaMessage 放到下一次 LLM request 的 history 末尾。
 
-- `code_review`
-- `web_research`
-- `frontend_design`
-- `memory`
-- `mcp`
+这保证大量低频 Skill 不会持续占用上下文，同时保持工具调用协议顺序正确。
 
-相关文档：
-
-- [Tool System Guide](./tool_system_guide.md)
-- [Deferred Tools Guide](./deferred_tools_guide.md)
-- [Prompt System Guide](./prompt_system_guide.md)
-- [Runtime Reminders Guide](./runtime_reminders_guide.md)
-
-## 1. 核心对象
-
-Skill 系统最重要的对象有：
-
-- `BaseSkill`
-  - Skill 的抽象基类。你自定义 Skill 时直接继承它。
-- `SkillConfig`
-  - Skill 的结构化配置，决定名字、描述、暴露模式、缓存生命周期等。
-- `SkillManifest`
-  - Skill 暴露给模型和注册表的统一元数据视图。
-- `SkillRegistry`
-  - 用来保存“有哪些 Skill 可用”的目录。
-- `SkillManager`
-  - 运行时控制器，负责注册、激活、停用、挂载工具、注入上下文。
-- `SkillDiscoveryTool`
-  - 给模型列出当前有哪些 Skill。
-- `SkillTool`
-  - 按需调用 Skill 正文和临时能力。
-- `LoadSkillTool`
-  - 把 Skill 长期挂载到当前 Agent。
-- `UnloadSkillTool`
-  - 从当前 Agent 卸载长期挂载的 Skill。
-
-## 2. Skill 解决什么问题
-
-Skill 适合解决下面这些场景：
-
-1. 你希望把一组相关能力打包，而不是零散地注册很多 Tool。
-2. 你需要“什么时候该使用这组能力”的提示，而不仅仅是工具 schema。
-3. 你希望某些能力是默认常驻的，另一些能力按需展开。
-4. 你需要把 prompt、tool、context source、生命周期钩子绑定在一起。
-
-几个对比例子：
-
-- 只想给模型一条规则：
-  - 用 `PromptBlock` 或 [Prompt System Guide](./prompt_system_guide.md) 的 system block。
-- 只想补一段当前请求的运行时信息：
-  - 用 [Runtime Reminders Guide](./runtime_reminders_guide.md)。
-- 需要模型主动调用、带结构化参数、可授权：
-  - 用 Tool。
-- 需要“一整组能力包”：
-  - 用 Skill。
-
-## 3. `SkillConfig` 字段逐项解释
-
-`SkillConfig` 是你定义 Skill 时最重要的配置对象。当前主要字段如下：
-
-- `name`
-  - Skill 的唯一名字。模型看到的 listing、registry 查找、激活/停用都依赖它。
-- `description`
-  - Skill 的完整描述，面向开发者和 listing 使用。
-- `version`
-  - Skill 版本号。适合做产品内能力包版本管理。
-- `tags`
-  - 搜索、分类、筛选时用的标签。
-- `priority`
-  - 多个 Skill 同时注入时的排序参考。值越大越靠前。
-- `auto_activate`
-  - 注册到 `SkillManager` 时是否自动激活。对 resident skill 很常用。
-- `dependencies`
-  - 依赖的其他 Skill 名称列表。激活时会检查依赖。
-- `listing_description`
-  - 暴露给模型的短描述。比 `description` 更短，更适合 reminder / skill listing。
-- `when_to_use`
-  - 告诉模型“什么时候应该调用这个 Skill”。
-- `exposure_mode`
-  - `resident` 或 `on_demand`。
-  - `resident` 表示它属于长期可见能力。
-  - `on_demand` 表示它更像延迟加载能力。
-- `execution_mode`
-  - `mount` 或 `inline`。
-  - `mount` 表示激活后把工具、上下文等挂到 Agent 上。
-  - `inline` 表示以正文/上下文形式按需注入。
-- `source_type`
-  - skill 来源，例如 `python`、`yaml`、`markdown`、`folder`。
-- `source_path`
-  - skill 源文件或目录路径。
-- `cache_lifecycle`
-  - `resident` / `session` / `turn`。
-  - 决定 Skill 正文默认进入哪个缓存分区。
-- `extra`
-  - 预留给产品方的扩展配置。
-
-推荐理解：
-
-- `exposure_mode` 决定“模型平时是否看得到它”
-- `execution_mode` 决定“真正使用时怎么接到 Agent 上”
-- `cache_lifecycle` 决定“进入请求时更像稳定前缀还是动态尾部”
-
-## 4. `BaseSkill` 需要实现哪些方法
-
-大多数 Skill 只需要认真实现下面几个方法：
-
-- `get_tools()`
-  - 返回这个 Skill 提供的所有 Tool。
-- `get_prompt()`
-  - 返回 Skill 的正文提示词。旧接口和默认正文入口。
-- `get_body_prompt()`
-  - 返回真正用于按需展开的正文。默认等于 `get_prompt()`。
-- `get_context_sources()`
-  - 若 Skill 还会向 ContextManager 注入上下文来源，就在这里返回。
-
-另外还有几类很重要的辅助方法：
-
-- `get_listing_description()`
-  - 模型在 skill listing 里看到的短描述。
-- `get_when_to_use()`
-  - 告诉模型何时使用这个 Skill。
-- `get_exposure_mode()`
-  - 当前 Skill 是 resident 还是 on-demand。
-- `get_execution_mode()`
-  - 当前 Skill 是 mount 还是 inline。
-- `get_cache_lifecycle()`
-  - 当前 Skill 正文应该属于哪个 cache lifecycle。
-- `build_manifest()`
-  - 构建统一元数据视图。
-
-以及生命周期钩子：
-
-- `on_activate(agent)`
-- `on_deactivate(agent)`
-- `on_before_invoke(query)`
-- `on_after_invoke(query, response)`
-
-这些钩子适合做：
-
-- 挂载资源
-- 清理状态
-- 预处理用户输入
-- 后处理模型输出
-
-## 5. 一个最小可运行 Skill
+## 1. 快速接入
 
 ```python
-from easyagent.skills import BaseSkill, SkillConfig
-from easyagent.tools import Tool
+from pathlib import Path
 
-
-class MySkill(BaseSkill):
-    def __init__(self):
-        super().__init__(
-            SkillConfig(
-                name="architecture_review",
-                description="帮助模型做架构审查",
-                listing_description="审查架构边界、依赖和抽象层次",
-                when_to_use="当任务涉及架构设计、边界划分、模块职责时使用",
-                exposure_mode="resident",
-                execution_mode="mount",
-                cache_lifecycle="session",
-            )
-        )
-
-    def get_tools(self) -> list[Tool]:
-        return []
-
-    def get_prompt(self) -> str:
-        return (
-            "你现在具备 architecture_review 能力。"
-            "优先分析模块边界、依赖方向、抽象泄漏和扩展点。"
-        )
-```
-
-如果这个 Skill 不提供工具，只提供一套专业化提示词，它依然有价值。
-
-## 6. `SkillManager` 的职责
-
-`SkillManager` 是运行时总控，不是简单目录。
-
-它主要负责：
-
-1. 注册 / 注销 Skill
-2. 激活 / 停用 Skill
-3. 把 Skill 的 Tool 注入 `ToolRegistry`
-4. 把 Skill 的 `ContextSource` 注入 `ContextManager`
-5. 聚合 skill listing、skill policy、runtime skill context
-6. 跟踪按需 Skill 的临时正文和临时挂载工具
-7. 代理生命周期钩子
-
-可以把它理解成：
-
-- `SkillRegistry` 负责“有什么”
-- `SkillManager` 负责“现在谁在生效”
-
-## 7. Skill 的四种常见形态
-
-实际使用时，Skill 通常有四种形态。
-
-### 7.1 Resident skill
-
-特点：
-
-- 注册后可自动激活
-- 通常出现在 skill listing 中
-- 可以长期挂载工具
-- 正文往往属于 `resident` 或 `session` cache lifecycle
-
-适合：
-
-- 默认产品能力
-- 长期可用的领域能力
-
-### 7.2 Session skill
-
-特点：
-
-- 当前会话内长期生效
-- 适合某类工作流中途加载一段时间
-
-适合：
-
-- 当前会话阶段性开启的能力包
-
-### 7.3 Turn skill
-
-特点：
-
-- 只在当前 invoke 有效
-- invoke 结束后清理
-- 不应污染长期 canonical history
-
-适合：
-
-- 临时分析模板
-- 一次性 task-specific 技能正文
-
-### 7.4 On-demand skill
-
-特点：
-
-- 默认只在 listing 中出现
-- 被 `skill_tool` 命中后才真正展开正文和临时能力
-
-适合：
-
-- 很长的技能正文
-- 低频但专业度高的能力
-- 不想平时一直占据 prompt 和 tools budget 的能力
-
-## 8. `skill_tool`、`load_skill_tool`、`unload_skill_tool` 的区别
-
-这三个内置工具的定位不同：
-
-### `SkillTool`
-
-作用：
-
-- 当前轮按需展开 Skill 正文
-- 可能临时挂载 runtime tools
-- 一般不应该把长期状态写回 Agent
-
-适合：
-
-- “这一轮需要某种额外专业能力”
-
-### `LoadSkillTool`
-
-作用：
-
-- 把 Skill 长期加载到当前 Agent
-- 可能影响后续稳定前缀和 cache signature
-
-适合：
-
-- “从现在开始，这个 Agent 都要具备某项能力”
-
-### `UnloadSkillTool`
-
-作用：
-
-- 卸载长期挂载的 Skill
-
-适合：
-
-- 结束某段工作流或减少后续上下文负担
-
-## 9. 一次典型执行流程
-
-下面用一个 on-demand skill 举例：
-
-1. 你把 `frontend_design` 注册到 `SkillRegistry` 和 `SkillManager`
-2. README / runtime reminder / skill listing 告诉模型：有这个 skill，但正文未展开
-3. 用户提出“帮我设计一个更有审美的首页”
-4. 模型先调用 `skill_tool(frontend_design)`
-5. `SkillManager` 记录它的 `SkillManifest`
-6. runtime skill body 被加入 `on_demand_expansion` 或 `dynamic_tail`
-7. 如果 Skill 附带临时 Tool，这些 Tool 以 runtime/turn visibility 注册
-8. 后续这一轮模型在更完整的上下文下继续工作
-9. invoke 结束后，runtime skill body 和临时 tools 被清理
-
-这就是“Skill 不是永久把 prompt 变重，而是按需展开”的关键。
-
-## 10. 如何把 Skill 集成到 `BasicAgent`
-
-最常见接法：
-
-```python
 from easyagent import BasicAgent, EasyLLM
-from easyagent.skills import SkillManager
 
-llm = EasyLLM()
-skill_manager = SkillManager()
-skill_manager.register(MySkill(), auto_activate=True)
-
-agent = BasicAgent(
-    name="assistant",
-    llm=llm,
-    skill_manager=skill_manager,
+llm = EasyLLM(
+    provider="openai",
+    base_url="http://127.0.0.1:5124/v1",
+    api_key="122",
+    model="qwen3.5-9b",
 )
+
+agent = BasicAgent(name="assistant", llm=llm).with_skill(Path("./skills"))
+answer = agent.invoke("使用 repository-review 检查这次代码修改")
 ```
 
-更完整的产品接法通常还会同时接：
+`with_skill` 接受三种用法：
 
-- `ToolRegistry`
-- `ContextManager`
-- `PermissionContext`
-- `runtime reminders`
+```python
+agent.with_skill("./skills")
+agent.with_skill("./team-skills", "./project-skills")
+agent.with_skill("./team-skills").with_skill("./project-skills")
+```
 
-也就是说，Skill 几乎总是和 Tool、Prompt、Context 一起使用。
+传入路径可以是单个 Skill 目录，也可以是包含多个直接子 Skill 目录的集合目录。`with_skill` 自动完成以下装配：
 
-## 11. Skill 与其他模块的关系
+- 创建 Agent 私有的 `SkillManager`
+- 索引目录中的 `SKILL.md`
+- 在需要时创建 `ToolRegistry`
+- 安装唯一的模型入口 `skill_tool`
+- 把 Skill listing 加入系统提示词的 `system_reminder`
+- 订阅 RuntimeEvent，自动管理条件发现、临时权限和正文回收
 
-### 和 Tool 的关系
+没有调用 `with_skill` 时，Agent 不创建 SkillManager，也不暴露 `skill_tool`。
 
-Skill 可以带 Tool，但 Skill 不等于 Tool。
+## 2. 目录格式
 
-- Tool 解决“结构化调用”
-- Skill 解决“能力包和使用时机”
+```text
+skills/
+  repository-review/
+    SKILL.md
+  release-check/
+    SKILL.md
+```
 
-### 和 Prompt 的关系
+最小 `SKILL.md`：
 
-Skill 正文本质上是 prompt block 的一种来源，但它不应该总是直接进入 system core。
+```markdown
+---
+name: repository-review
+description: Inspect a repository change and produce an evidence-based review.
+when_to_use: Use when the user asks for a code or patch review.
+argument-hint: A file path, module, commit, or review objective.
+allowed-tools: FileRead, Glob, Grep, List
+---
 
-### 和 Context 的关系
+# Repository Review
 
-某些 Skill 会额外提供 `ContextSource`，在构建请求时参与上下文拼装。
+Review `$ARGUMENTS` as a senior maintainer.
+The Skill directory is `${SKILL_DIR}`.
+```
 
-### 和 Cache 的关系
+`name` 必须满足 `^[a-z0-9][a-z0-9-]{0,63}$`，并且必须与目录名一致。正文不会在索引阶段读入 `SkillManifest`，只有真正调用 Skill 时才读取。
 
-Skill 是最容易把 cache 打爆的模块之一，因为它经常既影响 prompt，又影响 tools。
+## 3. Frontmatter
 
-因此现在推荐：
+| 字段 | 必填 | 语义 |
+| --- | --- | --- |
+| `name` | 否 | Skill 名称，省略时使用目录名 |
+| `description` | 是 | listing 中的简短能力描述 |
+| `when_to_use` | 否 | 模型应主动调用 Skill 的条件和示例 |
+| `argument-hint` | 否 | `args` 的格式提示 |
+| `allowed-tools` | 否 | Skill 激活期间临时允许并展开的工具规则 |
+| `context` | 否 | `inline` 或 `fork`，默认 `inline` |
+| `agent` | 否 | fork Skill 使用的 subagent 类型，只允许配合 `context: fork` |
+| `model` | 否 | fork Skill 使用的模型，只允许配合 `context: fork` |
+| `paths` | 否 | 条件发现的 gitignore 风格工作区路径模式 |
+| `disable-model-invocation` | 否 | 为 `true` 时不进入 listing，模型也不能调用 |
 
-- resident skill：只稳定暴露 listing
-- on-demand skill：正文按需展开
-- turn skill：不要进入稳定前缀
+未识别字段保存在 `SkillManifest.metadata`，供应用层扩展使用，但框架不会隐式执行这些字段。
 
-## 12. 推荐的产品设计模式
+正文支持两个替换变量：
 
-### 模式一：默认 resident + 少量 on-demand
+- `$ARGUMENTS` 替换为 `skill_tool.args` 的原始字符串。
+- `${SKILL_DIR}` 替换为当前 Skill 目录的绝对路径。
 
-适合大多数产品。
+## 4. 一次真实执行的顺序
 
-- resident：
-  - file_manager
-  - task_planning
-  - memory
-- on-demand：
-  - code_review
-  - frontend_design
-  - web_research
+假设模型调用：
 
-### 模式二：产品能力目录化
+```json
+{"skill": "repository-review", "args": "skill/manager.py"}
+```
 
-把大量能力都注册进 `SkillRegistry`，默认只给 listing，不给正文。
+框架执行顺序如下：
 
-适合：
+1. Agent invoke 发布 `agent.invoke.started`。
+2. PromptComposer 只生成 `<available_skills>`，此时 request 中没有 Skill 正文。
+3. LLM 返回 `skill_tool` 调用。
+4. SkillManager 校验名称、可见性和模型调用权限，然后延迟读取 `SKILL.md` 正文。
+5. SkillManager 替换参数，激活 `allowed-tools`，并把完整正文排入 `INVOCATION` MetaMessage 队列。
+6. Executor 先把 Assistant tool call 和 `skill_tool` ToolResult 写入 history。
+7. 构建下一次 LLM request 时，MetaMessageManager 执行 `flush()`，把 Skill 正文作为 user-role 消息追加在 ToolResult 后面。
+8. 后续 LLM 调用可以使用正文和临时展开的工具。
+9. Agent 完成、失败或中断时发布终态事件，框架删除 Skill 正文、清理临时权限和 invocation 去重状态。
 
-- Code Agent
-- Research Agent
-- 企业内部多场景产品
+模型看到的关键顺序始终是：
 
-### 模式三：Skill 只提供 prompt，不提供 Tool
+```text
+assistant(tool_call: skill_tool)
+tool(skill_tool result)
+user(<skill name="repository-review">...</skill>)
+assistant(next reasoning/tool calls)
+```
 
-适合：
+Skill 正文不会进入 provider 原生 system 字段，也不会被直接拼接到 ToolResult。这样不会破坏 Assistant tool call 与 Tool result 必须相邻的协议约束。
 
-- 审稿、评审、教学、写作、风格约束类能力
+## 5. MetaMessage 生命周期
 
-## 13. 常见坑
+Skill 正文由 Skill 模块调用 `emit()` 生成，生命周期固定为 `MetaMessageLifecycle.INVOCATION`。用户不需要也不应该手工调用 `begin_invocation` 或 `end_invocation`，这两个接口不存在。
 
-### 坑一：把所有 Skill 正文都常驻进 system
+MetaMessageManager 只消费统一 RuntimeEvent：
 
-后果：
+- `agent.invoke.started` 开始一次 Agent 调用
+- `llm.invoke.completed/failed` 回收 `REQUEST` 消息
+- `agent.invoke.completed/failed/interrupted` 回收 `INVOCATION` 和 `REQUEST` 消息
 
-- prompt 太重
-- cache 命中率差
-- 用户每次请求都带大量不用的说明
+`invocation_id` 只存在于 RuntimeEvent 和 trace，不进入 MetaMessageContext，也不会进入模型 history。临时 pending 消息与临时 injection 不写入 SessionSnapshot。
 
-### 坑二：把 Skill 当作 Tool 的替代品
+## 6. `paths` 条件发现
 
-Skill 不适合承载所有结构化调用。真正需要参数校验、权限、确认、并行控制的能力还是应该做成 Tool。
+`paths` 不是 Skill 资源目录。它决定 Skill 何时出现在 listing 中，语义与 Claude Code 的条件 Skill 一致。
 
-### 坑三：只注册 Skill，不绑定 `SkillManager`
+```yaml
+paths: "src/**/*.{py,pyi}, tests/**"
+```
 
-没有 `SkillManager`，Skill 无法参与激活、挂载工具、构建 runtime context。
+规则支持 YAML 列表、逗号分隔、brace 展开和 gitignore 风格匹配。带 `paths` 的 Skill 初始隐藏。当成功完成的 filesystem/notebook 工具事件包含匹配路径时，SkillManager 自动激活它：
 
-### 坑四：临时 skill 不清理
+```text
+FileRead(src/package/service.py)
+  -> tool.invoke.completed
+  -> paths 匹配 src/**/*.py
+  -> python-review 加入后续 <available_skills>
+```
 
-turn/runtime skill 的正文和临时工具必须在 invoke 结束后清理，否则会污染后续请求。
+激活状态属于会话级索引状态，跨 invoke 保留，并随 SessionSnapshotV3 恢复。`paths: "**"` 等价于无条件 Skill。工作区之外的路径和 URI 不参与匹配。
 
-### 坑五：忽略依赖关系
+应用也可以显式通知自定义文件模块：
 
-如果一个 Skill 依赖另一个 Skill，应该通过 `dependencies` 显式声明，而不是靠文档约定。
+```python
+activated = agent.skill_manager.activate_for_paths(["src/domain/model.py"])
+```
 
-## 14. 何时自定义 Skill，何时直接写代码
+更推荐自定义文件工具带上 `filesystem` 或 `notebook` tag，并通过标准 RuntimeEvent 执行链路自动触发。
 
-优先写 Skill 的场景：
+## 7. `allowed-tools`
 
-- 这是一个会复用的产品能力包
-- 它同时涉及 prompt、tool、context
-- 你希望模型知道“什么时候该调用它”
+示例：
 
-优先直接写 Tool 或 PromptBlock 的场景：
+```yaml
+allowed-tools: FileRead, Grep, Bash(git status:*), FileEdit(path:src/)
+```
 
-- 只是一个独立工具
-- 只是某条固定系统规则
-- 只是某次请求的临时上下文
+激活 inline Skill 时，SkillManager 会：
 
-如果你不确定，通常可以这样判断：
+- 验证工具确实存在，不存在的条目进入 `unavailableTools`
+- 为存在的工具建立来源为 `skill:<name>` 的临时 ALLOW 规则
+- 在 deferred schema 模式中展开对应工具
+- 在 Agent invoke 终态事件中清理临时规则
 
-- “模型是否需要先知道这是一项独立能力？”  
-  是：更适合 Skill
-- “模型只需要一个可调用接口？”  
-  是：更适合 Tool
+支持的限定规则是 Bash 命令前缀、`path:` 路径前缀、`domain:` 主机范围，以及文件工具的路径前缀。无法解释的限定规则在索引阶段直接报错，不会静默退化成整工具放行。
+
+系统、项目、会话和用户显式规则优先于 Skill 临时规则，因此已有 DENY 不会被 Skill 绕过。
+
+fork Skill 会在创建子 Agent 前短暂激活规则，使子 Agent 的 PermissionContext 继承这些规则；fork 返回后父 Agent 立即清理该来源。
+
+## 8. Inline 与 Fork
+
+### Inline
+
+`context: inline` 在当前 Agent 中注入完整正文，适合需要继续和用户交互、依赖当前上下文或需要多轮工具调用的工作流。正文只在当前 Agent invoke 中保留。
+
+### Fork
+
+```yaml
+context: fork
+agent: reviewer
+model: qwen3.5-9b
+```
+
+fork Skill 必须先通过 `agent.with_multi_agent()` 提供 `Agent` 工具。SkillManager 同步创建子 Agent，并将已展开的 Skill 正文作为完整任务 prompt。ToolResult 返回：
+
+```json
+{
+  "success": true,
+  "skill": "deep-review",
+  "status": "forked",
+  "agentId": "agent_...",
+  "outputFile": "/workspace/.easyagent-agents/agent_....md",
+  "result": "...",
+  "allowedTools": ["FileRead", "Grep"],
+  "unavailableTools": []
+}
+```
+
+默认子 Agent 会获得自己的 SkillManager 和自己的 `skill_tool`，不会复用指向父 Agent 的工具实例，因此子 Agent 加载 Skill 不会污染父 Agent history。
+
+## 9. ToolResult
+
+inline 成功结果会明确告诉模型正文将在下一次 request 出现，并携带：
+
+- `status=inline`
+- `scope=invocation`
+- `alreadyActive`
+- `instructionSource`
+- `skillDirectory`
+- `allowedTools`
+- `unavailableTools`
+
+同一 invoke 内相同 Skill 与相同 `args` 会返回 `alreadyActive=true`，不会重复注入正文。错误类型包括：
+
+- `skill_not_found`
+- `skill_model_invocation_disabled`
+- `skill_not_active`
+- `skill_invoke_failed`
+
+`skill_not_active` 结果携带 `conditionalPaths`，说明该 Skill 尚未被匹配文件激活。
+
+## 10. 自定义 SkillManager
+
+需要改变目录来源、listing 或激活策略时，可以继承 `SkillManager`，然后显式装配：
+
+```python
+class ProductSkillManager(SkillManager):
+    def build_skill_listing_prompt(self) -> str:
+        return super().build_skill_listing_prompt()
+
+
+manager = ProductSkillManager().add_directories(["./skills"])
+agent.with_skill(manager=manager)
+```
+
+自定义 manager 仍应遵守三个边界：正文延迟加载、通过 MetaMessage 注入、通过 RuntimeEvent 清理。Agent 不依赖全局注册中心。
+
+## 11. Session 与关闭
+
+SessionSnapshotV3 保存 Skill 根目录、全部 manifest 快照和已经激活的条件 Skill 名称。恢复时重新读取当前磁盘目录，以磁盘内容为事实源，并通过 `SessionRestoreReport` 报告缺失目录或 Skill。
+
+不会持久化的内容包括当前 invoke 的正文、临时权限、请求级消息和 invoke 去重键。`agent.close()` 会取消事件订阅并清理残留 Skill 权限来源。
+
+完整真实 LLM 示例见 `example/example_skill_runtime.py`，对应 Skill 见 `example/skills/repository-review/SKILL.md`。示例使用本地 OpenAI-compatible 服务，需由使用者自行启动服务后手动执行。

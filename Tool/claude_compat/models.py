@@ -11,7 +11,7 @@ class ClaudeAgentInput(BaseModel):
     description: str = Field(description="3-5 个词的任务概述")
     prompt: str = Field(description="交给子 agent 的完整任务描述")
     subagent_type: Optional[str] = Field(default=None, description="子 agent 类型")
-    model: Optional[Literal["sonnet", "opus", "haiku"]] = Field(default=None, description="模型覆盖")
+    model: Optional[str] = Field(default=None, description="子 agent 使用的模型 ID 或模型别名")
     run_in_background: bool = Field(default=False, description="是否后台运行")
     name: Optional[str] = Field(default=None, description="子 agent 名称")
     team_name: Optional[str] = Field(default=None, description="团队名称")

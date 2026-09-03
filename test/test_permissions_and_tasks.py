@@ -19,6 +19,7 @@ from core.permissions import (
     PermissionRule,
 )
 from core.llm import EasyLLM
+from plan import PlanModeConfig
 from task import InMemoryTaskStore, TaskService, TaskStatus
 from Tool import Tool, ToolRegistry
 from Tool.builtin import register_task_tools
@@ -137,9 +138,8 @@ class PermissionAndTaskTests(unittest.TestCase):
         agent = BasicAgent(
             name="assistant",
             llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
+        ).with_tool(registry)
+        agent.with_plan(config=PlanModeConfig(register_tools=False))
         agent.enter_plan_mode(allowed_actions=["read"])
 
         result = agent.execute_tool_result("MutatingTool", {})
@@ -155,12 +155,11 @@ class PermissionAndTaskTests(unittest.TestCase):
         agent = BasicAgent(
             name="assistant",
             llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
+        ).with_tool(registry)
+        agent.with_plan(config=PlanModeConfig(register_tools=False))
         agent.enter_plan_mode(allowed_actions=["read"])
 
-        result = asyncio.run(agent._async_safe_execute_tool_result("MutatingTool", {}))
+        result = agent.execute_tool_result("MutatingTool", {})
 
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_type, "permission_denied")
@@ -308,10 +307,7 @@ class PermissionAndTaskTests(unittest.TestCase):
         agent = BasicAgent(
             name="assistant",
             llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            task_service=service,
-        )
+        ).with_tool(registry).with_task_service(service)
 
         self.assertTrue(agent.tool_registry.has_tool("TaskCreate"))
         self.assertTrue(agent.tool_registry.has_tool("TaskGet"))

@@ -210,9 +210,7 @@ class SupervisorOrchestrator(BaseOrchestrator):
             name=f"{self.name}_supervisor",
             llm=self._supervisor_llm,
             system_prompt=system_prompt,
-            enable_tool=True,
-            tool_registry=supervisor_registry,
-        )
+        ).with_tool(supervisor_registry)
 
         # 多轮调度循环
         current_query = query

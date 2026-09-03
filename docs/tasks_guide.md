@@ -218,22 +218,17 @@ Task 相关对象主要包括：
 ```python
 from easyagent import BasicAgent, EasyLLM
 from easyagent.tasks import TaskService, SQLiteTaskStore
-from easyagent.tools import register_task_tools
 from Tool.ToolRegistry import ToolRegistry
 
 store = SQLiteTaskStore("db/tasks.db")
 task_service = TaskService(store)
 
 registry = ToolRegistry()
-register_task_tools(registry, task_service=task_service)
 
 agent = BasicAgent(
     name="manager",
     llm=EasyLLM(),
-    enable_tool=True,
-    tool_registry=registry,
-    task_service=task_service,
-)
+).with_tool(registry).with_task_service(task_service)
 ```
 
 这里有两个关键点：

@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from easyagent import BasicAgent, Config, EasyLLM
+from easyagent.observability import InMemoryObservabilityStore
 from easyagent.permissions import (
     PermissionBehavior,
     PermissionContext,
@@ -328,15 +329,15 @@ def make_easyagent(
 ) -> BasicAgent:
     llm = create_llm()
     registry = registry or build_mock_registry()
-    return BasicAgent(
+    agent = BasicAgent(
         name="easyagent_bench",
         llm=llm,
         system_prompt=system_prompt or "You are a careful local code agent.",
-        enable_tool=True,
-        tool_registry=registry,
         config=config or Config(tool_schema_mode=os.getenv("EA_TOOL_SCHEMA_MODE", "full")),
-        permission_engine=PermissionEngine(),
-        permission_context=permission_context or build_permission_context(),
+    )
+    return agent.with_tool(registry).with_permissions(
+        PermissionEngine(),
+        permission_context or build_permission_context(),
     )
 
 
@@ -349,9 +350,14 @@ def get_trace(agent: Any) -> list[dict[str, Any]]:
 
 def trace_summary(agent: Any) -> dict[str, Any]:
     trace = get_trace(agent)
-    tool_calls = [event for event in trace if event.get("type") == "tool_call"]
-    tool_results = [event for event in trace if event.get("type") == "tool_result"]
-    turn_ends = [event for event in trace if event.get("type") == "turn_end"]
+    tool_calls = [event for event in trace if event.get("type") == "tool.invoke.started"]
+    tool_results = [event for event in trace if event.get("type") == "tool.invoke.completed"]
+    turn_ends = [
+        event
+        for event in trace
+        if event.get("type")
+        in {"agent.invoke.completed", "agent.invoke.failed", "agent.invoke.interrupted"}
+    ]
     usage = {}
     context_usage = getattr(agent, "get_context_usage", None)
     if callable(context_usage):
@@ -363,17 +369,17 @@ def trace_summary(agent: Any) -> dict[str, Any]:
         "trace_event_count": len(trace),
         "tool_call_count": len(tool_calls),
         "tool_result_count": len(tool_results),
-        "tool_names": [event.get("tool_name") for event in tool_calls],
+        "tool_names": [(event.get("data") or {}).get("tool_name") for event in tool_calls],
         "tool_result_statuses": [
-            (event.get("metadata") or {}).get("status") or (event.get("metadata") or {}).get("success")
+            (event.get("data") or {}).get("status")
             for event in tool_results
         ],
         "permission_behaviors": [
-            (event.get("result_metadata") or {}).get("permission_behavior")
+            (((event.get("data") or {}).get("result") or {}).get("metadata") or {}).get("permission_behavior")
             for event in tool_results
-            if (event.get("result_metadata") or {}).get("permission_behavior")
+            if (((event.get("data") or {}).get("result") or {}).get("metadata") or {}).get("permission_behavior")
         ],
-        "turn_statuses": [(event.get("metadata") or {}).get("status") for event in turn_ends],
+        "turn_statuses": [event.get("type", "").rsplit(".", 1)[-1] for event in turn_ends],
         "context_usage": usage,
     }
 
@@ -390,18 +396,19 @@ def infer_permission_observed(
         return str(interruption.get("status") or "interrupted")
 
     trace = get_trace(agent)
-    tool_calls = [event for event in trace if event.get("type") == "tool_call"]
-    tool_results = [event for event in trace if event.get("type") == "tool_result"]
+    tool_calls = [event for event in trace if event.get("type") == "tool.invoke.started"]
+    tool_results = [event for event in trace if event.get("type") == "tool.invoke.completed"]
     for event in reversed(tool_results):
-        result_metadata = event.get("result_metadata") or {}
+        data = event.get("data") or {}
+        result_metadata = ((data.get("result") or {}).get("metadata") or {})
         if result_metadata.get("permission_behavior") == "deny":
             return "deny"
         if result_metadata.get("permission_behavior") == "ask":
             return "ask"
-        if "permission_denied" in str(event.get("content", "")).lower():
+        if "permission_denied" in str(data.get("result", "")).lower():
             return "deny"
 
-    if any((event.get("metadata") or {}).get("success") is True for event in tool_results):
+    if any((event.get("data") or {}).get("status") == "success" for event in tool_results):
         return "allow"
     if tool_calls:
         return "tool_called"
@@ -423,6 +430,7 @@ def run_agent_task(
     system_prompt: Optional[str] = None,
     max_iter: int = 8,
     temperature: float = 0,
+    observability: bool = False,
     **invoke_kwargs: Any,
 ) -> dict[str, Any]:
     agent = make_easyagent(
@@ -431,6 +439,8 @@ def run_agent_task(
         config=config,
         system_prompt=system_prompt,
     )
+    if observability:
+        agent.with_observability(store=InMemoryObservabilityStore())
     output: Optional[str] = None
     interruption_payload: Optional[dict[str, Any]] = None
     error: Optional[str] = None

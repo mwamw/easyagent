@@ -135,9 +135,7 @@ registry.register_tool(AddTool())
 agent = BasicAgent(
     name="tool-agent",
     llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-)
+).with_tool(registry)
 ```
 
 常见产品组合：

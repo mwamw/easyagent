@@ -162,24 +162,16 @@ class CodeIntelEnhancementTestCase(unittest.TestCase):
 
     def test_session_restore_rebuilds_codeintel_cache_runtime(self):
         session_store = SessionStore(self.db_path)
-        registry = ToolRegistry()
         agent = BasicAgent(
             name="codeintel-cache-agent",
             llm=DummyLLM(),
-            enable_tool=True,
-            tool_registry=registry,
             config=Config(
                 workspace_root=self.workspace,
                 allowed_roots=[self.workspace],
             ),
-        )
-        manager = register_codeintel_tools(
-            registry,
-            provider=self._provider(),
-            parent_agent=agent,
-            workspace_root=self.workspace,
-            allowed_roots=(self.workspace,),
-        )
+        ).with_codeintel(provider=self._provider())
+        registry = agent.tool_registry
+        manager = agent.codeintel_manager
         try:
             registry.execute_tool_result(
                 "CodeIntelPrewarmWorkspace",
@@ -210,9 +202,9 @@ class CodeIntelEnhancementTestCase(unittest.TestCase):
         self.assertEqual(offline.structured_data["metadata"]["cacheSource"], "offline_index")
 
         report = restored.get_last_restore_report()
-        self.assertIn("codeintel_runtime", report["components"])
+        self.assertIn("codeintel", report["components"])
 
-        restored.close(close_worktree=False)
+        restored.close()
 
 
 if __name__ == "__main__":

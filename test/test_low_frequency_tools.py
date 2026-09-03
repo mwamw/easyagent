@@ -12,17 +12,19 @@ from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import (
     AskUserQuestionTool,
     ConfigTool,
-    EnterPlanModeTool,
-    ExitPlanModeTool,
     NotebookEditTool,
     register_ask_user_question_tool,
     register_config_tool,
-    register_enter_plan_mode_tool,
-    register_exit_plan_mode_tool,
     register_notebook_edit_tool,
 )
 from Tool.builtin.filesystem import FileReadTool
 from core.Config import Config
+from plan import (
+    EnterPlanModeTool,
+    ExitPlanModeTool,
+    register_enter_plan_mode_tool,
+    register_exit_plan_mode_tool,
+)
 
 
 def _write_notebook(path: str) -> None:

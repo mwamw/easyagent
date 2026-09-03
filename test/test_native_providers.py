@@ -321,12 +321,13 @@ class TestNativeProviders(unittest.TestCase):
             system_prompt="system prompt",
             tools=[
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "weather",
-                        "description": "Get weather",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
+                    "function_declarations": [
+                        {
+                            "name": "weather",
+                            "description": "Get weather",
+                            "parameters": {"type": "object", "properties": {}},
+                        }
+                    ]
                 }
             ],
         )
@@ -447,11 +448,11 @@ class TestNativeProviders(unittest.TestCase):
 
         message = codec.build_assistant_response(response, include_reasoning=True)
 
-        self.assertEqual(message["content"][0]["type"], "thinking")
-        self.assertEqual(message["content"][0]["text"], "plan")
-        self.assertEqual(message["content"][0]["thought_signature"], b"sig-1")
-        self.assertEqual(message["content"][2]["type"], "function_call")
-        self.assertEqual(message["content"][2]["id"], "call_1")
+        self.assertEqual(message["role"], "model")
+        self.assertTrue(message["parts"][0]["thought"])
+        self.assertEqual(message["parts"][0]["text"], "plan")
+        self.assertEqual(message["parts"][0]["thought_signature"], b"sig-1")
+        self.assertEqual(message["parts"][2]["function_call"]["id"], "call_1")
         self.assertEqual(codec.get_tool_calls(response)[0]["arguments"], {"city": "Beijing"})
 
     def test_google_provider_prepare_messages_merges_function_responses(self):
@@ -911,12 +912,9 @@ class TestNativeProviders(unittest.TestCase):
             system_prompt="system prompt",
             tools=[
                 {
-                    "type": "function",
-                    "function": {
-                        "name": "weather",
-                        "description": "Get weather",
-                        "parameters": {"type": "object", "properties": {}},
-                    },
+                    "name": "weather",
+                    "description": "Get weather",
+                    "input_schema": {"type": "object", "properties": {}},
                 }
             ],
         )

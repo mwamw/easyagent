@@ -161,7 +161,7 @@ register_file_edit_tool(registry, workspace_root="/repo", expose_in_deferred=Fal
 register_file_write_tool(registry, workspace_root="/repo", expose_in_deferred=False)
 register_shell_tools(registry, workspace_root="/repo", expose_in_deferred=False)
 
-agent = BasicAgent(name="code-agent", llm=llm, config=config, tool_registry=registry)
+agent = BasicAgent(name="code-agent", llm=llm, config=config).with_tool(registry)
 ```
 
 此时：

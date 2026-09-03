@@ -8,5 +8,5 @@ from dotenv import load_dotenv
 load_dotenv()
 if __name__ == "__main__":
     llm:EasyLLM=EasyLLM()
-    print(llm.model,llm.provide,llm.resovle_api_key,llm.resovle_base_url)
+    print(llm.model, llm.provider_name, llm.api_key, llm.base_url)
     print(llm.invoke([{"role":"user","content":"你是什么模型"}]))

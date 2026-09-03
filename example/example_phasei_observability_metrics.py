@@ -11,7 +11,15 @@ if project_root not in sys.path:
     sys.path.insert(0, "/home/wxd/LLM/EasyAgent")
 from pydantic import BaseModel
 
-from easyagent import BasicAgent, EasyLLM, SessionStore, Tool, ToolRegistry
+from easyagent import (
+    BasicAgent,
+    EasyLLM,
+    InMemoryObservabilityStore,
+    ObservabilityManager,
+    SessionStore,
+    Tool,
+    ToolRegistry,
+)
 
 
 class EchoParams(BaseModel):
@@ -59,14 +67,12 @@ def main() -> None:
     agent = BasicAgent(
         name="observability-demo",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         system_prompt=(
             "You are validating EasyAgent observability. "
             "Use tools when the task explicitly asks for a local deterministic action. "
             "When you finish, keep the answer concise."
         ),
-    )
+    ).with_tool(registry).with_observability()
 
     # 1. 普通调用：记录 plain agent run + llm request
     plain_result = agent.invoke("用一句话说明当前框架为什么需要 observability。")
@@ -77,20 +83,21 @@ def main() -> None:
     print("tool_result:", tool_result)
 
     # 3. 流式调用：记录 stream=true 的 plain 观测事件
-    stream_result = agent.stream_invoke("流式输出一句总结，说明 observability summary 能提供什么。")
-    print("stream_result:", stream_result)
+    stream_events = list(agent.stream("流式输出一句总结，说明 observability summary 能提供什么。"))
+    print("stream_events:", stream_events)
 
     # 4. 读取观测聚合视图
-    summary = agent.get_observability_summary()
-    recent_events = agent.get_recent_observability_events(limit=10)
-    trace_summary = agent.get_trace_summary(limit_turns=3)
+    assert agent.observability is not None
+    summary = agent.observability.summary()
+    recent_invokes = [record.model_dump(mode="json") for record in agent.observability.list()[-10:]]
+    latest_trace = agent.observability.latest().trace if agent.observability.latest() else []
 
     print("observability_summary:")
     print(summary)
-    print("recent_events:")
-    print(recent_events)
-    print("trace_summary:")
-    print(trace_summary)
+    print("recent_invokes:")
+    print(recent_invokes)
+    print("latest_trace:")
+    print(latest_trace)
 
     # 5. 保存并恢复 session，验证 observability_state 跟随会话恢复
     with tempfile.TemporaryDirectory() as tempdir:
@@ -101,22 +108,21 @@ def main() -> None:
             "phase-i-observability",
             llm=build_llm(),
             store=store,
+            observability_manager=ObservabilityManager(InMemoryObservabilityStore()),
         )
         try:
-            restored_summary = restored.get_observability_summary()
-            restored_recent_events = restored.get_recent_observability_events(limit=10)
-            restored_trace_summary = restored.get_trace_summary(limit_turns=3)
+            assert restored.observability is not None
+            restored_summary = restored.observability.summary()
+            restored_invokes = restored.observability.list()
 
             print("restored_summary:")
             print(restored_summary)
-            print("restored_recent_events:")
-            print(restored_recent_events)
-            print("restored_trace_summary:")
-            print(restored_trace_summary)
+            print("restored_invokes:")
+            print(restored_invokes)
         finally:
-            restored.close(close_worktree=False)
+            restored.close()
 
-    agent.close(close_worktree=False)
+    agent.close()
 
 
 if __name__ == "__main__":

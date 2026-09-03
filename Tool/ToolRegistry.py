@@ -56,18 +56,6 @@ class ToolRegistry:
         for name in names:
             self.unregister_tool(name)
 
-    def registry(self, item):
-        """兼容注册入口：支持 Tool 实例或带 register_to_registry 的对象。"""
-        if isinstance(item, Tool):
-            self.register_tool(item)
-            return item
-
-        register_fn = getattr(item, "register_to_registry", None)
-        if callable(register_fn):
-            return register_fn(self)
-
-        raise ValueError("registry(...) 仅支持 Tool 实例或可注册对象")
-
     def tool(self, name: str, description: str, parameters: Type[BaseModel]):
         """装饰器：注册函数为工具。"""
 
@@ -323,13 +311,6 @@ class ToolRegistry:
             metadata.setdefault("source_identifier", source_identifier)
         if spec.risk_categories:
             metadata.setdefault("risk_categories", list(spec.risk_categories))
-        if spec.demand_skill_tool:
-            metadata.setdefault("demand_skill_tool", True)
-            if spec.demand_skill_name:
-                metadata.setdefault("demand_skill_name", spec.demand_skill_name)
-            note = "注意：该工具来自按需 Skill 的临时挂载，只在当前请求实际提供的 tools 集合中可用；后续再次调用前必须确认它当前仍然存在。"
-            base_text = result.to_display_string().strip()
-            result.display_text = f"{note}\n\n执行结果:\n{base_text}" if base_text else note
         result.metadata = metadata
 
     def execute_tool(self, name: str, parameters: dict):
@@ -442,21 +423,3 @@ class ToolRegistry:
 
     def get_tool_visibility(self, name: str) -> ToolVisibility | None:
         return self._tool_visibility.get(name)
-
-    # ==================== 向后兼容别名 ====================
-
-    def registerTool(self, tool: Tool):
-        """向后兼容：请改用 register_tool。"""
-        return self.register_tool(tool)
-
-    def executeTool(self, name: str, parameters: dict):
-        """向后兼容：请改用 execute_tool。"""
-        return self.execute_tool(name, parameters)
-
-    def get_Tool(self, name: str):
-        """向后兼容：请改用 get_tool。"""
-        return self.get_tool(name)
-
-    def disregister_tool(self, name: str):
-        """向后兼容：请改用 unregister_tool。"""
-        return self.unregister_tool(name)

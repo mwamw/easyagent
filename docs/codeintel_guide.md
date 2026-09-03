@@ -214,10 +214,7 @@ register_codeintel_tools(registry, manager=manager)
 agent = BasicAgent(
     name="code-agent",
     llm=EasyLLM(),
-    enable_tool=True,
-    tool_registry=registry,
-    codeintel_manager=manager,
-)
+).with_tool(registry).with_codeintel(manager)
 ```
 
 如果你的 Agent 有 `execution_context` 或 worktree，manager 可以自动跟随当前工作区。

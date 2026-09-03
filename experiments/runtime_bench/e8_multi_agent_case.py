@@ -31,10 +31,9 @@ def make_runtime() -> AgentRuntimeManager:
                 "You are a real EasyAgent subagent in a multi-agent runtime benchmark. "
                 "Use benchmark tools when the task requests them and report concise results."
             ),
-            enable_tool=True,
-            tool_registry=build_mock_registry(),
             config=Config(tool_schema_mode="deferred"),
-            permission_context=build_permission_context(),
+        ).with_tool(build_mock_registry()).with_permissions(
+            context=build_permission_context()
         )
 
     runtime = AgentRuntimeManager(agent_factory=factory, team_manager=team_manager)

@@ -5,6 +5,10 @@
 # %%
 import sys
 import os
+import pytest
+
+pytest.skip("manual real-LLM compaction experiment", allow_module_level=True)
+
 # 将项目根目录加入 path，以便导入 core 等模块
 sys.path.append(os.path.abspath(".."))
 

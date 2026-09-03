@@ -5,6 +5,8 @@ import hashlib
 import json
 from typing import Any, Literal, Optional
 
+from prompt import PROMPT_PLACEMENTS
+
 
 CacheMode = Literal["auto", "read_only", "write", "skip_write"]
 CacheScope = Literal["session", "global"]
@@ -52,10 +54,15 @@ class PromptCachePolicy:
 class CacheableBlock:
     name: str
     content: str
+    placement: Literal["system", "system_reminder"] = "system"
     partition: CachePartition = "static"
     cacheable: bool = True
     reason: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.placement not in PROMPT_PLACEMENTS:
+            raise ValueError(f"Unsupported cacheable prompt placement: {self.placement!r}")
 
     def render(self) -> str:
         return str(self.content or "").strip()
@@ -64,6 +71,7 @@ class CacheableBlock:
         return {
             "name": self.name,
             "content": self.content,
+            "placement": self.placement,
             "partition": self.partition,
             "cacheable": self.cacheable,
             "reason": self.reason,
@@ -117,6 +125,7 @@ def prompt_block_to_cacheable(block: Any) -> CacheableBlock:
     return CacheableBlock(
         name=str(getattr(block, "name", "") or "prompt_block"),
         content=str(getattr(block, "render", lambda: getattr(block, "content", ""))() or ""),
+        placement=getattr(block, "placement", "system"),
         partition=partition,  # type: ignore[arg-type]
         cacheable=cacheable,
         reason=metadata.get("cache_reason"),

@@ -13,7 +13,7 @@ from context.compressor.history import RuleBasedHistoryCompactor
 from context.manager import ContextManager
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
-from core.Message import AssistantMessage, UserMessage
+from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
 
 
@@ -30,6 +30,13 @@ def print_block(title: str, payload: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
 
+def message(role: str, content: str) -> CanonicalMessage:
+    return CanonicalMessage(
+        role=role,
+        content=[CanonicalBlock(type="text", text=content)],
+    )
+
+
 def main() -> None:
     llm = DummyLLM()
     manager = ContextManager(
@@ -44,22 +51,20 @@ def main() -> None:
     agent = BasicAgent(
         name="context-demo",
         llm=llm,
-        context_manager=manager,
-        history_via_context_manager=True,
         system_prompt="你是一个负责上下文压缩演示的助手。",
-    )
+    ).with_context(manager)
 
     agent.history = [
-        UserMessage("用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"),
-        AssistantMessage("助手确认了第一轮需求，并详细解释了计划和限制条件。"),
-        UserMessage("用户继续补充第二轮长约束，包括工具调用和恢复要求。"),
-        AssistantMessage("助手总结第二轮长约束，并给出后续实现顺序。"),
-        UserMessage("用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"),
-        AssistantMessage("助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"),
-        UserMessage("用户第四轮要求会话恢复后继续复用摘要缓存。"),
-        AssistantMessage("助手第四轮确认恢复时需要保留压缩状态。"),
-        UserMessage("u5"),
-        AssistantMessage("a5"),
+        message("user", "用户提出了第一轮非常长的需求说明，需要系统记住项目背景和目标。"),
+        message("assistant", "助手确认了第一轮需求，并详细解释了计划和限制条件。"),
+        message("user", "用户继续补充第二轮长约束，包括工具调用和恢复要求。"),
+        message("assistant", "助手总结第二轮长约束，并给出后续实现顺序。"),
+        message("user", "用户第三轮继续增加新的限制条件，并要求保持时间顺序和工具链完整。"),
+        message("assistant", "助手第三轮记录新的限制条件，并说明不能直接粗暴截断历史。"),
+        message("user", "用户第四轮要求会话恢复后继续复用摘要缓存。"),
+        message("assistant", "助手第四轮确认恢复时需要保留压缩状态。"),
+        message("user", "u5"),
+        message("assistant", "a5"),
     ]
     original_history = [
         message.model_dump(mode="json") if hasattr(message, "model_dump") else message

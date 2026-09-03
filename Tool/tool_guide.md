@@ -68,16 +68,9 @@ Tool（工具）系统是 EasyAgent 的统一能力调用层。它负责把“�
 - 临时上下文
 - 错误类型
 
-### 3. on-demand Skill 挂载的 Tool 有明确的“临时性”
+### 3. Skill 通过现有 Tool 的临时授权完成能力展开
 
-如果某个 Tool 来自 `skill_tool` 按需调用挂载的 on-demand Skill：
-
-- 它只在当前 `invoke` 的 `tools` 集合里临时存在
-- 当前轮结束后会被移除
-- `ToolSpec` 会带上 `demand_skill_tool` 标记
-- `ToolResult.metadata` 也会带上同样的标记
-
-这能避免模型因为历史消息里见过某个工具名，就误以为它当前仍然可调用。
+目录式 Skill 不动态导入 Python `tools.py`，也不创建隐式 Tool 实例。`allowed-tools` 只对 Agent 已注册的工具增加 invocation 级权限，并在 deferred schema 模式下展开对应 schema；Agent invoke 结束后临时权限和展开状态自动清理。
 
 ---
 
@@ -165,9 +158,7 @@ llm = EasyLLM(provider="openai", model="gpt-4o-mini")
 agent = BasicAgent(
     name="assistant",
     llm=llm,
-    enable_tool=True,
-    tool_registry=registry,
-)
+).with_tool(registry)
 
 result = agent.invoke("帮我查一下北京天气")
 ```
@@ -231,8 +222,6 @@ class Tool(ABC):
         source: str = "custom",
         ephemeral: bool = False,
         prompt: str = "",
-        demand_skill_tool: bool = False,
-        demand_skill_name: Optional[str] = None,
         ...
     )
 ```
@@ -262,8 +251,6 @@ def run(self, parameters: dict) -> Any:
 | `get_spec()` | 获取完整 `ToolSpec` |
 | `get_openai_schema()` | 生成 OpenAI function calling schema |
 | `to_provider_schema()` | provider 适配入口 |
-| `mark_as_demand_skill_tool()` | 标记为按需 Skill 临时工具 |
-| `clear_demand_skill_tool()` | 清除按需 Skill 临时工具标记 |
 
 ---
 
@@ -287,8 +274,7 @@ def run(self, parameters: dict) -> Any:
 | `source` | 工具来源，例如 `builtin` / `custom` / `mcp` |
 | `ephemeral` | 是否偏临时能力 |
 | `prompt` | 工具的详细说明文本 |
-| `demand_skill_tool` | 是否来自 on-demand Skill 的临时挂载 |
-| `demand_skill_name` | 该临时工具来自哪个 Skill |
+| `expose_in_deferred` | 是否在 deferred schema 模式下默认可见 |
 | `tags` | 标签 |
 | `metadata` | 扩展元数据 |
 
@@ -365,9 +351,9 @@ ToolResult.needs_confirmation(...)
 - `tool_name`
 - `tool_visibility`
 - `tool_source`
-- 如果是按需 Skill 临时工具，再补：
-  - `demand_skill_tool=True`
-  - `demand_skill_name`
+- `side_effect_level`
+- `resource_scope`
+- `visibility_scope`
 
 ---
 
@@ -437,26 +423,9 @@ registry.get_tool_names()
 5. 用 `result.to_display_string()` 回填到对话
 6. 若 `ToolResult.ephemeral_context` 不为空，则追加临时上下文消息
 
-### Skill 如何注入工具
+### Skill 如何使用工具
 
-Skill 激活时，`SkillManager` 会根据模式把工具注入 `ToolRegistry`：
-
-- `resident` Skill：通常走常驻注册
-- `on_demand` Skill：通过 `skill_tool` 临时挂载 runtime tool
-
-### on-demand Skill Tool 的特殊约束
-
-当工具来自 `skill_tool` 临时挂载时：
-
-- 工具会被标记为 `demand_skill_tool`
-- 工具 schema 会明确告诉模型“它不是常驻工具”
-- 工具 result 也会再次提醒这一点
-- 当前轮结束后，工具会从 `tools` 集合中被移除
-
-这意味着：
-
-- 模型不能因为历史消息里看见过这个工具，就默认它仍然可用
-- 下一次新的 `invoke` 若还需要，应重新调用 `skill_tool`
+Skill 的 `allowed-tools` 只能引用 ToolRegistry 中已经存在的工具。SkillManager 为这些工具增加临时权限规则并展开 deferred schema，不负责动态导入或卸载 Tool。完整 Skill 正文通过 MetaMessage 注入，invoke 结束后正文和临时权限一起回收。
 
 ### 与 Claude Code 的对齐
 
@@ -499,7 +468,7 @@ MCP 集成现在分成三层：
 
 - 远程 MCP tools：包装成 `MCPWrappedTool`
 - MCP resources：通过 `MCPListResourcesTool` / `MCPReadResourceTool` 暴露
-- MCP prompts：不进 ToolRegistry，而是映射成 `on_demand skills`
+- MCP prompts：由 MCP 模块显式读取，不自动映射成目录式 Skill
 
 其中 Tool 层遵循以下规则：
 
@@ -511,7 +480,7 @@ MCP 集成现在分成三层：
   - `idempotentHint` -> `supports_parallel`
 - 模型看到的是“当前真的暴露出来的远程工具/资源工具”
 - 不会额外把 MCP tool prompt 再拼进 system prompt
-- MCP prompt 则复用现有 `SkillRegistry + skill_tool` 路径
+- MCP prompt 与目录式 Skill 是两个独立扩展面，不做隐式注册
 
 ---
 
@@ -576,8 +545,6 @@ class Tool(ABC):
     def get_spec(self) -> ToolSpec: ...
     def get_openai_schema(self) -> dict[str, Any]: ...
     def to_provider_schema(self, provider: str = "openai") -> dict[str, Any]: ...
-    def mark_as_demand_skill_tool(self, skill_name: str) -> None: ...
-    def clear_demand_skill_tool(self) -> None: ...
 ```
 
 ### ToolRegistry
@@ -611,7 +578,7 @@ result.to_display_string()
 
 当前 EasyAgent 的 Tool 系统可以概括成一句话：
 
-**工具说明走 schema，工具执行走 ToolResult，临时 Skill 工具有明确的生命周期和可见性边界。**
+**工具说明走 schema，工具执行走 ToolResult，Skill 只对现有工具增加临时权限与 deferred schema 展开。**
 
 如果你要继续扩展 Tool 模块，推荐优先沿着下面这条线推进：
 

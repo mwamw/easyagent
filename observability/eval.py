@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Optional
 
+from core.history import CanonicalMessage
+
+from .models import AgentInvoke
+from .store import InMemoryObservabilityStore
+
 
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -71,9 +76,13 @@ class OfflineEvalHarness:
         for case in cases:
             agent = agent_factory()
             try:
+                if getattr(agent, "observability", None) is None:
+                    agent.with_observability(store=InMemoryObservabilityStore())
                 agent.invoke(case.query)
-                trace = agent.export_eval_trace(redact=redact) or {}
-                result = self._score_case(case, trace)
+                invoke = agent.observability.latest()
+                if invoke is None:
+                    raise RuntimeError("Agent 调用完成后没有生成 AgentInvoke 记录。")
+                result = self._score_case(case, invoke, redact=redact)
                 results.append(result.to_dict())
             finally:
                 close = getattr(agent, "close", None)
@@ -119,10 +128,34 @@ class OfflineEvalHarness:
             ),
         }
 
-    def _score_case(self, case: EvalCase, trace: dict[str, Any]) -> EvalResult:
-        output = str(trace.get("final_output") or "")
-        tools_used = [str(item) for item in list(trace.get("tools_used") or []) if str(item).strip()]
-        tool_calls = int(trace.get("tool_calls") or 0)
+    @staticmethod
+    def _text(messages: list[CanonicalMessage]) -> str:
+        parts: list[str] = []
+        for message in messages:
+            for block in message.content:
+                if block.type == "text" and block.text:
+                    parts.append(block.text)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _tools_used(invoke: AgentInvoke) -> list[str]:
+        names: list[str] = []
+        for message in invoke.trace:
+            for block in message.content:
+                if block.type == "function_call" and block.name and block.name not in names:
+                    names.append(block.name)
+        return names
+
+    def _score_case(
+        self,
+        case: EvalCase,
+        invoke: AgentInvoke,
+        *,
+        redact: bool,
+    ) -> EvalResult:
+        output = self._text(invoke.output)
+        tools_used = self._tools_used(invoke)
+        tool_calls = invoke.stats.tool_calls
         failures: list[str] = []
         matched_checks = 0
         total_checks = 0
@@ -149,7 +182,7 @@ class OfflineEvalHarness:
                 failures.append(f"tool_calls_exceeded:{tool_calls}")
 
         if total_checks == 0:
-            success = bool(trace.get("success"))
+            success = invoke.stats.success
             score = 1.0 if success else 0.0
         else:
             success = matched_checks == total_checks
@@ -161,19 +194,27 @@ class OfflineEvalHarness:
             success=success,
             status="success" if success else "failed",
             score=score,
-            run_id=trace.get("run_id"),
-            final_output=output,
+            run_id=invoke.invoke_id,
+            final_output="[redacted]" if redact else output,
             tools_used=tools_used,
             tool_calls=tool_calls,
-            llm_requests=int(trace.get("llm_requests") or 0),
-            input_tokens=int(trace.get("input_tokens") or 0),
-            output_tokens=int(trace.get("output_tokens") or 0),
-            total_tokens=int(trace.get("total_tokens") or 0),
-            cache_hit_ratio=trace.get("cache_hit_ratio"),
+            llm_requests=invoke.stats.llm_calls,
+            input_tokens=invoke.stats.input_tokens,
+            output_tokens=invoke.stats.output_tokens,
+            total_tokens=invoke.stats.total_tokens,
+            cache_hit_ratio=(
+                float(invoke.stats.cached_input_tokens) / float(invoke.stats.input_tokens)
+                if invoke.stats.input_tokens > 0
+                else None
+            ),
             failure_reasons=failures,
             metadata={
                 "caseMetadata": _json_safe(case.metadata),
-                "traceMetadata": _json_safe(trace.get("metadata") or {}),
+                "traceMetadata": (
+                    {"redacted": True}
+                    if redact
+                    else _json_safe(invoke.metadata)
+                ),
             },
         )
 

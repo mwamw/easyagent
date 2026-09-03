@@ -63,9 +63,9 @@ class TestTokenBudget(unittest.TestCase):
     def test_default_allocations(self):
         """默认分配比例"""
         budget = TokenBudget(max_tokens=10000)
-        self.assertEqual(budget.get_budget("system"), 1500)
-        self.assertEqual(budget.get_budget("history"), 7000)
+        self.assertEqual(budget.get_budget("history"), 8000)
         self.assertEqual(budget.get_budget("rag"), 1000)
+        self.assertEqual(budget.get_budget("memory"), 1000)
 
     def test_custom_allocation(self):
         """自定义分配"""
@@ -88,19 +88,19 @@ class TestTokenBudget(unittest.TestCase):
         """重分配逻辑"""
         budget = TokenBudget(max_tokens=10000)
         used = {
-            "system": 200,    # 预算 1500，剩余 1300
-            "history": 8000,  # 预算 7000，超额 1000
+            "history": 9000,  # 预算 8000，超额 1000
             "rag": 1000,      # 刚好
+            "memory": 200,    # 预算 1000，剩余 800
         }
         result = budget.redistribute(used)
         # system 只用了 200，多余的应该被重分配
-        self.assertEqual(result["system"], 200)
-        self.assertGreaterEqual(result["history"], 7000)
+        self.assertEqual(result["memory"], 200)
+        self.assertGreaterEqual(result["history"], 8000)
 
     def test_redistribute_no_deficit(self):
         """无超额时不影响"""
         budget = TokenBudget(max_tokens=10000)
-        used = {"system": 100, "history": 100, "rag": 100}
+        used = {"history": 100, "rag": 100, "memory": 100}
         result = budget.redistribute(used)
         for source in used:
             self.assertEqual(result[source], used[source])

@@ -1,1191 +1,305 @@
-"""
-会话持久化测试
-"""
-import os
-import subprocess
-import sys
-import tempfile
-import time
-import unittest
+from __future__ import annotations
+
 from datetime import datetime, timedelta
+import os
 from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-# 添加项目根目录到路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from agent import BasicAgent, ConversationalAgent, PlanningAgent, ReactAgent
-from core.Config import Config
-from core.Message import AssistantMessage, SystemMessage, ToolMessage, UserMessage
+from agent import BasicAgent
+from agent.components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext
+from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
-from core.permissions import PermissionBehavior, PermissionMode, PermissionRule
-from core.request_input import ReplayRequestInput
-from context.manager import ContextManager
-from context.compressor.history import RuleBasedHistoryCompactor
-from context.token.counter import TokenCounter
 from db import ConversationStore, SessionStore
-from runtime import TeamManager
-from skill import BaseSkill, SkillConfig, SkillRegistry
-from task import InMemoryTaskStore, SQLiteTaskStore, TaskService
-from Tool.BaseTool import Tool
-from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin import (
-    register_agent_tool,
-    register_agent_runtime_tools,
-    register_file_read_tool,
-    register_enter_worktree_tool,
-    register_exit_worktree_tool,
-    register_mailbox_tools,
-    register_send_message_tool,
-    register_team_create_tool,
-    register_team_delete_tool,
-)
-from Tool.runtime import WorktreeManager
+from metamessage import MetaMessage, MetaMessageLifecycle
+from observability import InMemoryObservabilityStore
+from plan import PlanModeConfig
+from prompt import PromptBlock
+from Tool import Tool, ToolRegistry
 
 
-class DummyLLM(EasyLLM):
-    def __init__(self):
-        self.provider_name = "mock"
-        self.model = "mock-model"
-        self.base_url = "http://mock.local/v1"
-        self.api_key = "mock-key"
-        self.max_tokens = 256
-        self.last_messages = []
-        self._provider = SimpleNamespace(
-            get_cache_capability=lambda: SimpleNamespace(
-                to_dict=lambda: {
-                    "supports_explicit_cache_control": False,
-                    "supports_message_level_breakpoint": False,
-                    "supports_tool_cache_marker": False,
-                    "supports_usage_cache_fields": False,
-                    "supports_cached_content_objects": False,
-                    "supports_deferred_tools": True,
-                    "usage_semantics": "unknown",
-                }
-            )
-        )
-
-    def invoke(self, messages, temperature=None, **kwargs):
-        self.last_messages = list(messages)
-        return "mock-response"
-
-    def prepare_messages_for_request(self, messages):
-        return list(messages)
-
-
-class ReplayAwareDummyLLM(DummyLLM):
-    def __init__(self, provider_name: str = "mock", model: str = "mock-model"):
-        self.provider_name = provider_name
-        self.model = model
-        self.base_url = "http://mock.local/v1"
-        self.api_key = "mock-key"
-        self.max_tokens = 256
-        self.last_messages = []
-        self.temperature = 0.7
-        self.timeout = 60
-        self.kwargs = {}
-        self._provider = SimpleNamespace(
-            get_cache_capability=lambda: SimpleNamespace(
-                to_dict=lambda: {
-                    "supports_explicit_cache_control": False,
-                    "supports_message_level_breakpoint": False,
-                    "supports_tool_cache_marker": False,
-                    "supports_usage_cache_fields": False,
-                    "supports_cached_content_objects": False,
-                    "supports_deferred_tools": True,
-                    "usage_semantics": "unknown",
-                }
-            )
-        )
-
-
-class ClosableDummyLLM(DummyLLM):
-    def __init__(self):
-        super().__init__()
+class SessionProvider:
+    def __init__(self) -> None:
         self.closed = False
+
+    def build_tool_payload(self, tools):
+        return list(tools)
+
+    def build_request(
+        self,
+        messages,
+        *,
+        system_prompt=None,
+        tools=None,
+        temperature=None,
+        reasoning=None,
+        stream=False,
+        **kwargs,
+    ):
+        values = []
+        if system_prompt:
+            values.append({"role": "system", "content": system_prompt})
+        values.extend(list(messages))
+        return {"messages": values, "tools": tools, "stream": stream}
+
+    def apply_cache_policy(self, request, request_input):
+        return request
+
+    def invoke_raw(self, request):
+        return SimpleNamespace(
+            content="session-response",
+            reasoning_content=None,
+            tool_calls=[],
+            usage=SimpleNamespace(
+                prompt_tokens=8,
+                completion_tokens=2,
+                total_tokens=10,
+            ),
+        )
+
+    async def async_invoke_raw(self, request):
+        return self.invoke_raw(request)
 
     def close(self):
         self.closed = True
+
+
+class SessionLLM(EasyLLM):
+    def __init__(self, provider_name: str = "openai") -> None:
+        self.provider_name = provider_name
+        self.model = "session-model"
+        self.base_url = "http://session.local/v1"
+        self.api_key = "session-key"
+        self.max_tokens = 256
+        self.temperature = 0.1
+        self.timeout = 60
+        self.kwargs = {}
+        self._provider = SessionProvider()
+        self.client = None
 
 
 class EchoParams(BaseModel):
     text: str
 
 
-class FakeMemoryManage:
-    def __init__(self):
-        self.memory_types = {}
-
-
-class SkillEchoParams(BaseModel):
-    pass
-
-
-class SkillEchoTool(Tool):
-    def __init__(self):
+class EchoTool(Tool):
+    def __init__(self) -> None:
         super().__init__(
-            name="skill_echo",
-            description="Echo from restored skill",
-            parameters=SkillEchoParams,
+            name="Echo",
+            description="Echo a value.",
+            parameters=EchoParams,
             read_only=True,
+            side_effect_level="none",
         )
 
     def run(self, parameters: dict):
-        return "skill-echo"
+        return parameters["text"]
 
 
-class RestorableSkill(BaseSkill):
-    def __init__(self):
-        super().__init__(
-            SkillConfig(
-                name="restorable_skill",
-                description="Can be rebuilt from SkillRegistry",
-                auto_activate=True,
-            )
-        )
-
-    def get_tools(self):
-        return [SkillEchoTool()]
-
-    def get_prompt(self) -> str:
-        return "Restored skill prompt"
+class CustomPrompt(BaseSystemPromptComposer):
+    def build(self, context: PromptBuildContext) -> list[PromptBlock]:
+        return [PromptBlock("custom", "custom prompt")]
 
 
-class RuntimeSubagent:
-    def __init__(self):
-        self.trace_history = [{"type": "tool_call", "tool_name": "WebSearch"}]
-
-    def invoke(self, prompt: str) -> str:
-        return f"runtime:{prompt}"
-
-    def get_context_usage(self) -> dict:
-        return {
-            "version": 2,
-            "requestEstimate": {"estimatedRequestTokens": 9, "source": "test", "metadata": {}},
-            "budget": {},
-            "compaction": {"last": {}, "estimatedRequestTokens": 9, "tokenSource": "test", "metadata": {}},
-            "cache": {},
-        }
-
-
-class SlowRuntimeSubagent(RuntimeSubagent):
-    def invoke(self, prompt: str) -> str:
-        time.sleep(0.5)
-        return super().invoke(prompt)
-
-
-def _init_git_repo(root: str) -> str:
-    repo = os.path.join(root, "repo")
-    os.makedirs(repo, exist_ok=True)
-    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True, text=True)
-    with open(os.path.join(repo, "README.md"), "w", encoding="utf-8") as handle:
-        handle.write("hello\n")
-    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True, text=True)
-    subprocess.run(["git", "commit", "-m", "init"], cwd=repo, check=True, capture_output=True, text=True)
-    return repo
-
-    def get_trace_history(self):
-        return list(self.trace_history)
-
-
-def build_registry() -> ToolRegistry:
+def _registry() -> ToolRegistry:
     registry = ToolRegistry()
-
-    @registry.tool("echo", "Echo tool", EchoParams)
-    def echo(text: str) -> str:
-        return text
-
+    registry.register_tool(EchoTool())
     return registry
 
 
-class SessionPersistenceTestCase(unittest.TestCase):
-    def setUp(self):
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.db_path = os.path.join(self.tempdir.name, "sessions.db")
-        self.session_store = SessionStore(self.db_path)
-        self.conversation_store = ConversationStore(self.db_path)
-        self.llm = DummyLLM()
+def test_session_store_crud_and_expiration(tmp_path):
+    store = SessionStore(str(tmp_path / "sessions.sqlite3"))
+    store.create_or_update_session(
+        session_id="active",
+        agent_type="BasicAgent",
+        agent_name="assistant",
+        snapshot={"schemaVersion": 3},
+    )
+    store.create_or_update_session(
+        session_id="expired",
+        agent_type="BasicAgent",
+        agent_name="assistant",
+        snapshot={"schemaVersion": 3},
+        expires_at=datetime.now() - timedelta(seconds=1),
+    )
 
-    def tearDown(self):
-        SkillRegistry.reset()
-        self.tempdir.cleanup()
+    assert [item["session_id"] for item in store.list_sessions()] == ["active"]
+    assert store.cleanup_expired_sessions() == 1
+    assert store.get_session("expired") is None
+    assert store.delete_session("active")
 
-    def test_session_store_crud_and_cleanup(self):
-        self.session_store.create_or_update_session(
-            session_id="active",
-            agent_type="BasicAgent",
-            agent_name="assistant",
-            snapshot={"agent_type": "BasicAgent", "name": "assistant"},
-            metadata={"tag": "current"},
+
+def test_conversation_store_round_trips_canonical_messages(tmp_path):
+    path = str(tmp_path / "conversations.sqlite3")
+    sessions = SessionStore(path)
+    conversations = ConversationStore(path)
+    sessions.create_or_update_session(
+        session_id="conversation",
+        agent_type="BasicAgent",
+        agent_name="assistant",
+        snapshot={"schemaVersion": 3},
+    )
+    messages = [
+        CanonicalMessage(
+            role="user",
+            content=[CanonicalBlock(type="text", text="hello")],
+            metadata={"source": "test"},
+        ),
+        CanonicalMessage(
+            role="assistant",
+            content=[CanonicalBlock(type="text", text="world")],
+        ),
+    ]
+
+    conversations.replace_messages("conversation", messages)
+    restored = conversations.load_messages("conversation")
+
+    assert [item.role for item in restored] == ["user", "assistant"]
+    assert restored[0].metadata["source"] == "test"
+    assert restored[1].text_content() == "world"
+
+
+def test_basic_agent_restores_explicit_standard_modules(tmp_path):
+    store = SessionStore(str(tmp_path / "agent.sqlite3"))
+    agent = (
+        BasicAgent("session-agent", SessionLLM(), system_prompt="session prompt")
+        .with_tool(_registry())
+        .with_plan(config=PlanModeConfig(register_tools=False))
+        .with_observability(store=InMemoryObservabilityStore())
+    )
+    agent.emit_metamessage(
+        MetaMessage(
+            name="permanent-rule",
+            content="keep this rule",
+            lifecycle=MetaMessageLifecycle.PERMANENT,
+            dedup_key="permanent-rule",
         )
-        self.session_store.create_or_update_session(
-            session_id="expired",
-            agent_type="BasicAgent",
-            agent_name="assistant",
-            snapshot={"agent_type": "BasicAgent", "name": "assistant"},
-            expires_at=datetime.now() - timedelta(minutes=1),
-        )
+    )
+    agent.enter_plan_mode(allowed_actions=["Echo"])
+    assert agent.invoke("persist state") == "session-response"
+    agent.save_session("session-v3", store=store)
 
-        listed = self.session_store.list_sessions()
-        self.assertEqual([item["session_id"] for item in listed], ["active"])
+    snapshot = store.get_session("session-v3")["snapshot"]
+    assert snapshot["schemaVersion"] == 3
+    assert snapshot["modules"]["tools"]["state"]["names"] == ["Echo"]
+    assert snapshot["modules"]["plan"]["implementation"] == "PlanModeManager"
+    assert snapshot["modules"]["observability"]["implementation"] == "ObservabilityManager"
+    saved_events = snapshot["modules"]["runtimeEvents"]["state"]["events"]
+    assert saved_events[-1]["type"] == "agent.invoke.completed"
 
-        all_sessions = self.session_store.list_sessions(include_expired=True)
-        self.assertEqual({item["session_id"] for item in all_sessions}, {"active", "expired"})
+    restored = BasicAgent.load_session(
+        "session-v3",
+        llm=SessionLLM(),
+        store=store,
+        tool_registry=_registry(),
+    )
 
-        removed = self.session_store.cleanup_expired_sessions()
-        self.assertEqual(removed, 1)
-        self.assertIsNone(self.session_store.get_session("expired"))
-        self.assertTrue(self.session_store.delete_session("active"))
+    assert restored.system_prompt == "session prompt"
+    assert restored.plan is not None and restored.plan.is_active
+    assert restored.observability is not None
+    assert restored.observability.latest().query == "persist state"
+    assert restored.get_trace_history() == saved_events
+    assert [item.role for item in restored.get_canonical_history()][-1] == "assistant"
+    assert any(
+        item.metadata.get("metaMessageName") == "permanent-rule"
+        for item in restored.get_canonical_history()
+    )
+    assert restored.get_last_restore_report()["status"] == "restored"
 
-    def test_conversation_store_round_trip(self):
-        self.session_store.create_or_update_session(
-            session_id="conv-1",
-            agent_type="BasicAgent",
-            agent_name="assistant",
-            snapshot={"agent_type": "BasicAgent", "name": "assistant"},
-        )
-        messages = [
-            SystemMessage("system", metadata={"source": "test"}),
-            UserMessage("hello"),
-            AssistantMessage("world"),
-            ToolMessage("done", tool_call_id="call-1", name="echo", metadata={"tool": True}),
-        ]
 
-        self.conversation_store.replace_messages("conv-1", messages)
-        loaded = self.conversation_store.load_messages("conv-1")
-
-        self.assertEqual([msg["role"] for msg in loaded], ["system", "user", "assistant", "tool"])
-        self.assertEqual(loaded[0]["metadata"]["source"], "test")
-        self.assertEqual(loaded[-1]["tool_call_id"], "call-1")
-        self.assertEqual(loaded[-1]["name"], "echo")
-
-    def test_conversation_store_round_trip_raw_provider_messages(self):
-        self.session_store.create_or_update_session(
-            session_id="conv-raw",
-            agent_type="BasicAgent",
-            agent_name="assistant",
-            snapshot={"agent_type": "BasicAgent", "name": "assistant"},
-        )
-        messages = [
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "echo", "arguments": "{\"text\":\"hi\"}"},
-                    }
-                ],
-            },
-            {
-                "type": "function_call_output",
-                "call_id": "call-1",
-                "output": "hi",
-            },
-        ]
-
-        self.conversation_store.replace_messages("conv-raw", messages)
-        loaded = self.conversation_store.load_messages("conv-raw")
-
-        self.assertEqual(loaded[0]["tool_calls"][0]["id"], "call-1")
-        self.assertEqual(loaded[1]["type"], "function_call_output")
-        self.assertEqual(loaded[1]["call_id"], "call-1")
-
-    def test_basic_agent_save_and_restore(self):
-        registry = build_registry()
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            system_prompt="test prompt",
-            enable_tool=True,
-            tool_registry=registry,
-            config=Config(max_history_length=9, temperature=0.1),
-            verbose_thinking=True,
-            history_via_context_manager=True,
-        )
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-        agent.trace_history = [
-            {
-                "id": "evt_000001",
-                "session_id": "trace_test",
-                "turn_id": "turn_0001",
-                "seq": 1,
-                "type": "reasoning",
-                "timestamp": datetime.now().isoformat(),
-                "role": "assistant",
-                "content": "thought 1",
-                "metadata": {},
-            },
-            {
-                "id": "evt_000002",
-                "session_id": "trace_test",
-                "turn_id": "turn_0002",
-                "seq": 2,
-                "type": "reasoning",
-                "timestamp": datetime.now().isoformat(),
-                "role": "assistant",
-                "content": "thought 2",
-                "metadata": {},
-            },
-        ]
-        agent.save_session("basic-1", store=self.session_store, metadata={"suite": "unit"})
-
-        restored = BasicAgent.load_session(
-            "basic-1",
-            llm=self.llm,
-            store=self.session_store,
-            tool_registry=registry,
-        )
-
-        self.assertIsInstance(restored, BasicAgent)
-        self.assertEqual(restored.name, "assistant")
-        self.assertEqual(restored.system_prompt, "test prompt")
-        self.assertTrue(restored.enable_tool)
-        self.assertEqual(restored.get_history_length(), 2)
-        self.assertEqual(restored.get_history()[0]["role"], "user")
-        self.assertEqual(restored.get_history()[0]["content"], "hello")
-        self.assertEqual(restored.get_canonical_history()[0].text_content(), "hello")
-        self.assertEqual(
-            [event["content"] for event in restored.get_trace_history() if event["type"] == "reasoning"],
-            ["thought 1", "thought 2"],
-        )
-        self.assertEqual(
-            [event["type"] for event in restored.get_trace_history()],
-            ["reasoning", "reasoning"],
-        )
-
-    def test_replay_history_rebuilds_after_provider_change(self):
-        llm = ReplayAwareDummyLLM()
-        agent = BasicAgent(name="assistant", llm=llm)
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-
-        self.assertEqual(agent.get_history()[0]["role"], "user")
-        self.assertEqual(agent.get_history()[0]["content"], "hello")
-        self.assertEqual(agent.replay_history_provider_name, "mock")
-
-        native_llm = ReplayAwareDummyLLM(provider_name="google_native", model="gemini-2.5-pro")
-        agent.change_model(llm=native_llm)
-        rebuilt = agent._build_start_messages("next turn")
-
-        self.assertEqual(agent.replay_history_provider_name, "google_native")
-        self.assertEqual(agent.get_canonical_history()[0].role, "user")
-        self.assertEqual(agent.get_canonical_history()[0].text_content(), "hello")
-        self.assertEqual(agent.get_history()[0]["parts"][0]["text"], "hello")
-        self.assertEqual(agent.get_history()[0]["role"], "user")
-        self.assertIsInstance(rebuilt, ReplayRequestInput)
-        self.assertTrue(rebuilt.system_prompt)
-        self.assertEqual(rebuilt.replay_history[0]["role"], "user")
-        self.assertEqual(rebuilt.replay_history[-1]["parts"][0]["text"], "next turn")
-
-    def test_change_model_rebuilds_request_ready_replay_history(self):
-        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="openai"))
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-
-        self.assertEqual(agent.get_history()[0], {"role": "user", "content": "hello"})
-        self.assertEqual(agent.get_history()[1]["role"], "assistant")
-
-        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="anthropic_native", model="claude-4.5-sonnet"))
-
-        replay_history = agent.get_history()
-        self.assertEqual(replay_history[0]["role"], "user")
-        self.assertEqual(replay_history[0]["content"], "hello")
-        self.assertEqual(replay_history[1]["role"], "assistant")
-        self.assertEqual(replay_history[1]["content"], "world")
-        self.assertEqual(agent.replay_history_provider_name, "anthropic_native")
-
-    def test_change_model_preserves_cross_provider_thinking_but_filters_signatures(self):
-        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="anthropic_native"))
-        agent.add_message(
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "private plan", "signature": "anthropic-sig"},
-                    {"type": "text", "text": "visible answer"},
-                ],
-            }
-        )
-
-        self.assertIn("anthropic-sig", repr(agent.get_history()))
-        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="google_native", model="gemini-3-flash"))
-
-        google_replay = agent.get_history()
-        google_replay_text = repr(google_replay)
-        self.assertEqual(
-            google_replay,
+def test_session_restores_directory_skills_and_conditional_activation(tmp_path):
+    skill_directory = tmp_path / "skills" / "python-review"
+    skill_directory.mkdir(parents=True)
+    (skill_directory / "SKILL.md").write_text(
+        "\n".join(
             [
-                {
-                    "role": "model",
-                    "parts": [
-                        {"text": "private plan", "thought": True},
-                        {"text": "visible answer"},
-                    ],
-                }
-            ],
-        )
-        self.assertNotIn("anthropic-sig", google_replay_text)
-        self.assertNotIn("thought_signature", google_replay_text)
-        self.assertIn("private plan", google_replay_text)
-        self.assertEqual(agent.get_canonical_history()[0].content[0].signature, "anthropic-sig")
-
-        agent.change_model(llm=ReplayAwareDummyLLM(provider_name="claude_native", model="claude-4.5-sonnet"))
-        claude_replay = agent.get_history()
-        self.assertEqual(claude_replay[0]["content"][0]["signature"], "anthropic-sig")
-        self.assertEqual(agent.replay_history_provider_name, "claude_native")
-
-    def test_direct_provider_mutation_requires_change_model(self):
-        agent = BasicAgent(name="assistant", llm=ReplayAwareDummyLLM(provider_name="openai"))
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-
-        agent.llm.provider_name = "google_native"
-
-        with self.assertRaises(RuntimeError):
-            agent._build_start_messages("next turn")
-
-    def test_basic_agent_restore_without_tool_registry_attempts_builtin_tool_recovery(self):
-        registry = build_registry()
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-        )
-        agent.add_message(UserMessage("hello"))
-        agent.save_session("basic-plain", store=self.session_store)
-
-        restored = BasicAgent.load_session(
-            "basic-plain",
-            llm=self.llm,
-            store=self.session_store,
-        )
-
-        self.assertTrue(restored.enable_tool)
-        self.assertIsNotNone(restored.tool_registry)
-        report = restored.get_last_restore_report()
-        self.assertIsNotNone(report)
-        issues = list((report or {}).get("issues") or [])
-        self.assertTrue(any(item.get("code") == "missing_tools" for item in issues))
-
-    def test_basic_agent_context_usage_persists_across_session(self):
-        manager = ContextManager(max_tokens=80, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            system_prompt="test prompt",
-            context_manager=manager,
-            history_via_context_manager=True,
-        )
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-
-        usage = agent.get_context_usage()
-
-        self.assertEqual(usage["budget"]["maxTokens"], 80)
-        self.assertGreater(usage["requestEstimate"]["estimatedRequestTokens"], 0)
-        self.assertIsNotNone(usage["budget"]["remainingTokens"])
-        self.assertFalse(hasattr(manager, "last_usage"))
-
-        agent.save_session("basic-context-usage", store=self.session_store)
-
-        restored_manager = ContextManager(max_tokens=80, auto_history=True)
-        restored = BasicAgent.load_session(
-            "basic-context-usage",
-            llm=self.llm,
-            store=self.session_store,
-            context_manager=restored_manager,
-        )
-
-        restored_usage = restored.get_context_usage()
-        self.assertEqual(restored_usage["budget"]["maxTokens"], usage["budget"]["maxTokens"])
-        self.assertEqual(restored_usage["tokenBreakdown"]["historyTokens"], usage["tokenBreakdown"]["historyTokens"])
-        self.assertEqual(
-            restored_usage["requestEstimate"]["estimatedRequestTokens"],
-            usage["requestEstimate"]["estimatedRequestTokens"],
-        )
-        self.assertEqual(restored_usage["history"]["canonicalMessages"], usage["history"]["canonicalMessages"])
-        self.assertEqual(restored_usage["history"]["replayMessages"], usage["history"]["replayMessages"])
-        self.assertFalse(hasattr(restored_manager, "last_usage"))
-
-    def test_get_context_usage_does_not_mutate_context_manager(self):
-        manager = ContextManager(max_tokens=128, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            system_prompt="test prompt",
-            context_manager=manager,
-        )
-        agent.add_message(UserMessage("hello"))
-
-        usage = agent.get_context_usage()
-
-        self.assertEqual(usage["version"], 2)
-        self.assertIn("requestEstimate", usage)
-        self.assertFalse(hasattr(manager, "last_usage"))
-
-    def test_get_context_usage_exposes_split_token_metrics(self):
-        manager = ContextManager(max_tokens=128, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            system_prompt="test prompt",
-            context_manager=manager,
-        )
-        agent.add_message(UserMessage("hello"))
-        agent.add_message(AssistantMessage("world"))
-
-        usage = agent.get_context_usage()
-
-        self.assertIn("historyTokens", usage["tokenBreakdown"])
-        self.assertIn("systemTokens", usage["tokenBreakdown"])
-        self.assertIn("toolTokens", usage["tokenBreakdown"])
-        self.assertIn("reasoningTokens", usage["tokenBreakdown"])
-        self.assertIn("estimatedRequestTokens", usage["requestEstimate"])
-        self.assertEqual(
-            usage["requestEstimate"]["estimatedRequestTokens"],
-            usage["tokenBreakdown"]["historyTokens"]
-            + usage["tokenBreakdown"]["systemTokens"]
-            + usage["tokenBreakdown"]["toolTokens"]
-            + usage["tokenBreakdown"]["reasoningTokens"],
-        )
-
-    def test_get_context_usage_keeps_request_and_compaction_estimates_separate(self):
-        manager = ContextManager(max_tokens=100, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=ReplayAwareDummyLLM(provider_name="openai"),
-            system_prompt="test prompt",
-            context_manager=manager,
-        )
-        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
-
-        agent._append_query_history("old question")
-        agent._capture_response_usage_for_history_anchor(
-            {
-                "inputTokens": 80,
-                "outputTokens": 15,
-                "totalTokens": 95,
-                "usageSource": "provider",
-            }
-        )
-        agent._append_assistant_message_history(content="old answer")
-        agent._append_query_history("x" * 20)
-
-        usage = agent.get_context_usage()
-
-        self.assertEqual(usage["requestEstimate"]["source"], "provider_usage_plus_delta_estimate")
-        self.assertEqual(
-            usage["requestEstimate"]["estimatedRequestTokens"],
-            usage["compaction"]["estimatedRequestTokens"],
-        )
-        self.assertEqual(usage["requestLayers"]["tokenBreakdownSource"], "local_request_estimate")
-        self.assertEqual(usage["compaction"]["tokenSource"], "provider_usage_plus_delta_estimate")
-        self.assertIsInstance(usage["cache"]["requestPrefixSignature"], dict)
-        self.assertIn("persistentReplayTokens", usage["requestLayers"])
-        self.assertIn("effectiveReplayTokens", usage["requestLayers"])
-
-    def test_history_compaction_estimate_uses_provider_usage_anchor_plus_delta(self):
-        manager = ContextManager(max_tokens=100, auto_history=True)
-        manager.set_history_compactor(
-            RuleBasedHistoryCompactor(
-                token_counter=TokenCounter(chars_per_token=1.0),
-                recent_turns=1,
-            )
-        )
-        agent = BasicAgent(
-            name="assistant",
-            llm=ReplayAwareDummyLLM(provider_name="openai"),
-            context_manager=manager,
-        )
-        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
-
-        agent._append_query_history("old question")
-        agent._capture_response_usage_for_history_anchor(
-            {
-                "inputTokens": 80,
-                "outputTokens": 15,
-                "totalTokens": 95,
-                "usageSource": "provider",
-            }
-        )
-        agent._append_assistant_message_history(content="old answer")
-        agent._append_query_history("x" * 20)
-
-        state = agent._estimate_history_compaction_token_state()
-        should_compact, tokens_before, metadata = agent._precheck_history_compaction(
-            max_tokens=100,
-            force=False,
-        )
-
-        self.assertEqual(state["source"], "provider_usage_plus_delta_estimate")
-        self.assertGreater(state["tokens"], 100)
-        self.assertTrue(should_compact)
-        self.assertEqual(tokens_before, state["tokens"])
-        self.assertEqual(
-            metadata["token_estimate"]["source"],
-            "provider_usage_plus_delta_estimate",
-        )
-        self.assertTrue(agent.compact_persistent_history_if_needed())
-        compaction = agent.get_context_usage()["compaction"]["last"]
-        self.assertEqual(compaction["tokens_before"], state["tokens"])
-        self.assertEqual(
-            compaction["metadata"]["token_estimate"]["source"],
-            "provider_usage_plus_delta_estimate",
-        )
-
-    def test_pending_tool_step_usage_anchor_counts_tool_results_as_delta(self):
-        manager = ContextManager(max_tokens=100, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=ReplayAwareDummyLLM(provider_name="openai"),
-            context_manager=manager,
-        )
-        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
-        agent._append_query_history("use tool")
-        agent._capture_response_usage_for_history_anchor(
-            {
-                "inputTokens": 50,
-                "outputTokens": 10,
-                "totalTokens": 60,
-                "usageSource": "provider",
-            }
-        )
-        agent._set_pending_step_state(
-            assistant_canonical=agent.llm.assistant_message_to_canonical(
-                content=None,
-                tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
-            ),
-            assistant_replay=agent.llm.assistant_message_to_replay(
-                content=None,
-                tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
-            ),
-            tool_calls=[{"id": "call_1", "name": "demo", "arguments": "{}"}],
-            round_number=1,
-        )
-        agent._append_pending_tool_result(
-            tool_canonical=agent.llm.tool_result_to_canonical("tool result text", "call_1", "demo"),
-            tool_replay=agent.llm.tool_result_to_replay("tool result text", "call_1", "demo"),
-        )
-        agent._commit_pending_step_state()
-
-        state = agent._estimate_history_compaction_token_state()
-
-        self.assertEqual(state["source"], "provider_usage_plus_delta_estimate")
-        self.assertEqual(state["metadata"]["provider_usage_tokens"], 60)
-        self.assertEqual(state["metadata"]["delta_replay_messages"], 1)
-        self.assertGreater(state["metadata"]["delta_tokens"], 0)
-
-    def test_provider_usage_context_tokens_do_not_double_count_cache_fields(self):
-        manager = ContextManager(max_tokens=300000, auto_history=True)
-        agent = BasicAgent(
-            name="assistant",
-            llm=ReplayAwareDummyLLM(provider_name="claude_native"),
-            context_manager=manager,
-        )
-        agent._context_usage_counter = TokenCounter(chars_per_token=1.0)
-        agent._append_query_history("cached prompt")
-        agent._capture_response_usage_for_history_anchor(
-            {
-                "inputTokens": 99578,
-                "outputTokens": 2120,
-                "totalTokens": 101405,
-                "cacheReadTokens": 98200,
-                "cacheCreationTokens": 0,
-                "usageSource": "provider",
-            }
-        )
-        agent._append_assistant_message_history(content="answer")
-
-        usage = agent.get_context_usage()
-
-        self.assertEqual(usage["requestEstimate"]["source"], "provider_usage_plus_delta_estimate")
-        self.assertLess(usage["requestEstimate"]["estimatedRequestTokens"], 110000)
-        self.assertEqual(
-            usage["requestEstimate"]["metadata"]["provider_usage_tokens"],
-            101405,
-        )
-
-    def test_reasoning_history_persistence_can_be_disabled(self):
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            config=Config(persist_reasoning_history=False),
-        )
-
-        agent._append_assistant_message_history(content="world", thinking="hidden chain")
-
-        last_canonical = agent.history[-1]
-        last_replay = agent.raw_history[-1]
-        self.assertTrue(all(block.type != "reasoning" for block in last_canonical.content))
-        self.assertEqual(last_replay["role"], "assistant")
-        self.assertNotIn("reasoning_content", last_replay)
-
-    def test_reasoning_history_persistence_defaults_to_enabled(self):
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-        )
-
-        agent._append_assistant_message_history(content="world", thinking="visible chain")
-
-        last_canonical = agent.history[-1]
-        last_replay = agent.raw_history[-1]
-        self.assertTrue(any(block.type == "reasoning" for block in last_canonical.content))
-        self.assertEqual(last_replay.get("reasoning_content"), "visible chain")
-
-    def test_basic_agent_restores_mode_permissions_and_current_task(self):
-        registry = build_registry()
-        task_service = TaskService(InMemoryTaskStore())
-        task = task_service.create_task(title="Implement permissions", owner="agent")
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            task_service=task_service,
-        )
-        agent.enter_plan_mode(allowed_actions=["read", "search"])
-        agent.add_permission_rule(
-            PermissionRule(
-                tool_name="echo",
-                behavior=PermissionBehavior.ALLOW,
-                source="session",
-                description="允许 echo 工具直接执行",
-            )
-        )
-        agent.set_current_task(task.task_id)
-        agent.add_message(UserMessage("resume later"))
-        agent.save_session("basic-runtime-state", store=self.session_store)
-        restore_registry = build_registry()
-
-        restored = BasicAgent.load_session(
-            "basic-runtime-state",
-            llm=self.llm,
-            store=self.session_store,
-            tool_registry=restore_registry,
-            task_service=task_service,
-        )
-
-        self.assertEqual(restored.get_execution_mode().value, "plan")
-        self.assertEqual(restored.permission_context.mode, PermissionMode.PLAN)
-        self.assertEqual(restored.permission_context.rules[0].tool_name, "echo")
-        self.assertEqual(restored.mode_controller.state.allowed_actions, ["read", "search"])
-        self.assertEqual(restored.current_task_id, task.task_id)
-        self.assertTrue(restored.tool_registry.has_tool("TaskCreate"))
-        self.assertTrue(restored.tool_registry.has_tool("TaskList"))
-
-    def test_load_session_auto_restores_framework_dependencies(self):
-        registry = ToolRegistry()
-        register_file_read_tool(registry, workspace_root=self.tempdir.name)
-        config = Config(
-            workspace_root=self.tempdir.name,
-            allowed_roots=[self.tempdir.name],
-            command_timeout_ms=4321,
-        )
-        context_manager = ContextManager(max_tokens=80)
-        task_db_path = os.path.join(self.tempdir.name, "tasks.sqlite3")
-        task_service = TaskService(SQLiteTaskStore(task_db_path))
-        skill_registry = SkillRegistry.instance()
-        skill_registry.register_class(RestorableSkill, name="restorable_skill")
-
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            config=config,
-            context_manager=context_manager,
-            task_service=task_service,
-        )
-        agent.with_skill(RestorableSkill())
-        agent.save_session("auto-restore-deps", store=self.session_store)
-
-        restored = BasicAgent.load_session(
-            "auto-restore-deps",
-            llm=self.llm,
-            store=self.session_store,
-        )
-
-        self.assertTrue(restored.enable_tool)
-        self.assertIsNotNone(restored.tool_registry)
-        self.assertTrue(restored.tool_registry.has_tool("FileRead"))
-        self.assertTrue(restored.tool_registry.has_tool("TaskCreate"))
-        self.assertTrue(restored.tool_registry.has_tool("skill_echo"))
-        self.assertIsNotNone(restored.context_manager)
-        self.assertEqual(restored.context_manager.budget.max_tokens, 80)
-        self.assertIsNotNone(restored.task_service)
-        self.assertEqual(restored.task_service.store.db_path, task_db_path)
-        self.assertTrue(restored.skill_manager.has_skill("restorable_skill"))
-        self.assertTrue(restored.skill_manager.is_active("restorable_skill"))
-
-    def test_basic_agent_session_restore_rebuilds_collaboration_runtime(self):
-        registry = ToolRegistry()
-        task_service = TaskService(InMemoryTaskStore())
-        task = task_service.create_task(title="Restore collaboration runtime", owner="manager")
-        agent = BasicAgent(
-            name="manager",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            task_service=task_service,
-            config=Config(
-                workspace_root=self.tempdir.name,
-                allowed_roots=[self.tempdir.name],
-            ),
-        )
-
-        agent_tool = register_agent_tool(
-            registry,
-            parent_agent=agent,
-            agent_factory=lambda request: RuntimeSubagent(),
-            workspace_root=self.tempdir.name,
-            allowed_roots=(self.tempdir.name,),
-            storage_dir=os.path.join(self.tempdir.name, ".agents"),
-        )
-        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-        agent_tool.agent_runtime.bind_team_manager(team_manager)
-        register_send_message_tool(
-            registry,
-            agent_runtime=agent_tool.agent_runtime,
-            parent_agent=agent,
-        )
-        register_mailbox_tools(
-            registry,
-            agent_runtime=agent_tool.agent_runtime,
-            parent_agent=agent,
-        )
-        register_agent_runtime_tools(
-            registry,
-            agent_runtime=agent_tool.agent_runtime,
-            parent_agent=agent,
-        )
-        register_team_create_tool(registry, team_manager=team_manager)
-        register_team_delete_tool(registry, team_manager=team_manager)
-        agent.bind_runtime(
-            agent_runtime=agent_tool.agent_runtime,
-            team_manager=team_manager,
-        )
-        agent.set_current_task(task.task_id)
-
-        team = team_manager.create_team(name="session-team")
-        delegation = registry.execute_tool_result(
-            "Agent",
-            {
-                "description": "恢复 runtime",
-                "prompt": "只读整理当前协作状态",
-                "team_name": "session-team",
-            },
-        )
-        agent_id = delegation.structured_data["agentId"]
-        delegated_task = task_service.list_tasks(parent_task_id=task.task_id)[0]
-        message_result = registry.execute_tool_result(
-            "SendMessage",
-            {
-                "recipient_type": "team",
-                "recipient_id": team.team_id,
-                "content": "恢复后 mailbox 仍应保留这条消息",
-            },
-        )
-        self.assertEqual(message_result.status, "success")
-
-        agent.save_session("basic-collaboration-runtime", store=self.session_store)
-        restored = BasicAgent.load_session(
-            "basic-collaboration-runtime",
-            llm=self.llm,
-            store=self.session_store,
-            task_service=task_service,
-        )
-
-        self.assertIsNotNone(restored.agent_runtime)
-        self.assertIsNotNone(restored.team_manager)
-        self.assertEqual(restored.current_task_id, task.task_id)
-        self.assertTrue(restored.tool_registry.has_tool("Agent"))
-        self.assertTrue(restored.tool_registry.has_tool("AgentGet"))
-        self.assertTrue(restored.tool_registry.has_tool("AgentList"))
-        self.assertTrue(restored.tool_registry.has_tool("AgentWait"))
-        self.assertTrue(restored.tool_registry.has_tool("AgentStop"))
-        self.assertTrue(restored.tool_registry.has_tool("SendMessage"))
-        self.assertTrue(restored.tool_registry.has_tool("MailboxRead"))
-        self.assertTrue(restored.tool_registry.has_tool("MailboxAck"))
-        self.assertTrue(restored.tool_registry.has_tool("TeamCreate"))
-        self.assertTrue(restored.tool_registry.has_tool("TeamDelete"))
-
-        restored_team = restored.team_manager.get_team("session-team")
-        restored_handle = restored.agent_runtime.get_handle(agent_id)
-        self.assertEqual(restored_handle.team_id, restored_team.team_id)
-        self.assertEqual(restored_handle.execution_context.current_task_id, delegated_task.task_id)
-        self.assertEqual(restored_handle.mailbox[0].content, "恢复后 mailbox 仍应保留这条消息")
-        report = restored.get_last_restore_report()
-        self.assertIsNotNone(report)
-        self.assertEqual(report["status"], "restored")
-        self.assertEqual(report["components"]["agent_runtime"]["status"], "restored")
-        self.assertEqual(report["components"]["team_runtime"]["status"], "restored")
-
-    def test_basic_agent_session_restore_reports_degraded_background_runtime(self):
-        registry = ToolRegistry()
-        task_service = TaskService(InMemoryTaskStore())
-        agent = BasicAgent(
-            name="manager",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            task_service=task_service,
-            config=Config(
-                workspace_root=self.tempdir.name,
-                allowed_roots=[self.tempdir.name],
-            ),
-        )
-        agent_tool = register_agent_tool(
-            registry,
-            parent_agent=agent,
-            agent_factory=lambda request: SlowRuntimeSubagent(),
-            workspace_root=self.tempdir.name,
-            allowed_roots=(self.tempdir.name,),
-            storage_dir=os.path.join(self.tempdir.name, ".agents-background"),
-        )
-        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-        agent_tool.agent_runtime.bind_team_manager(team_manager)
-        register_agent_runtime_tools(
-            registry,
-            agent_runtime=agent_tool.agent_runtime,
-            parent_agent=agent,
-        )
-        register_send_message_tool(
-            registry,
-            agent_runtime=agent_tool.agent_runtime,
-            parent_agent=agent,
-        )
-        agent.bind_runtime(agent_runtime=agent_tool.agent_runtime, team_manager=team_manager)
-
-        registry.execute_tool_result(
-            "Agent",
-            {
-                "description": "后台恢复报告",
-                "prompt": "只读整理协作状态",
-                "run_in_background": True,
-            },
-        )
-
-        agent.save_session("background-runtime-degraded", store=self.session_store)
-        restored = BasicAgent.load_session(
-            "background-runtime-degraded",
-            llm=self.llm,
-            store=self.session_store,
-            task_service=task_service,
-        )
-
-        report = restored.get_last_restore_report()
-        self.assertIsNotNone(report)
-        self.assertEqual(report["status"], "degraded")
-        self.assertEqual(report["components"]["agent_runtime"]["status"], "degraded")
-        self.assertTrue(report["components"]["agent_runtime"]["degradedItems"])
-
-    def test_basic_agent_session_restore_reports_worktree_runtime(self):
-        repo = _init_git_repo(self.tempdir.name)
-        storage = os.path.join(self.tempdir.name, "worktrees")
-        manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
-
-        registry = ToolRegistry()
-        register_enter_worktree_tool(registry, worktree_manager=manager)
-        register_exit_worktree_tool(registry, worktree_manager=manager)
-        agent = BasicAgent(
-            name="worktree-agent",
-            llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
-            config=Config(
-                workspace_root=repo,
-                allowed_roots=[repo],
-                enable_worktree=True,
-            ),
-        )
-
-        enter_result = registry.execute_tool_result("EnterWorktree", {"name": "restore-session"})
-        worktree_path = enter_result.structured_data["worktreePath"]
-        self.assertTrue(os.path.isdir(worktree_path))
-
-        agent.save_session("worktree-runtime-session", store=self.session_store)
-        restored = BasicAgent.load_session(
-            "worktree-runtime-session",
-            llm=self.llm,
-            store=self.session_store,
-        )
-
-        report = restored.get_last_restore_report()
-        self.assertIsNotNone(report)
-        self.assertEqual(report["components"]["worktree_runtime"]["status"], "restored")
-        self.assertIn(os.path.abspath(worktree_path), report["components"]["worktree_runtime"]["restoredItems"])
-
-    def test_basic_agent_close_returns_cleanup_report(self):
-        repo = _init_git_repo(self.tempdir.name)
-        storage = os.path.join(self.tempdir.name, "worktrees")
-        manager = WorktreeManager(repo, storage_dir=storage, original_cwd=repo)
-        llm = ClosableDummyLLM()
-
-        registry = ToolRegistry()
-        register_enter_worktree_tool(registry, worktree_manager=manager)
-        register_exit_worktree_tool(registry, worktree_manager=manager)
-        agent = BasicAgent(
-            name="close-agent",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            config=Config(
-                workspace_root=repo,
-                allowed_roots=[repo],
-                enable_worktree=True,
-            ),
-        )
-
-        agent_tool = register_agent_tool(
-            registry,
-            parent_agent=agent,
-            workspace_root=repo,
-            allowed_roots=(repo,),
-            storage_dir=os.path.join(self.tempdir.name, ".agents-close"),
-        )
-        agent.bind_runtime(agent_runtime=agent_tool.agent_runtime)
-
-        registry.execute_tool_result("EnterWorktree", {"name": "close-check"})
-
-        report = agent.close()
-
-        self.assertEqual(report["status"], "closed")
-        self.assertEqual(report["components"]["agent_runtime"]["status"], "closed")
-        self.assertEqual(report["components"]["worktree_runtime"]["status"], "closed")
-        self.assertEqual(report["components"]["worktree_runtime"]["metadata"]["action"], "keep")
-        self.assertFalse(manager.get_active_session())
-        self.assertTrue(llm.closed)
-        self.assertEqual(report["components"]["llm"]["status"], "closed")
-        self.assertEqual(agent.get_last_close_report()["status"], "closed")
-
-    def test_basic_agent_close_reports_degraded_background_runtime(self):
-        llm = ClosableDummyLLM()
-        registry = ToolRegistry()
-        agent = BasicAgent(
-            name="close-background-agent",
-            llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
-            config=Config(
-                workspace_root=self.tempdir.name,
-                allowed_roots=[self.tempdir.name],
-            ),
-        )
-        agent_tool = register_agent_tool(
-            registry,
-            parent_agent=agent,
-            agent_factory=lambda request: SlowRuntimeSubagent(),
-            workspace_root=self.tempdir.name,
-            allowed_roots=(self.tempdir.name,),
-            storage_dir=os.path.join(self.tempdir.name, ".agents-close-background"),
-        )
-        team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-        agent_tool.agent_runtime.bind_team_manager(team_manager)
-        agent.bind_runtime(
-            agent_runtime=agent_tool.agent_runtime,
-            team_manager=team_manager,
-        )
-
-        launch_result = registry.execute_tool_result(
-            "Agent",
-            {
-                "description": "后台 close 报告",
-                "prompt": "只读整理协作状态",
-                "run_in_background": True,
-            },
-        )
-
-        report = agent.close(close_worktree=False)
-
-        self.assertEqual(report["status"], "degraded")
-        self.assertEqual(report["components"]["agent_runtime"]["status"], "degraded")
-        self.assertIn(
-            launch_result.structured_data["agentId"],
-            report["components"]["agent_runtime"]["degradedItems"],
-        )
-        self.assertTrue(llm.closed)
-        self.assertEqual(agent.get_last_close_report()["status"], "degraded")
-
-    def test_conversational_agent_restore_keeps_auto_save_flag(self):
-        memory_manage = FakeMemoryManage()
-        agent = ConversationalAgent(
-            name="chatbot",
-            llm=self.llm,
-            memory_manage=memory_manage,
-            auto_save_to_working=False,
-        )
-        agent.add_message(UserMessage("你好"))
-        agent.add_message(AssistantMessage("你好，我在。"))
-        agent.save_session("conv-agent", store=self.session_store)
-
-        restored = ConversationalAgent.load_session(
-            "conv-agent",
-            llm=self.llm,
-            store=self.session_store,
-            memory_manage=memory_manage,
-        )
-
-        self.assertFalse(restored.auto_save_to_working)
-        self.assertIs(restored.memory_manage, memory_manage)
-        self.assertEqual(restored.get_history_length(), 2)
-
-    def test_react_agent_restore_keeps_verbose_and_scratchpad(self):
-        registry = build_registry()
-        agent = ReactAgent(
-            name="reactor",
-            llm=self.llm,
-            tool_registry=registry,
-            enable_tool=True,
-            verbose=False,
-        )
-        agent.scratchpad = ["Thought: inspect", "Observation: done"]
-        agent.add_message(UserMessage("task"))
-        agent.save_session("react-1", store=self.session_store)
-
-        restored = ReactAgent.load_session(
-            "react-1",
-            llm=self.llm,
-            store=self.session_store,
-            tool_registry=registry,
-        )
-
-        self.assertFalse(restored.verbose)
-        self.assertEqual(restored.scratchpad, ["Thought: inspect", "Observation: done"])
-
-    def test_planning_agent_restore_keeps_planning_state(self):
-        registry = build_registry()
-        agent = PlanningAgent(
-            name="planner",
-            llm=self.llm,
-            tool_registry=registry,
-            enable_tool=True,
-            max_steps=3,
-            allow_replan=False,
-        )
-        agent.current_plan = ["step1", "step2"]
-        agent.execution_log = [{"step": 1, "result": "ok"}]
-        agent.add_message(UserMessage("plan this"))
-        agent.save_session("plan-1", store=self.session_store)
-
-        restored = PlanningAgent.load_session(
-            "plan-1",
-            llm=self.llm,
-            store=self.session_store,
-            tool_registry=registry,
-        )
-
-        self.assertEqual(restored.max_steps, 3)
-        self.assertFalse(restored.allow_replan)
-        self.assertEqual(restored.current_plan, ["step1", "step2"])
-        self.assertEqual(restored.execution_log, [{"step": 1, "result": "ok"}])
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+                "---",
+                "name: python-review",
+                "description: Review Python modules",
+                'paths: "src/**/*.py"',
+                "---",
+                "Review the Python file selected by the user.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = SessionStore(str(tmp_path / "skills.sqlite3"))
+    agent = BasicAgent("skill-session", SessionLLM()).with_skill(tmp_path / "skills")
+    agent.execution_context.workspace_root = str(workspace)
+    assert agent.skill_manager.activate_for_paths(["src/package/module.py"]) == [
+        "python-review"
+    ]
+    agent.save_session("skill-session", store=store)
+
+    snapshot = store.get_session("skill-session")["snapshot"]
+    skill_state = snapshot["modules"]["skills"]["state"]
+    assert skill_state["activatedPathSkills"] == ["python-review"]
+    assert [item["name"] for item in skill_state["skills"]] == ["python-review"]
+
+    restored = BasicAgent.load_session(
+        "skill-session",
+        llm=SessionLLM(),
+        store=store,
+    )
+
+    assert restored.skill_manager is not None
+    assert restored.skill_manager.has_skill("python-review")
+    assert "`python-review`" in restored.get_system_prompt_template().render_system_reminders()
+    assert restored.metamessage_manager.list_pending() == []
+    assert restored.get_last_restore_report()["components"]["skills"]["status"] == "restored"
+
+
+def test_restore_reports_missing_custom_and_optional_modules(tmp_path):
+    from task import InMemoryTaskStore, TaskService
+
+    store = SessionStore(str(tmp_path / "missing.sqlite3"))
+    agent = (
+        BasicAgent("custom", SessionLLM())
+        .with_prompt(CustomPrompt())
+        .with_tool(_registry())
+        .with_task_service(TaskService(InMemoryTaskStore()))
+    )
+    agent.save_session("missing", store=store)
+
+    restored = BasicAgent.load_session(
+        "missing",
+        llm=SessionLLM(),
+        store=store,
+    )
+    report = restored.get_last_restore_report()
+    codes = {item["code"] for item in report["issues"]}
+
+    assert report["status"] == "degraded"
+    assert "prompt_implementation_missing" in codes
+    assert "tasks_implementation_missing" in codes
+    assert "missing_tools" in codes
+
+
+def test_change_model_rebuilds_provider_replay_history():
+    agent = BasicAgent("history", SessionLLM("openai"))
+    agent.add_user_message("hello")
+    agent.add_assistant_message("world")
+
+    agent.change_model(SessionLLM("anthropic_native"))
+
+    assert agent.history_store.provider_name == "anthropic_native"
+    assert [item.role for item in agent.get_canonical_history()] == ["user", "assistant"]
+    assert [item["role"] for item in agent.replay_history] == ["user", "assistant"]
+
+
+def test_close_is_idempotent_and_closes_llm():
+    llm = SessionLLM()
+    agent = BasicAgent("closable", llm).with_observability(
+        store=InMemoryObservabilityStore()
+    )
+
+    first = agent.close()
+    second = agent.close()
+
+    assert first["status"] == "closed"
+    assert first["components"]["observability"]["status"] == "closed"
+    assert first["components"]["llm"]["status"] == "closed"
+    assert second == first
+    assert llm.provider.closed

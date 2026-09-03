@@ -54,11 +54,8 @@ async def main():
     agent = BasicAgent(
         name="Concurrent Helper",
         llm=llm,
-        tool_registry=tool_registry,
         system_prompt="你是一个全能助手，如果有多个需求，请同时并发调用相应的工具获取信息。然后在获得信息后汇总成一句话回答。",
-        verbose_thinking=False
-    )
-    agent.set_enable_tool(True)
+    ).with_tool(tool_registry)
     
     query = "请同时告诉我北京的当前天气，以及苹果公司(AAPL)的股价情况。"
     

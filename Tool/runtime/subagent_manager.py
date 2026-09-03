@@ -224,7 +224,11 @@ class SubagentManager:
             trace_history = list(getattr(agent, "get_trace_history")())
         except Exception:
             trace_history = list(getattr(agent, "trace_history", []) or [])
-        return sum(1 for event in trace_history if isinstance(event, dict) and event.get("type") == "tool_call")
+        return sum(
+            1
+            for event in trace_history
+            if isinstance(event, dict) and event.get("type") == "tool.invoke.started"
+        )
 
     def _build_usage(self, agent: Any) -> tuple[dict[str, Any], int]:
         usage: dict[str, Any] = {
@@ -244,29 +248,48 @@ class SubagentManager:
         except Exception:
             context_usage = {}
 
+        input_tokens = 0
         if isinstance(context_usage, dict):
-            request_estimate = context_usage.get("requestEstimate")
-            if isinstance(request_estimate, dict):
-                input_tokens = int(request_estimate.get("estimatedRequestTokens") or 0)
-            else:
-                input_tokens = 0
-            usage["input_tokens"] = input_tokens
-        else:
-            input_tokens = 0
+            input_tokens = int(context_usage.get("estimatedRequestTokens") or 0)
 
         try:
             trace_history = list(getattr(agent, "get_trace_history")())
         except Exception:
             trace_history = list(getattr(agent, "trace_history", []) or [])
 
+        llm_usage_seen = False
         for event in trace_history:
-            if not isinstance(event, dict) or event.get("type") != "tool_call":
+            if not isinstance(event, dict):
                 continue
-            tool_name = str(event.get("tool_name") or "")
+            event_type = event.get("type")
+            data = dict(event.get("data") or {})
+            if event_type == "llm.invoke.completed":
+                metrics = dict(data.get("usage") or {})
+                llm_usage_seen = llm_usage_seen or any(
+                    metrics.get(key) is not None
+                    for key in ("inputTokens", "outputTokens", "totalTokens")
+                )
+                usage["input_tokens"] += int(metrics.get("inputTokens") or 0)
+                usage["output_tokens"] += int(metrics.get("outputTokens") or 0)
+                cache_creation = int(metrics.get("cacheCreationTokens") or 0)
+                cache_read = int(metrics.get("cacheReadTokens") or metrics.get("cachedInputTokens") or 0)
+                usage["cache_creation_input_tokens"] = int(usage["cache_creation_input_tokens"] or 0) + cache_creation
+                usage["cache_read_input_tokens"] = int(usage["cache_read_input_tokens"] or 0) + cache_read
+                continue
+            if event_type != "tool.invoke.started":
+                continue
+            tool_name = str(data.get("tool_name") or "")
             if tool_name == "WebSearch":
                 usage["server_tool_use"]["web_search_requests"] += 1
             elif tool_name == "WebFetch":
                 usage["server_tool_use"]["web_fetch_requests"] += 1
+
+        if not llm_usage_seen:
+            usage["input_tokens"] = input_tokens
+        if not usage["cache_creation_input_tokens"]:
+            usage["cache_creation_input_tokens"] = None
+        if not usage["cache_read_input_tokens"]:
+            usage["cache_read_input_tokens"] = None
 
         total_tokens = int(usage["input_tokens"] or 0) + int(usage["output_tokens"] or 0)
         return usage, total_tokens
@@ -294,12 +317,23 @@ class SubagentManager:
         snapshot.total_tokens = total_tokens
         snapshot.usage = dict(usage or {})
 
-    def _execute(self, snapshot: SubagentSnapshot, request: SubagentRequest) -> SubagentSnapshot:
+    def _execute(
+        self,
+        snapshot: SubagentSnapshot,
+        request: SubagentRequest,
+        *,
+        agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
+    ) -> SubagentSnapshot:
         try:
             with self._lock:
                 if snapshot.status == "async_launched":
                     snapshot.status = "running"
-            agent = self.agent_factory(request)
+            request.metadata = {
+                **dict(request.metadata or {}),
+                "agent_id": snapshot.agent_id,
+                "output_file": snapshot.output_file,
+            }
+            agent = (agent_factory or self.agent_factory)(request)
             with self._lock:
                 self._agents[snapshot.agent_id] = agent
             result = agent.invoke(request.prompt)
@@ -383,7 +417,13 @@ class SubagentManager:
             with self._lock:
                 self._agents.pop(snapshot.agent_id, None)
 
-    def run(self, request: SubagentRequest) -> SubagentSnapshot:
+    def run(
+        self,
+        request: SubagentRequest,
+        *,
+        agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
+        on_created: Optional[Callable[[SubagentSnapshot, SubagentRequest], None]] = None,
+    ) -> SubagentSnapshot:
         snapshot = self._create_snapshot(request, status="running")
         request.metadata = {
             **dict(request.metadata or {}),
@@ -394,9 +434,17 @@ class SubagentManager:
             snapshot.output_file,
             f"# {request.description or snapshot.agent_id}\n\n状态: running\n\n## Prompt\n{request.prompt}\n",
         )
-        return self._execute(snapshot, request)
+        if on_created is not None:
+            on_created(snapshot, request)
+        return self._execute(snapshot, request, agent_factory=agent_factory)
 
-    def launch_background(self, request: SubagentRequest) -> SubagentSnapshot:
+    def launch_background(
+        self,
+        request: SubagentRequest,
+        *,
+        agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
+        on_created: Optional[Callable[[SubagentSnapshot, SubagentRequest], None]] = None,
+    ) -> SubagentSnapshot:
         snapshot = self._create_snapshot(request, status="async_launched")
         request.metadata = {
             **dict(request.metadata or {}),
@@ -412,8 +460,14 @@ class SubagentManager:
                 f"{request.prompt}\n"
             ),
         )
-
-        future = self._executor.submit(self._execute, snapshot, request)
+        if on_created is not None:
+            on_created(snapshot, request)
+        future = self._executor.submit(
+            self._execute,
+            snapshot,
+            request,
+            agent_factory=agent_factory,
+        )
         with self._lock:
             self._futures[snapshot.agent_id] = future
         return snapshot

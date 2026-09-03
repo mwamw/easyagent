@@ -17,6 +17,8 @@
 - `example_phasej_provider_usage_extraction.py`
 - `example_phasee_hooks_guardrails_tool_protocol_v2.py`
 - `example_phasef_mcp_engineering.py`
+- `example_system_prompt_composer.py`
+- `example_modular_agent_framework.py`
 
 ## Product-Like Examples
 
@@ -28,6 +30,7 @@
 - `example_mcp_filesystem_updated.py`
 - `example_builtin_tools.py`
 - `example_skill_runtime.py`
+- `example_conditional_skill_runtime.py`
 
 ## Streaming / Provider / Misc
 
@@ -42,17 +45,18 @@
 
 如果你是第一次接触当前框架，建议按这个顺序看：
 
-1. `example_phaseg_sdk_release.py`
-2. `example_code_agent_product_bootstrap.py`
-3. `example_phase1a_permission_task_session.py`
-4. `example_phase23_mailbox_collaboration_complete.py`
-5. `example_phasec_restore_report_lifecycle.py`
-6. `example_research_and_memory.py`
-7. `example_phased_codeintel_lsp_v1.py`
-8. `example_phaseh_codeintel_workspace_cache.py`
-9. `example_phasei_observability_metrics.py`
-10. `example_phasej_provider_usage_extraction.py`
-11. `example_phasef_mcp_engineering.py`
+1. `example_modular_agent_framework.py`
+2. `example_system_prompt_composer.py`
+3. `example_phaseg_sdk_release.py`
+4. `example_phase1a_permission_task_session.py`
+5. `example_phase23_mailbox_collaboration_complete.py`
+6. `example_phasec_restore_report_lifecycle.py`
+7. `example_research_and_memory.py`
+8. `example_phased_codeintel_lsp_v1.py`
+9. `example_phaseh_codeintel_workspace_cache.py`
+10. `example_phasei_observability_metrics.py`
+11. `example_phasej_provider_usage_extraction.py`
+12. `example_phasef_mcp_engineering.py`
 
 ## 说明
 

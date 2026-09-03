@@ -33,9 +33,6 @@ class Config(BaseModel):
     interrupt_on_confirmation: bool = True
     persist_reasoning_history: bool = True
     cache_policy: PromptCachePolicy = Field(default_factory=PromptCachePolicy)
-    cache_dynamic_memory: bool = False
-    cache_dynamic_mailbox: bool = False
-    cache_turn_skills: bool = False
     tool_schema_mode: Literal["full", "deferred"] = "full"
     stable_tool_order: bool = True
     record_cache_breaks: bool = True
@@ -77,9 +74,6 @@ class Config(BaseModel):
                 scope=os.getenv("PROMPT_CACHE_SCOPE", "session") or None,
                 breakpoint_strategy=os.getenv("PROMPT_CACHE_BREAKPOINT_STRATEGY", "stable_prefix"),
             ),
-            cache_dynamic_memory=os.getenv("CACHE_DYNAMIC_MEMORY", "false").lower() == "true",
-            cache_dynamic_mailbox=os.getenv("CACHE_DYNAMIC_MAILBOX", "false").lower() == "true",
-            cache_turn_skills=os.getenv("CACHE_TURN_SKILLS", "false").lower() == "true",
             tool_schema_mode=os.getenv("TOOL_SCHEMA_MODE", "full"),
             stable_tool_order=os.getenv("STABLE_TOOL_ORDER", "true").lower() == "true",
             record_cache_breaks=os.getenv("RECORD_CACHE_BREAKS", "true").lower() == "true",

@@ -26,9 +26,7 @@ async def main():
     agent = BasicAgent(
         name="MathAnalyst",
         llm=llm,
-        tool_registry=registry,
-        verbose_thinking=True
-    )
+    ).with_tool(registry)
 
     # 复杂计算场景
     query = """
@@ -40,7 +38,8 @@ async def main():
     """
 
     print(f"🔢 开始数值计算...\n")
-    await agent.astream_invoke(query)
+    async for event in agent.astream(query):
+        print(event)
 
 if __name__ == "__main__":
     asyncio.run(main())

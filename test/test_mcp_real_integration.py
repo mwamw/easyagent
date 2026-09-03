@@ -121,9 +121,7 @@ class MCPRealIntegrationRunner:
 
     def test_mcp_tool_manager_python_stdio(self):
         print("\n========== 测试2: MCPToolManager 注册/调用 Python MCP（真实） ==========")
-        registry = ToolRegistry()
-        manager = register_mcp_tools(
-            registry=registry,
+        manager = mcptool(
             server_source=["python", self.python_server_script],
             tool_prefix="py_",
         )
@@ -135,8 +133,8 @@ class MCPRealIntegrationRunner:
             assert "py_echo" in registry.tools, "py_echo 未注册"
             assert "py_add" in registry.tools, "py_add 未注册"
 
-            out1 = registry.executeTool("py_echo", {"text": "tool manager"})
-            out2 = registry.executeTool("py_add", {"a": 10, "b": 5})
+            out1 = registry.execute_tool("py_echo", {"text": "tool manager"})
+            out2 = registry.execute_tool("py_add", {"a": 10, "b": 5})
 
             print("py_echo =>", out1)
             print("py_add =>", out2)
@@ -287,14 +285,11 @@ class MCPRealIntegrationRunner:
         agent = BasicAgent(
             name="real-mcp-agent-py",
             llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
             system_prompt=(
                 "你是一个会调用工具的助手。"
                 "当用户需要计算或回显时，优先调用对应的 MCP 工具并给出结果。"
             ),
-            verbose_thinking=False,
-        )
+        ).with_mcp(manager)
 
         try:
             query = "请调用 py_add 计算 18 + 24，并仅返回结果。"
@@ -306,7 +301,7 @@ class MCPRealIntegrationRunner:
             assert "42" in str(resp), "Agent 未正确使用工具或结果不含 42"
             print("✅ BasicAgent + 真实 LLM + Python MCP 工具链路通过")
         finally:
-            manager.close()
+            agent.close()
 
     def test_agent_integration_npx_mcp_real_llm(self):
         print("\n========== 测试8: BasicAgent + 真实 LLM + npx filesystem MCP ==========")
@@ -315,9 +310,7 @@ class MCPRealIntegrationRunner:
             print(f"⚠️ Node.js 版本为 {major}，低于 18，跳过 npx + Agent 真实测试")
             return
 
-        registry = ToolRegistry()
-        manager = register_mcp_tools(
-            registry=registry,
+        manager = mcptool(
             server_source=[
                 "npx",
                 "-y",
@@ -330,14 +323,11 @@ class MCPRealIntegrationRunner:
         agent = BasicAgent(
             name="real-mcp-agent-npx",
             llm=self.llm,
-            enable_tool=True,
-            tool_registry=registry,
             system_prompt=(
                 "你是一个会调用文件系统 MCP 工具的助手。"
                 "当用户要求查看目录时，请调用对应工具。"
             ),
-            verbose_thinking=False,
-        )
+        ).with_mcp(manager)
 
         try:
             query = "请列出当前可访问目录下的文件名。"
@@ -354,7 +344,7 @@ class MCPRealIntegrationRunner:
             assert any(name in str(resp) for name in expected_any), "Agent 输出中未包含预期文件名"
             print("✅ BasicAgent + 真实 LLM + npx filesystem MCP 链路通过")
         finally:
-            manager.close()
+            agent.close()
 
     def run_all(self):
         print("\n========== 开始执行真实 MCP 全链路测试 ==========")

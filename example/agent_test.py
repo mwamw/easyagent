@@ -11,7 +11,6 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 from core.llm import EasyLLM
 from agent.BasicAgent import BasicAgent
-from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import mcptool
 
 
@@ -19,7 +18,6 @@ def main() -> None:
     load_dotenv()
 
     llm = EasyLLM()
-    registry = ToolRegistry()
     workspace = os.path.abspath(".")
     tool = mcptool(
         server_source=["npx", "-y", "@modelcontextprotocol/server-filesystem", workspace],
@@ -33,14 +31,12 @@ def main() -> None:
     agent = BasicAgent(
         name="mcp-agent",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
-    )
-    agent.add_tool(tool)
+    ).with_mcp(tool)
     try:
-        agent.stream_invoke("列出当前文件夹下的文件")
+        for event in agent.stream("列出当前文件夹下的文件"):
+            print(event)
     finally:
-        tool.close()
+        agent.close()
 
 import asyncio
 

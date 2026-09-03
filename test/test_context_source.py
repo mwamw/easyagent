@@ -39,11 +39,11 @@ class TestHistoryContextSource(unittest.TestCase):
         self.assertEqual(items[0].content, "你好")
 
     def test_message_objects(self):
-        """Message 对象"""
-        from core.Message import UserMessage, AssistantMessage
+        """CanonicalMessage 对象"""
+        from core.history import CanonicalBlock, CanonicalMessage
         history = [
-            UserMessage("你好"),
-            AssistantMessage("你好！"),
+            CanonicalMessage(role="user", content=[CanonicalBlock(type="text", text="你好")]),
+            CanonicalMessage(role="assistant", content=[CanonicalBlock(type="text", text="你好！")]),
         ]
         source = HistoryContextSource(history=history)
         items = source.fetch("查询")

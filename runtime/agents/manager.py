@@ -152,22 +152,34 @@ class AgentRuntimeManager:
         *,
         execution_context: Optional[ExecutionContext] = None,
         run_in_background: bool = False,
+        agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
     ) -> AgentHandle:
         context = self._normalize_context(request, execution_context)
+
+        def register_before_execution(snapshot: Any, created_request: SubagentRequest) -> None:
+            context.metadata["agentId"] = snapshot.agent_id
+            context.metadata["outputFile"] = snapshot.output_file
+            self._remember_registration(
+                snapshot.agent_id,
+                created_request,
+                context,
+                background=run_in_background,
+            )
+            self._attach_team_membership(snapshot.agent_id, created_request)
+
         snapshot = (
-            self.subagent_manager.launch_background(request)
+            self.subagent_manager.launch_background(
+                request,
+                agent_factory=agent_factory,
+                on_created=register_before_execution,
+            )
             if run_in_background
-            else self.subagent_manager.run(request)
+            else self.subagent_manager.run(
+                request,
+                agent_factory=agent_factory,
+                on_created=register_before_execution,
+            )
         )
-        context.metadata.setdefault("agentId", snapshot.agent_id)
-        context.metadata.setdefault("outputFile", snapshot.output_file)
-        self._remember_registration(
-            snapshot.agent_id,
-            request,
-            context,
-            background=run_in_background,
-        )
-        self._attach_team_membership(snapshot.agent_id, request)
         return self.get_handle(snapshot.agent_id)
 
     def get_handle(self, agent_id: str) -> AgentHandle:

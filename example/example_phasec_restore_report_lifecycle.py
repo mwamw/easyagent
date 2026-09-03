@@ -13,20 +13,10 @@ from agent import BasicAgent
 from core import enable_logging
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import TeamManager
+from runtime import MultiAgentRuntime
 from task import SQLiteTaskStore, TaskService
 from Tool import ToolRegistry
-from Tool.builtin import (
-    register_agent_runtime_tools,
-    register_agent_tool,
-    register_enter_worktree_tool,
-    register_exit_worktree_tool,
-    register_filesystem_tools,
-    register_mailbox_tools,
-    register_send_message_tool,
-    register_team_create_tool,
-    register_team_delete_tool,
-)
+from Tool.builtin import register_filesystem_tools
 from Tool.runtime import WorktreeManager
 
 
@@ -85,59 +75,18 @@ def build_agent() -> tuple[BasicAgent, dict[str, str]]:
         storage_dir=worktree_storage,
         original_cwd=repo,
     )
-    register_enter_worktree_tool(registry, worktree_manager=worktree_manager)
-    register_exit_worktree_tool(registry, worktree_manager=worktree_manager)
-
     agent = BasicAgent(
         name="PhaseCRestoreManager",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         config=config,
-        task_service=task_service,
-        reasoning={"effort": "high"},
-    )
-
-    agent_tool = register_agent_tool(
-        registry,
-        parent_agent=agent,
+    ).with_tool(registry).with_task_service(task_service).with_worktree(
+        worktree_manager,
+    ).with_multi_agent(
         workspace_root=repo,
-        allowed_roots=(repo,),
         storage_dir=agent_storage,
         max_background_tasks=4,
-        worktree_manager=worktree_manager,
     )
-    team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-    agent_tool.agent_runtime.bind_team_manager(team_manager)
-
-    register_agent_runtime_tools(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_send_message_tool(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_mailbox_tools(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_team_create_tool(
-        registry,
-        team_manager=team_manager,
-        parent_agent=agent,
-    )
-    register_team_delete_tool(
-        registry,
-        team_manager=team_manager,
-    )
-    agent.bind_runtime(
-        agent_runtime=agent_tool.agent_runtime,
-        team_manager=team_manager,
-    )
+    agent.reasoning = {"effort": "high"}
 
     root_task = task_service.create_task(
         title="Phase C restore report walkthrough",
@@ -219,6 +168,16 @@ def main() -> None:
         ),
         store=env["session_db"],
         task_service=agent.task_service,
+        worktree_manager=WorktreeManager(
+            repo_root=WorktreeManager.detect_repo_root(env["repo"]),
+            storage_dir=os.path.join(example_dir, ".phasec-worktrees"),
+            original_cwd=env["repo"],
+        ),
+        multi_agent_runtime=MultiAgentRuntime(
+            workspace_root=env["repo"],
+            storage_dir=os.path.join(example_dir, ".phasec-agents"),
+            max_background_tasks=4,
+        ),
     )
 
     print("=== Restore Report ===")
@@ -230,12 +189,7 @@ def main() -> None:
         print([handle.to_dict() for handle in restored.agent_runtime.list_handles(limit=20)])
         print()
 
-    close_report = restored.close(
-        close_runtime=True,
-        close_worktree=True,
-        worktree_action="keep",
-        close_llm=True,
-    )
+    close_report = restored.close(worktree_action="keep", close_llm=True)
     print("=== Close Report ===")
     print(close_report)
 

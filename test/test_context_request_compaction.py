@@ -10,11 +10,9 @@ from context.compressor.history import LLMHistoryCompactor, RuleBasedHistoryComp
 from context.manager import ContextManager
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
-from core.Message import AssistantMessage, UserMessage
 from core.llm import EasyLLM
 from core.providers import create_codec
 from core.request_input import ReplayRequestInput
-from agent import BasicAgent
 
 
 class MockHistoryLLM:
@@ -198,7 +196,7 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item["record_type"] == "canonical_message" for item in compacted))
         self.assertEqual(compacted[0]["content"][0]["type"], "text")
 
-    def test_llm_history_compactor_fallback_metadata_propagates_to_agent_usage(self):
+    def test_llm_history_compactor_fallback_metadata_is_returned(self):
         manager = ContextManager(
             builder=ContextBuilder(
                 budget=TokenBudget(max_tokens=40),
@@ -212,22 +210,24 @@ class TestContextRequestCompaction(unittest.IsolatedAsyncioTestCase):
                 recent_turns=1,
             )
         )
-        agent = BasicAgent(
-            name="assistant",
-            llm=DummyAgentLLM(),
-            context_manager=manager,
+        replay = [
+            {"role": "user", "content": "第一轮问题非常长" * 4},
+            {"role": "assistant", "content": "第一轮回答非常长" * 4},
+            {"role": "user", "content": "最后一轮问题"},
+            {"role": "assistant", "content": "最后一轮回答"},
+        ]
+        codec = create_codec("openai")
+        compacted = manager.compact_persistent_history(
+            codec.replay_to_canonical(replay),
+            replay,
+            provider_name="openai",
+            token_counter=manager.counter,
+            max_tokens=120,
+            force=True,
         )
-        agent.get_enhanced_prompt = lambda: ""
-        agent.add_message(UserMessage("第一轮问题非常长" * 4))
-        agent.add_message(AssistantMessage("第一轮回答非常长" * 4))
-        agent.add_message(UserMessage("最后一轮问题"))
-        agent.add_message(AssistantMessage("最后一轮回答"))
 
-        compacted = agent.compact_history(max_tokens=120)
-
-        self.assertTrue(compacted)
-        usage = agent.get_context_usage()
-        compactor_info = usage["compaction"]["last"]["metadata"]["compactor"]
+        self.assertTrue(compacted.was_compacted)
+        compactor_info = compacted.metadata["compactor"]
         self.assertTrue(compactor_info["fallback_used"])
         self.assertEqual(compactor_info["status"], "fallback")
         self.assertEqual(compactor_info["fallback_compactor"], "RuleBasedHistoryCompactor")

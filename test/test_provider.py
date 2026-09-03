@@ -16,7 +16,7 @@ if __name__ == "__main__":
     print("=" * 50)
     
     llm = EasyLLM(model='gemini-2.5-pro')
-    print(f'Provider: {llm.provide}')
+    print(f'Provider: {llm.provider_name}')
     print(f'Model: {llm.model}')
     print(f'Provider class: {type(llm.provider).__name__}')
     

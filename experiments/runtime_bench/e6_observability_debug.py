@@ -58,16 +58,22 @@ def run_case(case: BenchCase) -> CaseResult:
         registry=build_mock_registry(),
         permission_context=build_permission_context(),
         max_iter=6,
+        observability=True,
         system_prompt="You are running an observability benchmark. Use the requested benchmark tool exactly.",
     )
     agent = outcome["agent"]
     observed = outcome["observed"]
-    obs_state = agent.observability_recorder.export_state()
+    obs_state = agent.observability.export_state()
     trace = agent.get_trace_history()
     completeness = {
-        "has_tool_execution_record": bool(obs_state.get("tool_executions")),
+        "has_tool_execution_record": bool(
+            (obs_state.get("records") or [{}])[0].get("stats", {}).get("tool_calls")
+        ),
         "has_trace_history": bool(trace),
-        "tool_execution_count": len(obs_state.get("tool_executions") or []),
+        "tool_execution_count": sum(
+            int(item.get("stats", {}).get("tool_calls") or 0)
+            for item in obs_state.get("records") or []
+        ),
         "trace_event_count": len(trace),
     }
     success = observed == case.expected

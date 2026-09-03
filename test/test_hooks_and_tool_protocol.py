@@ -22,22 +22,43 @@ from Tool.BaseTool import ToolResult
 
 
 class PlainProvider:
-    def __init__(self):
+    def __init__(self, tool_name: str | None = None, tool_args: dict | None = None):
         self.last_messages = []
+        self.tool_name = tool_name
+        self.tool_args = dict(tool_args or {})
 
     def build_request(self, messages, *, system_prompt=None, tools=None, temperature=None, reasoning=None, stream=False, **kwargs):
         request_messages = []
         if system_prompt:
             request_messages.append({"role": "system", "content": system_prompt})
         request_messages.extend(list(messages))
-        return {"messages": request_messages, "stream": stream}
+        return {"messages": request_messages, "tools": tools, "stream": stream}
 
     def invoke_raw(self, request):
         self.last_messages = list(request["messages"])
-        return SimpleNamespace(content="plain-response")
+        has_tool_result = any(item.get("role") == "tool" for item in self.last_messages if isinstance(item, dict))
+        if self.tool_name and request.get("tools") and not has_tool_result:
+            return SimpleNamespace(
+                content="",
+                reasoning_content=None,
+                usage=None,
+                tool_calls=[
+                    SimpleNamespace(
+                        id="call_1",
+                        function=SimpleNamespace(
+                            name=self.tool_name,
+                            arguments=__import__("json").dumps(self.tool_args),
+                        ),
+                    )
+                ],
+            )
+        return SimpleNamespace(content="plain-response", reasoning_content=None, usage=None, tool_calls=[])
 
     async def async_invoke_raw(self, request):
         return self.invoke_raw(request)
+
+    def apply_cache_policy(self, request, request_input):
+        return request
 
 
 class DummyLLM(EasyLLM):
@@ -99,16 +120,13 @@ class ExternalSnippetTool(Tool):
 
 class SystemPromptRewriteHook(BaseHook):
     def before_llm_request(self, payload: dict):
-        messages = payload["messages"]
+        messages = payload["request_input"]
         if isinstance(messages, ReplayRequestInput):
+            updated = messages.clone()
+            updated.system_prompt = "hooked system prompt"
+            updated.system_prompt_blocks = []
             return HookDecision.modify(
-                {
-                    "messages": ReplayRequestInput(
-                        provider_name=messages.provider_name,
-                        replay_history=list(messages.replay_history),
-                        system_prompt="hooked system prompt",
-                    )
-                }
+                {"request_input": updated}
             )
         return None
 
@@ -137,7 +155,11 @@ class RestoreReportHook(BaseHook):
 
 
 class CompactionBlockHook(BaseHook):
+    def __init__(self):
+        self.calls = 0
+
     def before_compaction(self, payload: dict):
+        self.calls += 1
         return HookDecision.block("阻止本次 compaction 以保留原始历史。")
 
 
@@ -156,50 +178,55 @@ class HookAndProtocolTests(unittest.TestCase):
         registry.register_tool(EchoTool())
         agent = BasicAgent(
             name="hooked-tool-agent",
-            llm=DummyLLM(PlainProvider()),
-            enable_tool=True,
-            tool_registry=registry,
-            hook_manager=HookManager([ToolArgRewriteHook()]),
+            llm=DummyLLM(PlainProvider("EchoTool", {"text": "hello"})),
+        ).with_hooks(HookManager([ToolArgRewriteHook()])).with_tool(registry)
+
+        result = agent.invoke("use echo")
+
+        self.assertEqual(result, "plain-response")
+        tool_event = next(
+            item for item in agent.get_trace_history()
+            if item["type"] == "tool.invoke.completed"
         )
-
-        result = agent.execute_tool_result("EchoTool", {"text": "hello"})
-
-        self.assertEqual(result.status, "success")
-        self.assertEqual(result.content, "hooked:hello")
-        self.assertEqual(result.metadata["hook_audit"][0]["stage"], "before_tool_use")
+        self.assertIn("hooked:hello", tool_event["data"]["output"])
 
     def test_default_guardrails_block_secret_like_tool_input(self):
         registry = ToolRegistry()
         registry.register_tool(EchoTool())
         agent = BasicAgent(
             name="guardrail-agent",
-            llm=DummyLLM(PlainProvider()),
-            enable_tool=True,
-            tool_registry=registry,
+            llm=DummyLLM(PlainProvider("EchoTool", {"text": "sk-abcdefghijklmnopqrstuvwxyz123456"})),
+        ).with_tool(registry)
+
+        result = agent.invoke("send secret")
+
+        self.assertEqual(result, "plain-response")
+        tool_event = next(
+            item for item in agent.get_trace_history()
+            if item["type"] == "tool.invoke.failed"
         )
-
-        result = agent.execute_tool_result("EchoTool", {"text": "sk-abcdefghijklmnopqrstuvwxyz123456"})
-
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "guardrail_blocked")
-        self.assertIn("敏感信息", result.content)
+        self.assertIn("敏感信息", tool_event["data"]["output"])
 
     def test_prompt_injection_guardrail_sanitizes_external_tool_result(self):
         registry = ToolRegistry()
         registry.register_tool(ExternalSnippetTool())
         agent = BasicAgent(
             name="external-agent",
-            llm=DummyLLM(PlainProvider()),
-            enable_tool=True,
-            tool_registry=registry,
+            llm=DummyLLM(PlainProvider("ExternalSnippet", {})),
+        ).with_tool(registry)
+
+        result = agent.invoke("read external snippet")
+
+        self.assertEqual(result, "plain-response")
+        tool_event = next(
+            event for event in agent.get_trace_history()
+            if event["type"] == "tool.invoke.completed"
         )
-
-        result = agent.execute_tool_result("ExternalSnippet", {})
-
-        self.assertEqual(result.status, "success")
-        self.assertIn("Guardrail 警告", result.to_display_string())
-        self.assertTrue(result.metadata["guardrail_warnings"])
-        self.assertEqual(result.ephemeral_context["type"], "guardrail_sanitized_external_context")
+        self.assertIn("Guardrail 警告", tool_event["data"]["output"])
+        self.assertEqual(
+            tool_event["data"]["result"]["ephemeral_context"]["type"],
+            "guardrail_sanitized_external_context",
+        )
 
     def test_llm_hooks_can_rewrite_request_and_response(self):
         provider = PlainProvider()
@@ -207,8 +234,7 @@ class HookAndProtocolTests(unittest.TestCase):
             name="llm-hook-agent",
             llm=DummyLLM(provider),
             system_prompt="original system prompt",
-            hook_manager=HookManager([SystemPromptRewriteHook(), ResponseRewriteHook()]),
-        )
+        ).with_hooks(HookManager([SystemPromptRewriteHook(), ResponseRewriteHook()]))
 
         result = agent.invoke("hello")
 
@@ -236,51 +262,21 @@ class HookAndProtocolTests(unittest.TestCase):
         self.assertEqual(spec.to_description_payload()["visibility_scope"], "runtime")
         self.assertEqual(spec.to_intermediate_schema()["resource_scope"], ["external"])
 
-    def test_trace_and_pending_state_capture_ephemeral_context(self):
+    def test_runtime_event_captures_tool_ephemeral_context(self):
         registry = ToolRegistry()
         registry.register_tool(EchoTool())
         agent = BasicAgent(
             name="trace-agent",
-            llm=DummyLLM(PlainProvider()),
-            enable_tool=True,
-            tool_registry=registry,
-        )
+            llm=DummyLLM(PlainProvider("EchoTool", {"text": "alpha"})),
+        ).with_tool(registry)
 
-        result = agent.execute_tool_result("EchoTool", {"text": "alpha"})
-        turn_id, root_event_id = agent._begin_trace_turn("trace query")
-        agent._set_pending_step_state(
-            assistant_canonical=[],
-            assistant_replay=[],
-            tool_calls=[],
-            round_number=1,
-        )
-        agent._append_pending_tool_result(
-            tool_canonical=[],
-            tool_replay=[],
-            ephemeral_context=result.ephemeral_context,
-            tool_name="EchoTool",
-        )
-        agent._record_tool_result(
-            turn_id,
-            "EchoTool",
-            {"text": "alpha"},
-            "tool_1",
-            result.to_display_string(),
-            parent_id=root_event_id,
-            round_number=1,
-            mode="tool",
-            stream=False,
-            success=True,
-            tool_result_obj=result,
-        )
+        agent.invoke("trace query")
 
         trace = agent.get_trace_history()
-        tool_event = next(event for event in trace if event["type"] == "tool_result")
-        self.assertEqual(tool_event["structured_data"]["text"], "alpha")
-        self.assertEqual(tool_event["ephemeral_context"]["echo"], "alpha")
-        pending = agent.get_pending_step_state()
-        self.assertEqual(pending["tool_ephemeral_contexts"][0]["tool_name"], "EchoTool")
-        self.assertEqual(pending["tool_ephemeral_contexts"][0]["context"]["echo"], "alpha")
+        tool_event = next(event for event in trace if event["type"] == "tool.invoke.completed")
+        self.assertEqual(tool_event["data"]["result"]["structured_data"]["text"], "alpha")
+        self.assertEqual(tool_event["data"]["result"]["ephemeral_context"]["echo"], "alpha")
+        self.assertEqual(agent.metamessage_manager.list_injections(), [])
 
     def test_after_session_restore_hook_can_annotate_restore_report(self):
         provider = PlainProvider()
@@ -307,20 +303,19 @@ class HookAndProtocolTests(unittest.TestCase):
 
     def test_before_compaction_hook_can_block_compaction(self):
         context_manager = ContextManager()
+        hook = CompactionBlockHook()
         agent = BasicAgent(
             name="compaction-agent",
             llm=DummyLLM(PlainProvider()),
-            context_manager=context_manager,
-            hook_manager=HookManager([CompactionBlockHook()]),
-        )
-        agent._append_query_history("hello")
-        agent._append_assistant_message_history(content="world")
+        ).with_context(context_manager).with_hooks(HookManager([hook]))
+        agent.add_user_message("hello" * 5000)
+        agent.add_assistant_message("world" * 5000)
 
-        compacted = agent.compact_history(max_tokens=5)
+        result = agent.invoke("continue")
 
-        self.assertFalse(compacted)
-        self.assertTrue(agent._last_history_compaction["hook_blocked"])
-        self.assertIn("阻止本次 compaction", agent._last_history_compaction["hook_message"])
+        self.assertEqual(result, "plain-response")
+        self.assertEqual(hook.calls, 1)
+        self.assertNotIn("history.compacted", [item["type"] for item in agent.get_trace_history()])
 
     def test_before_compaction_hook_is_not_called_when_history_is_within_budget(self):
         context_manager = ContextManager(max_tokens=4096)
@@ -328,17 +323,14 @@ class HookAndProtocolTests(unittest.TestCase):
         agent = BasicAgent(
             name="compaction-precheck-agent",
             llm=DummyLLM(PlainProvider()),
-            context_manager=context_manager,
-            hook_manager=HookManager([hook]),
-        )
-        agent._append_query_history("hello")
-        agent._append_assistant_message_history(content="world")
+        ).with_context(context_manager).with_hooks(HookManager([hook]))
+        agent.add_user_message("hello")
+        agent.add_assistant_message("world")
 
-        compacted = agent.compact_persistent_history_if_needed()
+        result = agent.invoke("continue")
 
-        self.assertFalse(compacted)
+        self.assertEqual(result, "plain-response")
         self.assertEqual(hook.calls, 0)
-        self.assertFalse(agent._last_history_compaction["was_compacted"])
 
 
 if __name__ == "__main__":

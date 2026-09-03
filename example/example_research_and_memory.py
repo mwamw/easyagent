@@ -35,10 +35,7 @@ async def main():
     agent = BasicAgent(
         name="Researcher",
         llm=llm,
-        tool_registry=registry,
-        verbose_thinking=True
-    )
-    agent.with_memory(memory_manage)
+    ).with_tool(registry).with_memory(memory_manage)
     # 真实场景 Query: 调研新技术并存入长期记忆
     query = """
     我想了解一下目前 Python 3.13 中关于 JIT (Just-In-Time) 编译器的最新进展：
@@ -50,7 +47,8 @@ async def main():
     """
 
     print(f"🕵️ 开始调研任务...\n")
-    await agent.astream_invoke(query)
+    async for event in agent.astream(query):
+        print(event)
 
 
 if __name__ == "__main__":

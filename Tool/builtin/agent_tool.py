@@ -91,6 +91,8 @@ def clone_tool_registry_for_workspace(
         tool = registry.get_tool(name)
         if tool is None:
             continue
+        if name == "skill_tool":
+            continue
         visibility = registry.get_tool_visibility(name) or "resident"
 
         if isinstance(tool, BashTool):
@@ -184,7 +186,10 @@ class AgentTool(Tool):
         self.worktree_manager = worktree_manager or self._maybe_create_worktree_manager(parent_agent)
         self.storage_dir = os.path.abspath(storage_dir or os.path.join(self.workspace_root, ".easyagent-agents"))
 
-        factory = agent_factory or self._build_default_agent_factory()
+        factory = self._wrap_agent_factory(
+            agent_factory or self._build_default_agent_factory()
+        )
+        self.agent_factory = factory
         self.agent_runtime = agent_runtime or AgentRuntimeManager(
             agent_factory=factory,
             storage_dir=self.storage_dir,
@@ -221,6 +226,37 @@ class AgentTool(Tool):
             git_binary=getattr(config, "git_binary", "git"),
             original_cwd=self.workspace_root,
         )
+
+    def _wrap_agent_factory(
+        self,
+        factory: Callable[[SubagentRequest], Any],
+    ) -> Callable[[SubagentRequest], Any]:
+        def wrapped(request: SubagentRequest) -> Any:
+            child_agent = factory(request)
+            parent_observability = getattr(self.parent_agent, "observability", None)
+            if (
+                parent_observability is not None
+                and getattr(child_agent, "observability", None) is None
+                and callable(getattr(child_agent, "with_observability", None))
+            ):
+                child_agent.with_observability(
+                    manager=parent_observability.create_child(
+                        parent_invoke_id=(request.metadata or {}).get(
+                            "parent_agent_invoke_id"
+                        ),
+                    )
+                )
+            return child_agent
+
+        return wrapped
+
+    def _delegation_context_metadata(self) -> dict[str, Any]:
+        parent_context = getattr(self.parent_agent, "execution_context", None)
+        parent_metadata = getattr(parent_context, "metadata", {})
+        return {
+            "delegatedBy": getattr(self.parent_agent, "name", None),
+            "parentAgentId": parent_metadata.get("agentId"),
+        }
 
     def _build_default_agent_factory(self) -> Callable[[SubagentRequest], Any]:
         if self.parent_agent is None:
@@ -289,7 +325,7 @@ class AgentTool(Tool):
                     execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
                     current_task_id=delegated_task_id,
-                    metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                    metadata=self._delegation_context_metadata(),
                 )
             else:
                 child_execution_context = ExecutionContext.from_agent(
@@ -301,110 +337,79 @@ class AgentTool(Tool):
                     execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
                     current_task_id=delegated_task_id,
-                    metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                    metadata=self._delegation_context_metadata(),
                 )
-            child_execution_context.metadata.setdefault(
-                "agentId",
-                (request.metadata or {}).get("agent_id"),
-            )
-            child_execution_context.metadata.setdefault(
-                "outputFile",
-                (request.metadata or {}).get("output_file"),
-            )
+            child_execution_context.metadata["agentId"] = (request.metadata or {}).get("agent_id")
+            child_execution_context.metadata["outputFile"] = (request.metadata or {}).get("output_file")
 
+            child_llm = self.parent_agent.llm
+            if request.model and request.model != getattr(child_llm, "model", None):
+                from core.llm import EasyLLM
+
+                parent_llm = self.parent_agent.llm
+                child_llm = EasyLLM(
+                    provider=parent_llm.provider_name,
+                    model=request.model,
+                    api_key=getattr(parent_llm, "resolve_api_key", None) or parent_llm.api_key,
+                    base_url=getattr(parent_llm, "resolve_base_url", None) or parent_llm.base_url,
+                    temperature=parent_llm.temperature,
+                    max_tokens=parent_llm.max_tokens,
+                    timeout=parent_llm.timeout,
+                    **dict(getattr(parent_llm, "kwargs", {}) or {}),
+                )
             child_agent = BasicAgent(
                 name=request.name or request.description or "Subagent",
-                llm=self.parent_agent.llm,
+                llm=child_llm,
                 system_prompt=getattr(self.parent_agent, "system_prompt", None),
-                enable_tool=registry is not None,
-                tool_registry=registry,
                 description=request.description,
-                reasoning=getattr(self.parent_agent, "reasoning", None),
                 config=config_copy,
-                verbose_thinking=bool(getattr(self.parent_agent, "verbose_thinking", False)),
-                callback_manager=getattr(self.parent_agent, "callback_manager", None),
-                permission_engine=getattr(self.parent_agent, "permission_engine", None),
-                permission_context=permission_context,
-                task_service=getattr(self.parent_agent, "task_service", None),
-                agent_runtime=self.agent_runtime,
-                team_manager=getattr(self.parent_agent, "team_manager", None),
-                execution_context=child_execution_context,
             )
+            child_agent.reasoning = getattr(self.parent_agent, "reasoning", None)
+            child_agent.execution_context = child_execution_context
+            child_agent.with_permissions(
+                getattr(self.parent_agent, "permission_engine", None),
+                permission_context,
+            )
+            parent_callbacks = getattr(self.parent_agent, "callback_manager", None)
+            if parent_callbacks is not None:
+                child_agent.with_callbacks(parent_callbacks)
+            if registry is not None:
+                child_agent.with_tool(registry)
+            parent_skill_manager = getattr(self.parent_agent, "skill_manager", None)
+            skill_directories = tuple(
+                getattr(parent_skill_manager, "directories", ()) or ()
+            )
+            if skill_directories:
+                child_agent.with_skill(*skill_directories)
+            parent_task_service = getattr(self.parent_agent, "task_service", None)
+            if parent_task_service is not None:
+                child_agent.with_task_service(parent_task_service)
+            if normalized_mode == PermissionMode.PLAN:
+                from plan import PlanModeConfig
+
+                child_agent.with_plan(config=PlanModeConfig(register_tools=False))
+                child_agent.plan.enter()
             if bool(getattr(config_copy, "subagent_inherit_cache_safe_params", True)):
                 child_execution_context.metadata.setdefault(
                     "cacheSafeParams",
                     self._build_parent_cache_safe_params(parent_registry),
                 )
             if registry is not None and parent_registry is not None:
-                if parent_registry.has_tool("Agent"):
-                    register_agent_tool(
-                        registry,
-                        parent_agent=child_agent,
-                        agent_runtime=self.agent_runtime,
-                        worktree_manager=self.worktree_manager,
-                        workspace_root=workspace_root,
-                        allowed_roots=allowed_roots,
-                        storage_dir=self.storage_dir,
-                        max_background_tasks=self.subagent_manager.max_background_tasks,
-                    )
-                if parent_registry.has_tool("SendMessage"):
-                    from .send_message import register_send_message_tool
-
-                    register_send_message_tool(
-                        registry,
-                        agent_runtime=self.agent_runtime,
-                        parent_agent=child_agent,
-                    )
-                collaboration_requested = (
-                    request.team_name is not None
-                    or delegated_task_id is not None
-                    or any(
-                        parent_registry.has_tool(name)
-                        for name in (
-                            "Agent",
-                            "AgentGet",
-                            "AgentList",
-                            "AgentWait",
-                            "AgentStop",
-                            "SendMessage",
-                            "MailboxRead",
-                            "MailboxAck",
-                            "TeamCreate",
-                            "TeamDelete",
-                        )
-                    )
+                collaboration_requested = request.team_name is not None or delegated_task_id is not None or any(
+                    parent_registry.has_tool(name)
+                    for name in ("Agent", "SendMessage", "MailboxRead", "TeamCreate")
                 )
                 if collaboration_requested:
-                    from .mailbox_tools import register_mailbox_tools
+                    from runtime import MultiAgentRuntime
 
-                    register_mailbox_tools(
-                        registry,
-                        agent_runtime=self.agent_runtime,
-                        parent_agent=child_agent,
-                    )
-                if self.agent_runtime.team_manager is not None:
-                    if parent_registry.has_tool("TeamCreate"):
-                        from .team_create import register_team_create_tool
-
-                        register_team_create_tool(
-                            registry,
-                            team_manager=self.agent_runtime.team_manager,
-                            parent_agent=child_agent,
-                        )
-                    if parent_registry.has_tool("TeamDelete"):
-                        from .team_delete import register_team_delete_tool
-
-                        register_team_delete_tool(
-                            registry,
+                    child_agent.with_multi_agent(
+                        MultiAgentRuntime(
+                            workspace_root=workspace_root,
+                            storage_dir=self.storage_dir,
+                            max_background_tasks=self.subagent_manager.max_background_tasks,
+                            agent_runtime=self.agent_runtime,
                             team_manager=self.agent_runtime.team_manager,
                         )
-                if any(parent_registry.has_tool(name) for name in ("AgentGet", "AgentList", "AgentWait", "AgentStop")):
-                    from .agent_runtime_tools import register_agent_runtime_tools
-
-                    register_agent_runtime_tools(
-                        registry,
-                        agent_runtime=self.agent_runtime,
-                        parent_agent=child_agent,
                     )
             return child_agent
 
@@ -421,7 +426,6 @@ class AgentTool(Tool):
         except Exception:
             tools = None
         cache_policy = getattr(getattr(parent, "config", None), "cache_policy", None)
-        parent_config = getattr(parent, "config", None)
         try:
             signature = build_cache_signature(
                 provider=getattr(getattr(parent, "llm", None), "provider_name", None),
@@ -429,9 +433,6 @@ class AgentTool(Tool):
                 system_blocks=compile_prompt_blocks(
                     system_blocks,
                     cache_policy=cache_policy,
-                    cache_dynamic_memory=bool(getattr(parent_config, "cache_dynamic_memory", False)),
-                    cache_dynamic_mailbox=bool(getattr(parent_config, "cache_dynamic_mailbox", False)),
-                    cache_turn_skills=bool(getattr(parent_config, "cache_turn_skills", False)),
                 ).system_prompt_blocks,
                 tools=tools,
                 reasoning=getattr(parent, "reasoning", None),
@@ -462,7 +463,7 @@ class AgentTool(Tool):
                 execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
                 current_task_id=delegated_task_id,
-                metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                metadata=self._delegation_context_metadata(),
             )
         if self.parent_agent is not None:
             return ExecutionContext.from_agent(
@@ -474,7 +475,7 @@ class AgentTool(Tool):
                 execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
                 current_task_id=delegated_task_id,
-                metadata={"delegatedBy": getattr(self.parent_agent, "name", None)},
+                metadata=self._delegation_context_metadata(),
             )
         return ExecutionContext(
             workspace_root=workspace_root,
@@ -562,6 +563,9 @@ class AgentTool(Tool):
         metadata["subagentCachePolicy"] = str(
             getattr(getattr(self.parent_agent, "config", None), "subagent_cache_policy", "inherit") or "inherit"
         )
+        parent_observability = getattr(self.parent_agent, "observability", None)
+        if parent_observability is not None and parent_observability.active_invoke_id:
+            metadata["parent_agent_invoke_id"] = parent_observability.active_invoke_id
         workspace_root = self.workspace_root
         allowed_roots = self.allowed_roots
         worktree_path = None
@@ -626,6 +630,7 @@ class AgentTool(Tool):
                 request,
                 execution_context=execution_context,
                 run_in_background=run_in_background,
+                agent_factory=self.agent_factory,
             )
             self._sync_delegation_task(request, handle)
             if run_in_background:

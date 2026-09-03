@@ -95,12 +95,6 @@ config = Config(
 
 - `cache_policy`
   - `PromptCachePolicy` 对象，定义 cache 是否启用、模式、TTL、scope、breakpoint strategy
-- `cache_dynamic_memory`
-  - memory 是否允许进入可缓存层
-- `cache_dynamic_mailbox`
-  - mailbox 是否允许进入可缓存层
-- `cache_turn_skills`
-  - turn skill 是否允许进入可缓存层
 - `tool_schema_mode`
   - `full` 或 `deferred`
 - `stable_tool_order`
@@ -239,7 +233,6 @@ agent = BasicAgent(
 
 - [Deferred Tools Guide](./deferred_tools_guide.md)
 
-### `cache_dynamic_memory=True` 应该默认开吗
+### Placement 会影响缓存分区吗
 
-通常不建议。  
-memory 往往是动态内容，默认让它留在动态尾部更安全。
+不会。`PromptBlock.placement` 决定 system/system-reminder 消息位置；`cache_partition` 和 `cacheable` metadata 决定缓存策略。Memory retrieval 和 mailbox 由动态上下文管线管理，不通过 Config 开关移动到系统提示词。

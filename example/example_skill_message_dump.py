@@ -1,83 +1,50 @@
-import os
-import sys
-from typing import Any, Optional
+"""Inspect Skill progressive disclosure without making an LLM request."""
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+from __future__ import annotations
 
-from agent.BasicAgent import BasicAgent
-from core.Message import ToolMessage
-from core.llm import EasyLLM
-from skill.meta_tools import MetaSkill, SkillTool
-from skill.registry import SkillRegistry
+import json
+from pathlib import Path
+
+from easyagent import BasicAgent, EasyLLM
+from runtime import RuntimeEventType
 
 
-REAL_SKILLS_DIR = os.path.join(ROOT, "test", "real_skills")
-
-
-class SpyEasyLLM(EasyLLM):
-    def __init__(self):
-        self.provide = "mock"
-        self.provider_name = "mock"
-        self.model = "mock-model"
-        self.last_messages: list[Any] = []
-
-    def invoke(self, messages, temperature: Optional[float] = None, **kwargs):
-        self.last_messages = messages
-        return "ok"
-
-    def think(self, messages, temperature: Optional[float] = None):
-        yield "ok"
-
-
-def dump_messages(title: str, messages: list[Any]) -> None:
-    print(f"\n{'=' * 80}")
-    print(title)
-    print(f"{'=' * 80}")
-    for index, message in enumerate(messages, start=1):
-        role = getattr(message, "role", None) or message.get("role", "unknown")
-        content = getattr(message, "content", None) or message.get("content", "")
-        print(f"\n[{index}] role={role}")
-        print(content)
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 def main() -> None:
-    SkillRegistry.reset()
-    registry = SkillRegistry.instance()
-    discovered = registry.discover_from_directory(REAL_SKILLS_DIR)
-    if "crypto_skill" not in discovered:
-        raise RuntimeError(f"未发现 crypto_skill，实际发现: {discovered}")
-
-    agent = BasicAgent(name="message-dump-demo", llm=SpyEasyLLM())
-    agent.with_skill(MetaSkill(registry, agent.skill_manager))
-
-    query = "请帮我计算 'Autonomous Mode' 的 SHA-256。"
-
-    # 1. 起始消息：只会看到 skill policy + listing，不会看到 crypto_skill 正文
-    start_messages = agent._build_start_messages(query)
-    dump_messages("A. 调用 skill_tool 之前的起始消息", start_messages)
-
-    # 2. 模拟模型选择 crypto_skill，并调用 skill_tool
-    skill_tool = SkillTool(registry, agent.skill_manager, set())
-    tool_result = skill_tool.run({"skill_name": "crypto_skill"})
-
-    # 3. 复现同轮后续推理的大致消息形态：
-    #    - 原始 start messages
-    #    - 一条 tool result
-    #    - 一条 runtime skill context meta user message
-    after_skill_messages = list(start_messages)
-    after_skill_messages.append(
-        ToolMessage(
-            content=tool_result.to_display_string(),
-            tool_call_id="call_demo_skill_tool",
-            name="skill_tool",
-        )
+    llm = EasyLLM(
+        provider="openai",
+        base_url="http://127.0.0.1:5124/v1",
+        api_key="122",
+        model="qwen3.5-9b",
     )
-    agent._append_runtime_skill_context_message(after_skill_messages)
-    dump_messages("B. 调用 skill_tool 之后的消息", after_skill_messages)
+    agent = BasicAgent(name="skill-message-dump", llm=llm).with_skill(SKILLS_DIR)
+    agent.event_bus.publish(
+        RuntimeEventType.AGENT_INVOKE_STARTED,
+        agent_id=agent.name,
+        invocation_id="manual-inspection",
+        data={"query": "Review skill/manager.py"},
+    )
+    result = agent.execute_tool_result(
+        "skill_tool",
+        {"skill": "repository-review", "args": "skill/manager.py"},
+    )
+    agent.history_store.append_tool_result(
+        result.to_display_string(),
+        "manual-skill-call",
+        "skill_tool",
+    )
+    agent.metamessage_manager.flush()
+    print(json.dumps(agent.get_history(), ensure_ascii=False, indent=2))
 
-    SkillRegistry.reset()
+    agent.event_bus.publish(
+        RuntimeEventType.AGENT_INVOKE_COMPLETED,
+        agent_id=agent.name,
+        invocation_id="manual-inspection",
+    )
+    print(json.dumps(agent.get_history(), ensure_ascii=False, indent=2))
+    agent.close()
 
 
 if __name__ == "__main__":

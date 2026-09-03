@@ -14,7 +14,7 @@ Context 模块负责“本次请求除了用户 query 之外，还应该带什�
 相关文档：
 
 - [Prompt System Guide](./prompt_system_guide.md)
-- [Runtime Reminders Guide](./runtime_reminders_guide.md)
+- [Prompt System Guide](./prompt_system_guide.md)
 - [Memory System Guide](./memory_system_guide.md)
 - [Observability And Cache Guide](./observability_and_cache_guide.md)
 
@@ -57,7 +57,7 @@ Context 模块负责“本次请求除了用户 query 之外，还应该带什�
 - 用户当前 query
 - canonical history
 - replay history
-- runtime reminders
+- system reminder blocks
 - memory
 - mailbox
 - RAG 检索结果
@@ -144,7 +144,7 @@ class TicketContextSource(BaseContextSource):
 2. Agent 当前已有：
    - canonical history
    - replay history
-   - runtime reminders
+   - system reminder blocks
    - memory manager
    - skill manager
    - 若干 context sources
@@ -156,7 +156,7 @@ class TicketContextSource(BaseContextSource):
    - `compact_persistent_history(...)` 被调用
 8. 得到最终 request frame：
    - `system_prompt_blocks`
-   - `runtime_reminder_blocks`
+   - `system_reminder_blocks`
    - `replay_history`
    - `dynamic_tail_blocks`
    - `on_demand_expansion_blocks`
@@ -175,7 +175,7 @@ class TicketContextSource(BaseContextSource):
 
 - 用来表达真正的对话内容
 - 应尽量稳定、可持久化
-- 不应该混入 provider 特定签名和 runtime reminder
+- 不应该混入 provider 特定签名和 system reminder
 
 ### replay history
 
@@ -321,8 +321,7 @@ context_manager = ContextManager(max_tokens=12000)
 agent = BasicAgent(
     name="assistant",
     llm=llm,
-    context_manager=context_manager,
-)
+).with_context(context_manager)
 ```
 
 更典型的产品写法是：

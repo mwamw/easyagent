@@ -13,18 +13,21 @@
 ## 1. 一个推荐的最小产品骨架
 
 ```python
-from easyagent import BasicAgent, Config, EasyLLM
-from easyagent.callbacks import CallbackManager, StreamingCallback
-from easyagent.observability import InMemoryObservabilityRecorder
-from easyagent.permissions import PermissionContext, PermissionEngine
+from easyagent import (
+    BasicAgent,
+    CallbackManager,
+    Config,
+    EasyLLM,
+    InMemoryObservabilityStore,
+    PermissionContext,
+    PermissionEngine,
+    StreamingCallback,
+    TaskService,
+)
 from easyagent.tools import (
     ToolRegistry,
-    register_agent_tool,
-    register_codeintel_tools,
     register_filesystem_tools,
     register_shell_tools,
-    register_task_tools,
-    register_worktree_tools,
 )
 
 llm = EasyLLM(
@@ -44,24 +47,19 @@ config = Config(
 registry = ToolRegistry()
 register_filesystem_tools(registry, workspace_root=".")
 register_shell_tools(registry, workspace_root=".", expose_in_deferred=False)
-register_task_tools(registry)
-register_worktree_tools(registry, worktree_manager=worktree_manager, expose_in_deferred=True)
-register_agent_tool(registry, parent_agent=None, agent_runtime=agent_runtime)
-register_codeintel_tools(registry, manager=codeintel_manager)
-
 agent = BasicAgent(
     name="code-agent",
     llm=llm,
     config=config,
-    enable_tool=True,
-    tool_registry=registry,
-    permission_engine=PermissionEngine(),
-    permission_context=PermissionContext(),
-    callback_manager=CallbackManager([StreamingCallback()]),
-    agent_runtime=agent_runtime,
-    task_service=task_service,
-    observability_recorder=InMemoryObservabilityRecorder(),
 )
+agent.with_tool(registry)
+agent.with_permissions(PermissionEngine(), PermissionContext())
+agent.with_callbacks(CallbackManager([StreamingCallback()]))
+agent.with_task_service(TaskService())
+agent.with_codeintel()
+agent.with_worktree()
+agent.with_multi_agent(workspace_root=".")
+agent.with_observability(store=InMemoryObservabilityStore())
 ```
 
 ## 2. 推荐的工具组合

@@ -11,7 +11,6 @@ INTEGRATION_FILES = {
     "test_Neo4jStore.py",
     "test_PerceptualMemory.py",
     "test_Qdramt.py",
-    "test_agent_context_integration.py",
     "test_agent_memory_integration.py",
     "test_async_tools.py",
     "test_episodememory.py",
@@ -24,9 +23,7 @@ EXTERNAL_FILES = {
     "test_basicagent.py",
     "test_google.py",
     "test_mcp_real_integration.py",
-    "test_planagent.py",
     "test_real_agent_skill.py",
-    "test_react.py",
     "test_tool.py",
 }
 

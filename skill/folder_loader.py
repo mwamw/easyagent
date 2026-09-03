@@ -1,168 +1,238 @@
-"""
-Folder-Based Skill 加载器 (Claude Code 风格)
+"""Discovery and lazy loading for ``SKILL.md`` directories."""
 
-支持从一个包含 README.md (或 skill.md) 和可选 tools.py 脚本的目录作为一个完整的 Skill 加载。
-"""
 from __future__ import annotations
 
-import logging
 import os
-import importlib.util
-from typing import Any, Dict, List, Optional
-import sys
+from pathlib import Path
+import re
+from typing import Any, Iterable
 
-from .base import SkillConfig
-from .yaml_loader import MarkdownSkill, MarkdownSkillLoader
+import yaml
 
-logger = logging.getLogger(__name__)
-
-
-class FolderSkill(MarkdownSkill):
-    """
-    基于文件夹创建的 Skill
-
-    继承自 MarkdownSkill（因为其核心说明和配置在 md 文件中），
-    并扩展支持动态加载文件夹内的 Python 工具实例。
-    """
-
-    def __init__(
-        self,
-        config: SkillConfig,
-        tool_defs: List[Dict[str, Any]],
-        prompt_text: str = "",
-        extra_config: Optional[Dict[str, Any]] = None,
-        dynamic_tools: Optional[list] = None,
-    ):
-        super().__init__(config, tool_defs, prompt_text, extra_config)
-        self._dynamic_tools = dynamic_tools or []
-
-    def get_tools(self) -> list:
-        """
-        返回所有工具，包括 Markdown frontmatter 里定义的 builtin 工具
-        以及丛 tools.py 动态加载进来的工具。
-        """
-        # 获取 Markdown 中定义的工具 (比如 builtin)
-        base_tools = super().get_tools()
-        
-        # 将静态配置的工具和动态加载的工具合并返回
-        return base_tools + self._dynamic_tools
+from .base import SkillManifest
 
 
-class FolderSkillLoader:
-    """Folder Skill 加载器"""
+SKILL_FILENAME = "SKILL.md"
+_MAX_FRONTMATTER_CHARS = 64 * 1024
 
-    @staticmethod
-    def load(dir_path: str) -> FolderSkill:
-        """
-        从目录加载 Skill。
 
-        目录要求：
-        1. 必须包含 skill.md 或 README.md，里面有 YAML frontmatter
-        2. 可以包含 tools.py，里面定义工具实例。
+def discover_skill_files(directory: str | os.PathLike[str]) -> list[Path]:
+    """Find a Skill directory or the direct child Skills in a collection."""
 
-        Args:
-            dir_path: 目录路径
+    root = Path(directory).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Skill path must be a directory: {root}")
 
-        Returns:
-            FolderSkill 实例
+    direct = root / SKILL_FILENAME
+    if direct.is_file():
+        return [direct.resolve(strict=True)]
 
-        Raises:
-            FileNotFoundError: 目录或必须的被说明文件不存在
-            ValueError: 格式不正确
-        """
-        if not os.path.isdir(dir_path):
-            raise FileNotFoundError(f"Folder Skill 目录不存在: {dir_path}")
-
-        # 1. 查找必须的 Markdown 说明文件
-        md_file = None
-        for filename in ["skill.md", "README.md"]:
-            candidate = os.path.join(dir_path, filename)
-            if os.path.isfile(candidate):
-                md_file = candidate
-                break
-        
-        if not md_file:
-            raise FileNotFoundError(f"Folder Skill 目录 {dir_path} 中缺少 skill.md 或 README.md 文件")
-
-        # 使用 MarkdownSkillLoader 解析 frontmatter 和 prompt 内容
-        with open(md_file, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        base_md_skill = MarkdownSkillLoader._parse_content(content, md_file)
-        if not base_md_skill.config.source_path:
-            base_md_skill.config.source_path = dir_path
-        base_md_skill.config.source_type = "folder"
-        if not base_md_skill.config.exposure_mode:
-            base_md_skill.config.exposure_mode = "on_demand"
-        if not base_md_skill.config.execution_mode:
-            base_md_skill.config.execution_mode = "inline"
-        
-        # 2. 检查是否有 tools.py, 如果有则尝试动态加载里面导出的工具
-        dynamic_tools = []
-        tools_script = os.path.join(dir_path, "tools.py")
-        if os.path.isfile(tools_script):
-            dynamic_tools = FolderSkillLoader._load_tools_from_python(tools_script)
-
-        return FolderSkill(
-            config=base_md_skill.config,
-            tool_defs=base_md_skill._tool_defs,
-            prompt_text=base_md_skill._prompt_text,
-            extra_config=base_md_skill._extra_config,
-            dynamic_tools=dynamic_tools
+    discovered = sorted(
+        (
+            child.joinpath(SKILL_FILENAME).resolve(strict=True)
+            for child in root.iterdir()
+            if child.is_dir() and child.joinpath(SKILL_FILENAME).is_file()
+        ),
+        key=lambda item: (item.parent.name, str(item)),
+    )
+    if not discovered:
+        raise FileNotFoundError(
+            f"No {SKILL_FILENAME} found in {root} or its direct child directories"
         )
+    return discovered
 
-    @staticmethod
-    def _load_tools_from_python(filepath: str) -> list:
-        """从 Python 文件中动态提取工具实例"""
-        from Tool.BaseTool import Tool
 
-        tools = []
-        module_name = "folder_skill_dynamic_tools_" + os.path.basename(os.path.dirname(filepath))
-        
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, filepath)
-            if spec is None or spec.loader is None:
-                return tools
+def _read_frontmatter(file_path: Path) -> dict[str, Any]:
+    with file_path.open("r", encoding="utf-8-sig") as handle:
+        if handle.readline().strip() != "---":
+            raise ValueError(f"{file_path} must begin with YAML frontmatter")
+        lines: list[str] = []
+        size = 0
+        for line in handle:
+            if line.strip() == "---":
+                break
+            size += len(line)
+            if size > _MAX_FRONTMATTER_CHARS:
+                raise ValueError(f"Skill frontmatter exceeds {_MAX_FRONTMATTER_CHARS} characters: {file_path}")
+            lines.append(line)
+        else:
+            raise ValueError(f"Unclosed YAML frontmatter in {file_path}")
 
-            module = importlib.util.module_from_spec(spec)
-            
-            # 将该文件所在目录临时加入到 sys.path，以便 tools.py 能够导入内部模块
-            dir_path = os.path.dirname(filepath)
-            sys.path.insert(0, dir_path)
-            try:
-                spec.loader.exec_module(module)
-            finally:
-                if sys.path[0] == dir_path:
-                    sys.path.pop(0)
+    payload = yaml.safe_load("".join(lines)) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"Skill frontmatter must be a mapping: {file_path}")
+    return dict(payload)
 
-            # 1. 检查是否存在 get_tools() 入口函数
-            if hasattr(module, "get_tools") and callable(getattr(module, "get_tools")):
-                custom_tools = getattr(module, "get_tools")()
-                if isinstance(custom_tools, list):
-                    for tb in custom_tools:
-                        if isinstance(tb, Tool):
-                            tools.append(tb)
-                        else:
-                            logger.warning("get_tools() 返回了非 Tool 实例: %s", type(tb))
-                else:
-                    logger.warning("get_tools() 应返回列表，但返回了: %s", type(custom_tools))
-                return tools
 
-            # 2. 如果没有显式 get_tools()，自动扫描所有的 Tool 子类并实例化
-            for attr_name in dir(module):
-                if attr_name.startswith("_"):
-                    continue
-                attr = getattr(module, attr_name)
-                # 检查是否是一个直接继承 BaseTool 的子类 (不是抽象基类自身)
-                if isinstance(attr, type) and issubclass(attr, Tool) and attr is not Tool:
-                    try:
-                        # 尝试无参实例化
-                        tool_instance = attr()  # type: ignore
-                        tools.append(tool_instance)
-                    except Exception as e:
-                        logger.warning("自动实例化由 '%s' 定义的 %s 失败，请检查是否需要参数: %s", filepath, attr_name, e)
+def _split_tool_entries(value: str) -> list[str]:
+    entries: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for character in value:
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth = max(0, depth - 1)
+        if depth == 0 and (character == "," or character.isspace()):
+            item = "".join(current).strip()
+            if item:
+                entries.append(item)
+            current = []
+            continue
+        current.append(character)
+    item = "".join(current).strip()
+    if item:
+        entries.append(item)
+    return entries
 
-        except Exception as e:
-            logger.error("加载包含动态工具的 py 文件 '%s' 失败: %s", filepath, e)
 
-        return tools
+def _string_list(value: Any, *, tool_entries: bool = False) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        values = _split_tool_entries(value) if tool_entries else [value]
+    elif isinstance(value, Iterable) and not isinstance(value, (dict, bytes)):
+        values = list(value)
+    else:
+        raise ValueError(f"Expected a string or list, got {type(value).__name__}")
+    return [str(item).strip() for item in values if str(item).strip()]
+
+
+def _expand_braces(pattern: str) -> list[str]:
+    match = re.search(r"\{([^{}]+)\}", pattern)
+    if match is None:
+        return [pattern]
+    expanded: list[str] = []
+    prefix = pattern[: match.start()]
+    suffix = pattern[match.end() :]
+    for alternative in match.group(1).split(","):
+        expanded.extend(_expand_braces(prefix + alternative.strip() + suffix))
+    return expanded
+
+
+def _path_patterns(value: Any) -> list[str]:
+    if value is None:
+        return []
+    values = (
+        [value]
+        if isinstance(value, str)
+        else list(value)
+        if isinstance(value, Iterable) and not isinstance(value, (dict, bytes))
+        else None
+    )
+    if values is None:
+        raise ValueError(f"Expected paths to be a string or list, got {type(value).__name__}")
+
+    patterns: list[str] = []
+    for raw_value in values:
+        text = str(raw_value or "")
+        current: list[str] = []
+        depth = 0
+        parts: list[str] = []
+        for character in text:
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth = max(0, depth - 1)
+            if character == "," and depth == 0:
+                part = "".join(current).strip()
+                if part:
+                    parts.append(part)
+                current = []
+            else:
+                current.append(character)
+        part = "".join(current).strip()
+        if part:
+            parts.append(part)
+        for item in parts:
+            normalized = item[:-3] if item.endswith("/**") else item
+            patterns.extend(_expand_braces(normalized))
+
+    normalized_patterns = [
+        item.strip().replace("\\", "/")
+        for item in patterns
+        if item.strip()
+    ]
+    if normalized_patterns and all(item == "**" for item in normalized_patterns):
+        return []
+    return list(dict.fromkeys(normalized_patterns))
+
+
+def _boolean(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1", "on"}:
+            return True
+        if normalized in {"false", "no", "0", "off", ""}:
+            return False
+    return bool(value)
+
+
+def load_skill_manifest(file_path: str | os.PathLike[str]) -> SkillManifest:
+    """Parse only frontmatter and return the indexed Skill metadata."""
+
+    path = Path(file_path).expanduser().resolve(strict=True)
+    if path.name != SKILL_FILENAME or not path.is_file():
+        raise ValueError(f"Skill definition must be a {SKILL_FILENAME} file: {path}")
+    payload = _read_frontmatter(path)
+    known_keys = {
+        "name",
+        "description",
+        "when_to_use",
+        "allowed-tools",
+        "argument-hint",
+        "context",
+        "agent",
+        "model",
+        "paths",
+        "disable-model-invocation",
+    }
+    return SkillManifest(
+        name=payload.get("name", path.parent.name),
+        description=payload.get("description", ""),
+        when_to_use=payload.get("when_to_use", ""),
+        directory=str(path.parent),
+        file_path=str(path),
+        allowed_tools=_string_list(
+            payload.get("allowed-tools"),
+            tool_entries=True,
+        ),
+        argument_hint=str(payload.get("argument-hint", "") or "").strip(),
+        context=str(payload.get("context") or "inline").strip(),
+        agent=str(payload["agent"]).strip() if payload.get("agent") is not None else None,
+        model=str(payload["model"]).strip() if payload.get("model") is not None else None,
+        paths=_path_patterns(payload.get("paths")),
+        disable_model_invocation=_boolean(
+            payload.get("disable-model-invocation", False)
+        ),
+        metadata={key: value for key, value in payload.items() if key not in known_keys},
+    )
+
+
+def load_skill_body(manifest: SkillManifest, args: str = "") -> str:
+    """Read and render a Skill body at invocation time."""
+
+    path = Path(manifest.file_path)
+    with path.open("r", encoding="utf-8-sig") as handle:
+        if handle.readline().strip() != "---":
+            raise ValueError(f"{path} must begin with YAML frontmatter")
+        for line in handle:
+            if line.strip() == "---":
+                break
+        else:
+            raise ValueError(f"Unclosed YAML frontmatter in {path}")
+        body = handle.read().strip()
+
+    if not body:
+        raise ValueError(f"Skill body is empty: {path}")
+    return body.replace("${SKILL_DIR}", manifest.directory).replace("$ARGUMENTS", str(args or ""))
+
+
+__all__ = [
+    "SKILL_FILENAME",
+    "discover_skill_files",
+    "load_skill_body",
+    "load_skill_manifest",
+]

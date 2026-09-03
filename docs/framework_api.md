@@ -1,244 +1,193 @@
 # Framework API
 
-这份文档定义 EasyAgent 当前推荐的公共 SDK 边界，也说明哪些模块适合上层产品直接依赖。
+新项目应从 `easyagent` 或 `easyagent.*` 导入。内部的 `core/`、`agent/`、`Tool/`、`runtime/` 等目录不是产品侧稳定入口。
 
-相关文档：
+## 1. Agent 与执行
 
-- [README](../README.md)
-- [Config Reference](./config_reference.md)
-- [Agent Guide](./agent_guide.md)
-- [Tool System Guide](./tool_system_guide.md)
-- [Prompt System Guide](./prompt_system_guide.md)
-
-## 1. 公共入口原则
-
-新项目优先从 `easyagent` 或 `easyagent.*` 导入。
-不要把 `agent/`、`core/`、`Tool/`、`runtime/` 当作稳定 SDK 边界。
-
-原因：
-
-- `easyagent.*` 是对外承诺的模块层
-- 内部目录更偏实现组织，后续可能继续演进
-- 上层产品应依赖稳定包装层，而不是内部文件结构
-
-## 2. 顶层导出
-
-最常见的顶层导出：
-
-```python
-from easyagent import BasicAgent, EasyLLM, Config, ToolRegistry
-```
-
-顶层适合快速原型，但做产品时建议逐步切到子模块导入，代码会更清晰。
-
-## 3. 公共子模块
-
-### `easyagent.agents`
-
-导出：
+`easyagent` 和 `easyagent.agents` 导出：
 
 - `BaseAgent`
 - `BasicAgent`
-- `ConversationalAgent`
-- `PlanningAgent`
-- `ReactAgent`
-- `StructuredOutputAgent`
+- `ConversationHistory`
+- `BaseAgentExecutor`
+- `DefaultAgentExecutor`
+- `AgentExecutionServices`
+- `AgentInvocationState`
+- `AgentInvocationPhase`
 
-用途：
+框架只维护 BaseAgent/BasicAgent，不导出 specialized agent。
 
-- 组装 agent
-- 替换默认运行组件
-- 做产品自己的 agent 子类
+## 2. 模型和配置
 
-详见：
-
-- [Agent Guide](./agent_guide.md)
-
-### `easyagent.llms`
-
-导出：
+`easyagent.llms`：
 
 - `EasyLLM`
 
-用途：
-
-- 初始化 provider
-- 配置模型、base_url、api_key、reasoning
-- 统一 tool-calling / streaming 接口
-
-详见：
-
-- [LLM Provider Guide](./llm_provider_guide.md)
-
-### `easyagent.config`
-
-导出：
+`easyagent.config`：
 
 - `Config`
 
-用途：
+EasyLLM 统一 provider 请求、canonical codec、tool calling、streaming 和 usage 提取。Agent 流接口与 LLM 原始流接口是不同层级。
 
-- 控制 tool schema mode
-- cache policy
-- worktree / shell / roots
-- compaction、subagent、reasoning 持久化等
+## 3. Prompt 与 MetaMessage
 
-详见：
+`easyagent.prompting`：
 
-- [Config Reference](./config_reference.md)
+- `BaseSystemPromptComposer`
+- `SystemPromptComposer`
+- `PromptBuildContext`
+- `PromptBlock`
+- `PromptPlacement`
+- `SystemPromptTemplate`
 
-### `easyagent.tools`
+`easyagent.metamessages`：
 
-导出：
+- `BaseMetaMessageManager`
+- `MetaMessageManager`
+- `MetaMessage`
+- `MetaMessageContext`
+- `MetaMessageLifecycle`
+- `MetaMessageEvent`
+
+Prompt 管理 system/system reminder；MetaMessage 管理 history 尾部的运行时注入。
+
+## 4. Tool、Permission、Hook、Callback
+
+`easyagent.tools`：
 
 - `Tool`
-- `ToolRegistry`
-- `ToolResult`
 - `ToolSpec`
+- `ToolResult`
+- `ToolRegistry`
 - `ToolConflictPolicy`
+- `ToolSideEffectLevel`
 - `ToolVisibilityScope`
-- 内置 `register_*` helper
+- builtin `register_*` helpers
 
-用途：
+`easyagent.permissions`：
 
-- 自定义工具
-- 注册内置工具
-- 批量装配 code agent 工具集合
-
-详见：
-
-- [Tool System Guide](./tool_system_guide.md)
-- [Builtin Tools Catalog](./builtin_tools_catalog.md)
-- [Tool Authoring Guide](./tool_authoring_guide.md)
-
-### `easyagent.permissions`
-
-导出：
-
+- `PermissionEngine`
 - `PermissionContext`
+- `PermissionStore`
 - `PermissionRule`
 - `PermissionDecision`
 - `PermissionBehavior`
 - `PermissionMode`
-- `PermissionEngine`
-- `PermissionStore`
 - `RiskCategory`
 
-详见：
-
-- [Permissions Guide](./permissions_guide.md)
-
-### `easyagent.callbacks`
-
-导出：
-
-- `BaseCallback`
-- `CallbackEvent`
-- `CallbackManager`
-- `StreamingCallback`
-- `LoggingCallback`
-- `MetricsCallback`
-
-详见：
-
-- [Callbacks And Streaming Guide](./callbacks_and_streaming_guide.md)
-
-### `easyagent.hooks`
-
-导出：
+`easyagent.hooks`：
 
 - `BaseHook`
-- `HookAction`
-- `HookDecision`
-- `HookExecutionResult`
 - `HookManager`
+- `HookDecision`
+- `HookAction`
+- `HookExecutionResult`
 
-详见：
+`easyagent.callbacks`：
 
-- [Hooks And Guardrails Guide](./hooks_and_guardrails_guide.md)
+- `BaseCallback`
+- `CallbackManager`
+- `CallbackEvent`
+- `LoggingCallback`
+- `MetricsCallback`
+- `StreamingCallback`
 
-### `easyagent.prompting`
+Permission 决定能否执行；Hook 可以阻断或改写；Callback 只观察 RuntimeEvent。
 
-导出：
+## 5. Runtime 与协作
 
-- `PromptBlock`
-- `SystemPromptTemplate`
-- `BasePromptComposer`
-- `DefaultPromptComposer`
+`easyagent.runtime`：
 
-详见：
+- `ExecutionContext`
+- `RuntimeEvent`
+- `RuntimeEventType`
+- `RuntimeEventBus`
+- `AgentStreamEvent`
+- `AgentStreamEventType`
+- `BaseMultiAgentRuntime`
+- `MultiAgentRuntime`
+- `AgentRuntimeManager`
+- `AgentHandle`
+- `BackgroundAgentHandle`
+- `MailboxMessage`
+- `CompletionRecord`
+- `TeamManager`
+- `TeamHandle`
 
-- [Prompt System Guide](./prompt_system_guide.md)
-- [Prompt Composer Guide](./prompt_composer_guide.md)
+产品通常只需调用 `agent.with_multi_agent()`；需要替换运行策略时再直接使用 manager/handle 类型。
 
-### `easyagent.reminders`
+## 6. Plan、Task、Skill、Context
 
-导出：
+`easyagent.plans`：
 
-- `RuntimeReminder`
-- `BaseRuntimeReminderSource`
-- `StaticRuntimeReminderSource`
+- `BasePlanMode`
+- `PlanModeManager`
+- `PlanModeConfig`
+- `PlanModeState`
+- `ExecutionMode`
 
-详见：
+`easyagent.tasks`：
 
-- [Runtime Reminders Guide](./runtime_reminders_guide.md)
+- `TaskService`
+- `TaskRecord`
+- `TaskStatus`
+- `BaseTaskStore`
+- `InMemoryTaskStore`
+- `SQLiteTaskStore`
 
-### `easyagent.skills`
+`easyagent.skills`：
 
-导出：
-
-- `BaseSkill`
-- `SkillConfig`
 - `SkillManifest`
-- `SkillRegistry`
 - `SkillManager`
 - `SkillTool`
-- `LoadSkillTool`
-- `UnloadSkillTool`
-- `MetaSkill`
-- `FolderSkill` / `MarkdownSkill` / `YAMLSkill`
-- `MCPSkill` / `MCPPromptSkill`
+- directory discovery and lazy `SKILL.md` loading
 
-详见：
-
-- [Skill System Guide](./skill_system_guide.md)
-
-### `easyagent.context`
-
-导出：
+`easyagent.context`：
 
 - `ContextManager`
 - `ContextBuilder`
 - `BaseContextSource`
+- `ContextItem`
 - `TokenBudget`
 - `TokenCounter`
-- `BaseHistoryCompactor`
-- `LLMHistoryCompactor`
-- `RuleBasedHistoryCompactor`
-- 多种 formatter / compressor
+- history compactor、compressor 和 formatter 实现
 
-详见：
+## 7. Observability 与 Training
 
-- [Context And Compaction Guide](./context_and_compaction_guide.md)
+`easyagent.observability`：
 
-### `easyagent.memory`
+- `BaseObservabilityManager`
+- `ObservabilityManager`
+- `BaseObservabilityStore`
+- `InMemoryObservabilityStore`
+- `SQLiteObservabilityStore`
+- `AgentInvoke`
+- `LLMInvoke`
+- 对应 stats model
 
-导出：
+`easyagent.training`：
 
-- `MemoryManage`
-- `MemoryConfig`
-- `MemoryItem`
-- `MemoryType`
-- `WorkingMemory`
-- `BaseMemory`
+- `TrainingExporter`
+- `TrainingDataFilter`
+- `SuccessfulAgentInvokeFilter`
+- `TrainingDataFormat`
+- `TrainingExportReport`
 
-详见：
+Training 只消费 observability store，不是 Agent 内部执行模块。
 
-- [Memory System Guide](./memory_system_guide.md)
+## 8. CodeIntel、MCP、Worktree
 
-### `easyagent.session`
+`easyagent.codeintel` 导出 provider、manager、LSP client、query/result model 和 workspace cache。
 
-导出：
+`easyagent.mcp` 导出 MCP client/hub/runtime/tool manager、连接管理、auth、cache、policy 和 capability snapshot。
+
+`easyagent.worktree` 导出 `WorktreeManager`、`GitWorktreeInfo` 和 `GitWorktreeSession`。
+
+这些能力均通过对应 `agent.with_*` 安装。
+
+## 9. Session
+
+`easyagent.session`：
 
 - `SessionStore`
 - `ConversationStore`
@@ -246,161 +195,31 @@ from easyagent import BasicAgent, EasyLLM, Config, ToolRegistry
 - `ComponentRestoreReport`
 - `RestoreIssue`
 
-详见：
+Snapshot 显式记录模块 envelope。恢复不会扫描工具名推断模块。
 
-- [Session Restore Persistence Guide](./session_restore_persistence_guide.md)
-
-### `easyagent.runtime`
-
-导出：
-
-- `AgentRuntimeManager`
-- `AgentHandle`
-- `BackgroundAgentHandle`
-- `ExecutionContext`
-- `MailboxMessage`
-- `CompletionRecord`
-- `TeamManager`
-- `TeamHandle`
-
-详见：
-
-- [Runtime Collaboration Guide](./runtime_collaboration_guide.md)
-
-### `easyagent.tasks`
-
-导出：
-
-- `TaskService`
-- `TaskRecord`
-- `TaskStatus`
-- `InMemoryTaskStore`
-- `SQLiteTaskStore`
-
-详见：
-
-- [Tasks Guide](./tasks_guide.md)
-
-### `easyagent.mcp`
-
-导出：
-
-- `MCPToolManager`
-- `register_mcp_tools`
-- `register_mcp_resource_hub_tools`
-- `build_mcp_hub_resource_tools`
-- `MCPClient`
-- `MCPHub`
-- `MCPRuntimeManager`
-- `MCPConnectionManager`
-- `MCPAuthConfig`
-- `MCPPolicyContext`
-
-详见：
-
-- [MCP Guide](./mcp_guide.md)
-
-### `easyagent.codeintel`
-
-导出：
-
-- `CodeIntelManager`
-- `CodeIntelProvider`
-- `LSPCodeIntelProvider`
-- `WorkspaceCodeIntelCache`
-- 位置、诊断、符号相关 query / result model
-
-详见：
-
-- [CodeIntel Guide](./codeintel_guide.md)
-
-### `easyagent.observability`
-
-导出：
-
-- `BaseObservabilityRecorder`
-- `InMemoryObservabilityRecorder`
-
-详见：
-
-- [Observability And Cache Guide](./observability_and_cache_guide.md)
-
-### `easyagent.rag`
-
-导出：
-
-- `RAGPipeline`
-- `DocumentLoader`
-- `BaseChunker`
-- `BaseEmbedding`
-- `BaseRetriever`
-- `BaseVectorStore`
-- 多种 chunker / retriever / vectorstore / query transformer
-
-详见：
-
-- [RAG Guide](./rag_guide.md)
-
-### `easyagent.worktree`
-
-导出：
-
-- `WorktreeManager`
-- `GitWorktreeInfo`
-- `GitWorktreeSession`
-
-详见：
-
-- [Worktree Guide](./worktree_guide.md)
-
-## 4. 一般不要直接依赖的内部目录
-
-这些目录目前主要是内部实现，不建议新项目直接当 SDK 用：
-
-- `agent/`
-- `core/`
-- `Tool/`
-- `skill/`
-- `runtime/`
-- `context/`
-- `memory/`
-- `task/`
-- `observability/`
-
-只有在做框架二次开发，或你明确知道要替换内部实现组件时，才应直接引用这些路径。
-
-## 5. 一个推荐的产品骨架
+## 10. 推荐装配
 
 ```python
-from easyagent import BasicAgent, Config, EasyLLM
+from easyagent import BasicAgent, Config, EasyLLM, PlanModeConfig
+from easyagent.context import ContextManager
 from easyagent.tools import ToolRegistry, register_filesystem_tools
-from easyagent.permissions import PermissionContext, PermissionEngine
-from easyagent.callbacks import CallbackManager
-from easyagent.observability import InMemoryObservabilityRecorder
 
-llm = EasyLLM(provider="openai", base_url="http://127.0.0.1:5124/v1", api_key="x", model="qwen3.5-9b")
-config = Config(tool_schema_mode="deferred")
+llm = EasyLLM(
+    provider="openai",
+    base_url="http://127.0.0.1:5124/v1",
+    api_key="122",
+    model="qwen3.5-9b",
+)
 registry = ToolRegistry()
 register_filesystem_tools(registry, workspace_root=".")
 
-agent = BasicAgent(
-    name="product-agent",
-    llm=llm,
-    config=config,
-    enable_tool=True,
-    tool_registry=registry,
-    permission_engine=PermissionEngine(),
-    permission_context=PermissionContext(),
-    callback_manager=CallbackManager(),
-    observability_recorder=InMemoryObservabilityRecorder(),
+agent = (
+    BasicAgent("product-agent", llm, config=Config(workspace_root="."))
+    .with_tool(registry)
+    .with_context(ContextManager(max_tokens=16000))
+    .with_plan(config=PlanModeConfig(register_tools=True))
+    .with_observability(path=".easyagent/observability.sqlite3")
 )
 ```
 
-## 6. 阅读顺序建议
-
-推荐顺序：
-
-1. [README](../README.md)
-2. [Config Reference](./config_reference.md)
-3. [Agent Guide](./agent_guide.md)
-4. 根据你的目标继续看 Tool / Prompt / Runtime / Session / Memory / MCP
+完整真实过程见 [`example_modular_agent_framework.py`](../example/example_modular_agent_framework.py)。

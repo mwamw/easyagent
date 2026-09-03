@@ -117,22 +117,6 @@ def test_registry_tool_visibility_and_runtime_cleanup():
     assert not registry.has_tool("json_tool")
 
 
-def test_demand_skill_tool_result_is_annotated():
-    registry = ToolRegistry()
-    tool = EchoTool()
-    tool.mark_as_demand_skill_tool("demo_skill")
-    registry.mount_runtime_tool(tool)
-
-    result = registry.execute_tool_result("echo_tool", {"text": "hello"})
-    text = result.to_display_string()
-
-    assert result.metadata["demand_skill_tool"] is True
-    assert result.metadata["demand_skill_name"] == "demo_skill"
-    assert result.metadata["tool_visibility"] == "runtime"
-    assert "来自按需 Skill 的临时挂载" in text
-    assert "echo:hello" in text
-
-
 def test_registry_requires_confirmation_short_circuits_execution():
     registry = ToolRegistry()
     tool = ConfirmTool()

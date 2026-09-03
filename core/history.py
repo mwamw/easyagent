@@ -7,8 +7,6 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .Message import Message
-
 CanonicalBlockType = Literal[
     "text",
     "reasoning",
@@ -204,33 +202,6 @@ def _generic_canonical_messages_from_history_entry(
         for item in message:
             entries.extend(_generic_canonical_messages_from_history_entry(item, provider_name=provider_name))
         return entries
-
-    if isinstance(message, Message):
-        role = "tool" if message.role in {"tool", "function"} else str(message.role)
-        blocks: list[CanonicalBlock]
-        if role == "tool":
-            blocks = [
-                CanonicalBlock(
-                    type="function_response",
-                    call_id=getattr(message, "tool_call_id", None),
-                    name=getattr(message, "name", None),
-                    output=message.content,
-                    payload=_json_safe(message.to_dict()),
-                    metadata={"provider_block_type": "message_tool_result"},
-                )
-            ]
-        else:
-            blocks = [CanonicalBlock(type="text", text=message.content)]
-        return [
-            CanonicalMessage(
-                role=role,  # type: ignore[arg-type]
-                content=blocks,
-                provider=provider_name,
-                provider_message_type=message.role,
-                time=message.time,
-                metadata=_json_safe(message.metadata or {}),
-            )
-        ]
 
     if not isinstance(message, dict):
         return [

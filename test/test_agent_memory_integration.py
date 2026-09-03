@@ -94,10 +94,7 @@ class TestAgentMemoryIntegration:
             name="IntegrationTestAgent",
             llm=self.llm,
             system_prompt="你是一个具有记忆系统的测试AI。请按照用户的指令进行操作。",
-            enable_tool=True,
-            tool_registry=self.tool_registry,
-            verbose_thinking=False
-        ).with_memory(self.mm)
+        ).with_tool(self.tool_registry).with_memory(self.mm)
         
         # .with_memory 应该自动注册了工具
         tools = self.tool_registry.get_openai_tools()

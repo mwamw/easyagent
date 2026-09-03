@@ -158,9 +158,7 @@ class OrchestratorIntegrationRunner:
                 llm=self.llm,
                 system_prompt="你是一个数学家。碰到数学计算务必使用 calculator_tool，并将计算结果反馈。",
                 description="擅长执行复杂数学运算步骤，带有精确计算器工具",
-                enable_tool=True,
-                tool_registry=registry
-            )
+            ).with_tool(registry)
             logic_agent = BasicAgent(
                 name="LogicWorker",
                 llm=self.llm,

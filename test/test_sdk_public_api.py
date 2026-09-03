@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import easyagent
 from agent import BasicAgent as InternalBasicAgent
 from core.llm import EasyLLM as InternalEasyLLM
-from observability import InMemoryObservabilityRecorder as InternalInMemoryObservabilityRecorder
+from observability import InMemoryObservabilityStore as InternalInMemoryObservabilityStore
+from training import TrainingExporter as InternalTrainingExporter
 from core.permissions import PermissionContext as InternalPermissionContext
 from codeintel import WorkspaceCodeIntelCache as InternalWorkspaceCodeIntelCache
 from task import TaskService as InternalTaskService
@@ -42,21 +43,24 @@ class TestSDKPublicAPI(unittest.TestCase):
         self.assertIs(easyagent.PermissionContext, InternalPermissionContext)
         self.assertIs(easyagent.TaskService, InternalTaskService)
         self.assertIs(easyagent.WorkspaceCodeIntelCache, InternalWorkspaceCodeIntelCache)
-        self.assertIs(easyagent.InMemoryObservabilityRecorder, InternalInMemoryObservabilityRecorder)
+        self.assertIs(easyagent.InMemoryObservabilityStore, InternalInMemoryObservabilityStore)
+        self.assertIs(easyagent.TrainingExporter, InternalTrainingExporter)
         self.assertTrue(hasattr(easyagent, "__version__"))
 
     def test_submodule_imports_are_available(self):
         from easyagent.agents import BasicAgent
         from easyagent.llms import EasyLLM
         from easyagent.mcp import MCPPolicyContext, register_mcp_tools
-        from easyagent.observability import InMemoryObservabilityRecorder
+        from easyagent.observability import InMemoryObservabilityStore
         from easyagent.permissions import PermissionBehavior, PermissionRule
         from easyagent.session import SessionRestoreReport
         from easyagent.tools import ToolRegistry
+        from easyagent.training import TrainingExporter
 
         self.assertIs(BasicAgent, InternalBasicAgent)
         self.assertIs(EasyLLM, InternalEasyLLM)
-        self.assertIs(InMemoryObservabilityRecorder, InternalInMemoryObservabilityRecorder)
+        self.assertIs(InMemoryObservabilityStore, InternalInMemoryObservabilityStore)
+        self.assertIs(TrainingExporter, InternalTrainingExporter)
         self.assertTrue(callable(register_mcp_tools))
         self.assertEqual(PermissionBehavior.ALLOW.value, "allow")
         self.assertTrue(hasattr(PermissionRule, "model_fields"))

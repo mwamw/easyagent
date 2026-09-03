@@ -22,15 +22,13 @@ def _anthropic_system_blocks(
     items: list[dict[str, Any]] = []
     cacheable_indexes: list[int] = []
     for block in blocks:
-        if block.partition == "dynamic":
-            continue
         text = block.render()
         if not text:
             continue
         index = len(items)
         item: dict[str, Any] = {"type": "text", "text": text}
         items.append(item)
-        if block.cacheable:
+        if block.partition != "dynamic" and block.cacheable:
             cacheable_indexes.append(index)
 
     if policy.enabled and policy.breakpoint_strategy != "none" and cacheable_indexes:

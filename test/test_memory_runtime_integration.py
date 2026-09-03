@@ -46,7 +46,12 @@ class MemoryRuntimeIntegrationTest(unittest.TestCase):
         agent = BasicAgent(name="memory-agent", llm=DummyLLM()).with_memory(memory_manage)
 
         prompt = agent.get_enhanced_prompt()
-        request_input = agent._build_start_messages("what is the secret?")
+        request_input = agent.context_manager.build_request_input(
+            "what is the secret?",
+            system_prompt=prompt,
+            replay_history=agent.replay_history,
+            provider_name=agent.llm.provider_name,
+        )
 
         self.assertIsNotNone(agent.context_manager)
         self.assertEqual(agent.context_manager.builder.source_names.count("memory"), 1)
@@ -66,7 +71,12 @@ class MemoryRuntimeIntegrationTest(unittest.TestCase):
         manager = ContextManager(max_tokens=20000)
 
         agent.with_context(manager)
-        request_input = agent._build_start_messages("continue")
+        request_input = manager.build_request_input(
+            "continue",
+            system_prompt=agent.get_enhanced_prompt(),
+            replay_history=agent.replay_history,
+            provider_name=agent.llm.provider_name,
+        )
 
         self.assertIs(agent.context_manager, manager)
         self.assertEqual(manager.builder.source_names.count("memory"), 1)

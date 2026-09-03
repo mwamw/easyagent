@@ -12,17 +12,9 @@ if project_root not in sys.path:
 from agent import BasicAgent
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import TeamManager
 from task import SQLiteTaskStore, TaskService
 from Tool import ToolRegistry
-from Tool.builtin import (
-    register_agent_runtime_tools,
-    register_agent_tool,
-    register_filesystem_tools,
-    register_send_message_tool,
-    register_team_create_tool,
-    register_team_delete_tool,
-)
+from Tool.builtin import register_filesystem_tools
 
 from core import enable_logging
 enable_logging()
@@ -68,47 +60,13 @@ def build_manager() -> tuple[BasicAgent, dict[str, object]]:
     agent = BasicAgent(
         name="Phase23FinalManager",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         config=config,
-        task_service=task_service,
-        verbose_thinking=True,
-        reasoning={"effort": "high"},
-    )
-
-    agent_tool = register_agent_tool(
-        registry,
-        parent_agent=agent,
+    ).with_tool(registry).with_task_service(task_service).with_multi_agent(
         workspace_root=workspace,
-        allowed_roots=(workspace,),
         storage_dir=os.path.join(example_dir, ".phase23-final-agents"),
         max_background_tasks=4,
     )
-    team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-    agent_tool.agent_runtime.bind_team_manager(team_manager)
-    register_agent_runtime_tools(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_send_message_tool(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_team_create_tool(
-        registry,
-        team_manager=team_manager,
-        parent_agent=agent,
-    )
-    register_team_delete_tool(
-        registry,
-        team_manager=team_manager,
-    )
-    agent.bind_runtime(
-        agent_runtime=agent_tool.agent_runtime,
-        team_manager=team_manager,
-    )
+    agent.reasoning = {"effort": "high"}
 
     root_task = task_service.create_task(
         title="Phase 2/3 final runtime completion",

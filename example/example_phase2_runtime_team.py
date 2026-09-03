@@ -13,18 +13,13 @@ from agent import BasicAgent
 from core import enable_logging
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import TeamManager
 from task import SQLiteTaskStore, TaskService
 from Tool import ToolRegistry
 from Tool.builtin import (
-    register_agent_tool,
     register_file_edit_tool,
     register_file_write_tool,
     register_filesystem_tools,
-    register_send_message_tool,
     register_shell_tools,
-    register_team_create_tool,
-    register_team_delete_tool,
 )
 
 
@@ -35,7 +30,9 @@ async def main() -> None:
     workspace = project_root
     llm = EasyLLM(
         provider="openai",
-        model="gemini-3.1-pro-preview"
+        base_url="http://127.0.0.1:5124/v1",
+        api_key="122",
+        model="qwen3.5-9b",
     )
     config = Config(
         workspace_root=workspace,
@@ -57,32 +54,13 @@ async def main() -> None:
     agent = BasicAgent(
         name="Phase2Manager",
         llm=llm,
-        tool_registry=registry,
-        reasoning={"effort":"high"},
-        enable_tool=True,
         config=config,
-        task_service=task_service,
-        verbose_thinking=True,
-    )
-
-    agent_tool = register_agent_tool(
-        registry,
-        parent_agent=agent,
+    ).with_tool(registry).with_task_service(task_service).with_multi_agent(
         workspace_root=workspace,
-        allowed_roots=(workspace,),
         storage_dir=os.path.join(example_dir, ".phase2-agents"),
         max_background_tasks=4,
     )
-    team_manager = TeamManager(agent_runtime=agent_tool.agent_runtime)
-    agent_tool.agent_runtime.bind_team_manager(team_manager)
-    register_send_message_tool(
-        registry,
-        agent_runtime=agent_tool.agent_runtime,
-        parent_agent=agent,
-    )
-    register_team_create_tool(registry, team_manager=team_manager)
-    register_team_delete_tool(registry, team_manager=team_manager)
-    agent.bind_runtime(agent_runtime=agent_tool.agent_runtime, team_manager=team_manager)
+    agent.reasoning = {"effort": "high"}
 
     query = """
 你是一个负责推进 EasyAgent Phase 2 的技术负责人。
@@ -111,7 +89,8 @@ async def main() -> None:
 
     print("=== Phase 2 Runtime Team Example ===")
     print("This example is intentionally not auto-tested. Run it manually while debugging.\n")
-    await agent.astream_invoke(query,max_iter=20)
+    async for event in agent.astream(query, max_iter=20):
+        print(event)
     # agent.invoke(query)
 
 if __name__ == "__main__":

@@ -1,30 +1,39 @@
-from agent.BasicAgent import BasicAgent
-from core.llm import EasyLLM
-from skill.meta_tools import MetaSkill
-from skill.registry import SkillRegistry
+"""Real directory-based Skill flow. Run manually when the local LLM is ready."""
+
+from pathlib import Path
+
+from easyagent import BasicAgent, EasyLLM, ToolRegistry
+from Tool.builtin import register_filesystem_tools
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 def main() -> None:
-    # 1. 准备全局 SkillRegistry，并从目录发现 on-demand skills
-    registry = SkillRegistry.instance()
-    registry.discover_from_directory("./skills")
-
-    # 2. 创建 Agent。这里不预加载业务 Skill，只加 MetaSkill
-    llm = EasyLLM()
-    agent = BasicAgent(name="skill_runtime_demo", llm=llm, enable_tool=True)
-    agent.with_skill(MetaSkill(registry, agent.skill_manager))
-
-    # 3. 此时主 system prompt 已包含：
-    #    - skill policy
-    #    - skill listing
-    #    具体 skill 正文不会常驻。模型需要时会调用 skill_tool，
-    #    skill 正文会进入当前回合的 runtime skill context。
-    query = (
-        "如果当前工具不足，请先查看可用技能并选择合适的 skill。"
-        "然后按需调用该 skill 来完成任务。"
+    llm = EasyLLM(
+        provider="openai",
+        base_url="http://127.0.0.1:5124/v1",
+        api_key="122",
+        model="qwen3.5-9b",
     )
-    result = agent.invoke(query)
+    tools = ToolRegistry()
+    register_filesystem_tools(
+        tools,
+        workspace_root=str(PROJECT_ROOT),
+        allowed_roots=[str(PROJECT_ROOT)],
+    )
+
+    agent = (
+        BasicAgent(name="skill-code-review", llm=llm)
+        .with_tool(tools)
+        .with_skill(SKILLS_DIR)
+    )
+    result = agent.invoke(
+        "使用 repository-review skill 审查 skill/manager.py，重点检查生命周期和权限清理。"
+    )
     print(result)
+    agent.close()
 
 
 if __name__ == "__main__":

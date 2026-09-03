@@ -41,11 +41,8 @@ def run_provider(provider: str, *, invoke: bool) -> CaseResult:
         agent = BasicAgent(
             name=f"provider_{provider}",
             llm=llm,
-            enable_tool=True,
-            tool_registry=registry,
             config=Config(tool_schema_mode="deferred"),
-            permission_context=build_permission_context(),
-        )
+        ).with_tool(registry).with_permissions(context=build_permission_context())
         tool_payload = agent.get_provider_tools()
         output = None
         if invoke:

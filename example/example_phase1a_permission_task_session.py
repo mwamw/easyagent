@@ -115,16 +115,13 @@ def build_agent() -> BasicAgent:
     agent = BasicAgent(
         name="phase1a-manager",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
-        task_service=task_service,
         config=config,
         system_prompt=(
             "You are validating Phase 1A of EasyAgent. "
             "Use TodoWrite as a task-backed summary view, respect permission rules, "
             "and explain what state would survive a session restore."
         ),
-    )
+    ).with_tool(registry).with_task_service(task_service)
 
     agent.set_permission_rules(
         "workspace_allow",
@@ -201,7 +198,7 @@ def main() -> None:
     print()
     print("Run manually if you want to inspect the current framework behavior:")
     print()
-    print("result = agent.invoke_with_tool(prompt, max_iter=12)")
+    print("result = agent.invoke(prompt, max_iter=12)")
     print(f'agent.save_session("phase1a-demo", store="{SESSION_DB}")')
     print(
         "restored = BasicAgent.load_session("

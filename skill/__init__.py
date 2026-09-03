@@ -1,32 +1,24 @@
-# Skill 技能系统模块
-from .base import BaseSkill, SkillConfig, SkillManifest
-from .manager import SkillManager
-from .registry import SkillRegistry
-from .yaml_loader import YAMLSkill, YAMLSkillLoader, MarkdownSkill, MarkdownSkillLoader
-from .folder_loader import FolderSkill, FolderSkillLoader
-from .meta_tools import (
-    SkillDiscoveryTool,
-    SkillTool,
-    LoadSkillTool,
-    UnloadSkillTool,
-    MetaSkill,
+"""Directory-based Agent Skills with progressive disclosure."""
+
+from .base import SkillExecutionContext, SkillManifest
+from .folder_loader import (
+    SKILL_FILENAME,
+    discover_skill_files,
+    load_skill_body,
+    load_skill_manifest,
 )
+from .manager import SkillManager
+from .tool import SKILL_TOOL_PROMPT, SkillTool, SkillToolInput
 
 __all__ = [
-    "BaseSkill",
-    "SkillConfig",
-    "SkillManifest",
+    "SKILL_FILENAME",
+    "SKILL_TOOL_PROMPT",
+    "SkillExecutionContext",
     "SkillManager",
-    "SkillRegistry",
-    "YAMLSkill",
-    "YAMLSkillLoader",
-    "MarkdownSkill",
-    "MarkdownSkillLoader",
-    "FolderSkill",
-    "FolderSkillLoader",
-    "SkillDiscoveryTool",
+    "SkillManifest",
     "SkillTool",
-    "LoadSkillTool",
-    "UnloadSkillTool",
-    "MetaSkill",
+    "SkillToolInput",
+    "discover_skill_files",
+    "load_skill_body",
+    "load_skill_manifest",
 ]

@@ -10,7 +10,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent.BasicAgent import BasicAgent
-from agent.tool_interrupt_controller import InMemoryToolInterruptController
+from agent.components.tool_interrupt_controller import InMemoryToolInterruptController
 from core.Exception import ToolConfirmationRequired
 from core.llm import EasyLLM
 from Tool.BaseTool import Tool
@@ -92,6 +92,9 @@ class ConfirmationProvider:
                 yield item
         return _stream()
 
+    def apply_cache_policy(self, request, request_input):
+        return request
+
 
 class DummyLLM(EasyLLM):
     def __init__(self, provider):
@@ -128,16 +131,14 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.agent = BasicAgent(
             name="interruptible",
             llm=DummyLLM(ConfirmationProvider()),
-            enable_tool=True,
-            tool_registry=self.registry,
-        )
+        ).with_tool(self.registry)
 
     def test_invoke_raises_confirmation_required(self):
         with self.assertRaises(ToolConfirmationRequired) as ctx:
             self.agent.invoke("执行危险操作")
 
         exc = ctx.exception
-        interrupt = self.agent.get_last_tool_interrupt()
+        interrupt = self.agent.get_pending_interruption()
 
         self.assertEqual(exc.tool_name, "dangerous")
         self.assertEqual(exc.status, "needs_confirmation")
@@ -145,7 +146,7 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(interrupt)
         assert interrupt is not None
         self.assertEqual(interrupt["status"], "needs_confirmation")
-        self.assertEqual(self.agent.get_history_length(), 3)
+        self.assertEqual(self.agent.get_history_length(), 2)
 
     def test_execute_confirmed_tool_result_bypasses_confirmation_short_circuit(self):
         result = self.registry.execute_confirmed_tool_result("dangerous", {})
@@ -153,49 +154,44 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.to_display_string(), "should not run")
         self.assertEqual(self.tool.run_count, 1)
 
-    def test_resolve_last_tool_interrupt_commits_pending_step(self):
-        with self.assertRaises(ToolConfirmationRequired):
-            self.agent.invoke("执行危险操作")
-
-        resolved = self.agent.resolve_last_tool_interrupt(
-            content="用户已确认执行，工具输出：操作完成。",
-            commit_pending_step=True,
-        )
-
-        self.assertEqual(resolved["tool_name"], "dangerous")
-        self.assertFalse(self.agent.has_pending_tool_interrupt())
-        self.assertIsNone(self.agent.get_pending_step_state())
-        history_text = "\n".join(
-            str(entry)
-            for entry in self.agent.get_history()
-        )
-        self.assertIn("操作完成", history_text)
-
-    async def test_astream_invoke_with_tool_emits_interruption_event(self):
+    async def test_astream_emits_structured_error_before_raising_interruption(self):
         events = []
-        async for event in self.agent.astream_invoke_with_tool("执行危险操作"):
-            events.append(event)
+        with self.assertRaises(ToolConfirmationRequired):
+            async for event in self.agent.astream("执行危险操作"):
+                events.append(event)
 
-        event_types = [event["type"] for event in events]
-        self.assertEqual(event_types, ["round_start", "text_delta", "tool_call", "tool_result", "interruption"])
+        event_types = [event.type.value for event in events]
+        self.assertEqual(event_types, ["text_delta", "tool_call", "error"])
         interruption = events[-1]
-        self.assertEqual(interruption["reason"], "needs_confirmation")
-        self.assertEqual(interruption["tool_name"], "dangerous")
-        self.assertEqual(self.agent.get_last_tool_interrupt()["tool_name"], "dangerous")
+        self.assertTrue(interruption.data["interrupted"])
+        self.assertEqual(interruption.data["error_type"], "ToolConfirmationRequired")
+        self.assertEqual(self.agent.get_pending_interruption()["tool_name"], "dangerous")
 
     def test_basic_agent_uses_custom_interrupt_controller(self):
         controller = RecordingInterruptController()
         agent = BasicAgent(
             name="interruptible-custom",
             llm=DummyLLM(ConfirmationProvider()),
-            enable_tool=True,
-            tool_registry=self.registry,
-            tool_interrupt_controller=controller,
-        )
+        ).with_tool(self.registry)
+        agent.with_interruptions(controller)
 
         with self.assertRaises(ToolConfirmationRequired):
             agent.invoke("执行危险操作")
 
         self.assertEqual(controller.created_statuses, ["needs_confirmation"])
         self.assertEqual(controller.payloads[0]["tool_name"], "dangerous")
-        self.assertEqual(agent.get_last_tool_interrupt()["tool_name"], "dangerous")
+        self.assertEqual(agent.get_pending_interruption()["tool_name"], "dangerous")
+
+    def test_resolve_pending_interruption_commits_external_tool_result(self):
+        with self.assertRaises(ToolConfirmationRequired):
+            self.agent.invoke("执行危险操作")
+
+        resolved = self.agent.resolve_pending_interruption(
+            content="用户确认后由宿主执行完成。",
+            ephemeral_context={"confirmation": "approved"},
+        )
+
+        self.assertEqual(resolved["status"], "resolved")
+        self.assertIsNone(self.agent.get_pending_interruption())
+        self.assertEqual(self.agent.get_canonical_history()[-1].role, "tool")
+        self.assertEqual(len(self.agent.metamessage_manager.list_pending()), 1)

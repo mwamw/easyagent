@@ -158,10 +158,9 @@ Permission 系统负责回答一个关键问题：
 最常见接法：
 
 ```python
-agent = BasicAgent(
-    ...,
-    permission_engine=PermissionEngine(),
-    permission_context=PermissionContext(),
+agent = BasicAgent(...).with_permissions(
+    engine=PermissionEngine(),
+    context=PermissionContext(),
 )
 ```
 

@@ -130,10 +130,7 @@ class TestMemoryToolWithAgent:
             name="MemoryAgent",
             llm=self.llm,
             system_prompt="你是一个可以通过调用独立的各个记忆管理工具（例如 add_memory_tool, search_memory_tool 等）来管理记忆的智能助手。",
-            enable_tool=True,
-            tool_registry=self.tool_registry,
-            verbose_thinking=False
-        )
+        ).with_tool(self.tool_registry)
         
         self._memory_id_cache = None
         print_pass("测试环境初始化完成")

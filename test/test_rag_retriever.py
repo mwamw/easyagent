@@ -34,6 +34,8 @@ def get_embedding():
 
 def get_llm():
     global _llm
+    if not os.getenv("LLM_API_KEY"):
+        raise unittest.SkipTest("RAG real-LLM tests require LLM_API_KEY")
     if _llm is None:
         _llm = EasyLLM()
     return _llm

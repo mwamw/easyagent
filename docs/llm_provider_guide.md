@@ -93,7 +93,7 @@ agent = BasicAgent(name="assistant", llm=llm)
 在 tool agent 中：
 
 ```python
-agent = BasicAgent(name="tool-agent", llm=llm, enable_tool=True, tool_registry=registry)
+agent = BasicAgent(name="tool-agent", llm=llm).with_tool(registry)
 ```
 
 ## 6. tool-calling 与 request buffer

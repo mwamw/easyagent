@@ -19,13 +19,14 @@ enable_logging("INFO")   # 或 "DEBUG"
 llm=EasyLLM()
 agent=BasicAgent(name="test",llm=llm)
 
-def test_normal_stream_invoke_with_tool(agent):
+def demonstrate_stream_with_tool(agent):
     agent.clear_history()
     from Tool.builtin import CalculatorTool
     agent.with_tool()
     agent.add_tool(CalculatorTool())
-    agent.stream_invoke("你好，请介绍一下你自己，调用工具帮我计算 4^12+6*412")
+    for event in agent.stream("你好，请介绍一下你自己，调用工具帮我计算 4^12+6*412"):
+        print(event)
     print()
 
 
-test_normal_stream_invoke_with_tool(agent)
+demonstrate_stream_with_tool(agent)

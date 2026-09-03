@@ -133,15 +133,12 @@ def build_agent() -> tuple[BasicAgent, str, str]:
         name="PhaseEHookManager",
         llm=llm,
         system_prompt="你是一个正在调试 EasyAgent Phase E 的 code agent。",
-        enable_tool=True,
-        tool_registry=registry,
-        hook_manager=hook_manager,
         config=Config(
             workspace_root=workspace,
             allowed_roots=[workspace],
         ),
-        reasoning={"effort": "high"},
-    )
+    ).with_tool(registry).with_hooks(hook_manager)
+    agent.reasoning = {"effort": "high"}
     return agent, workspace, session_db
 
 
@@ -219,14 +216,14 @@ def main() -> None:
     )
     print()
 
-    close_report = restored.close(close_worktree=False)
+    close_report = restored.close()
     print("=== Close Report ===")
     print(close_report)
 
 
 if __name__ == "__main__":
     # agent, workspace, session_db = build_agent()
-    # # asyncio.run(agent.astream_invoke("先阅读 notes.txt，再说明当前有哪些 guardrails，最后解释为什么 Bash 的危险命令会被阻断。", max_iter=10, temperature=0.7))
+    # asyncio.run(agent.ainvoke("先阅读 notes.txt，再说明当前有哪些 guardrails，最后解释为什么 Bash 的危险命令会被阻断。", max_iter=10, temperature=0.7))
     # bash_spec = agent.tool_registry.get_tool_spec("Bash")
     # print(bash_spec)
     main()

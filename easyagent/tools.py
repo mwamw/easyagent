@@ -14,8 +14,6 @@ from Tool.builtin import (
     register_agent_runtime_tools,
     register_ask_user_question_tool,
     register_codeintel_tools,
-    register_enter_plan_mode_tool,
-    register_exit_plan_mode_tool,
     register_file_edit_tool,
     register_file_write_tool,
     register_filesystem_tools,
@@ -28,6 +26,7 @@ from Tool.builtin import (
     register_team_delete_tool,
     register_worktree_tools,
 )
+from plan import register_enter_plan_mode_tool, register_exit_plan_mode_tool
 
 __all__ = [
     "Tool",

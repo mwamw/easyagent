@@ -25,7 +25,7 @@ def _clone_payload(value: Any) -> Any:
 class ReplayRequestInput:
     """Current-provider request buffer.
 
-    Stable system prompt stays out of replay history. Per-request reminders and
+    Stable system prompt stays out of replay history. Per-request system reminders and
     dynamic tail content are tracked separately, then materialized into the
     effective replay history view exposed through `replay_history`.
     """
@@ -37,7 +37,7 @@ class ReplayRequestInput:
     appended_replay_history: list[Any] = field(default_factory=list)
     system_prompt: Optional[str] = None
     system_prompt_blocks: list[CacheableBlock] = field(default_factory=list)
-    runtime_reminder_blocks: list[CacheableBlock] = field(default_factory=list)
+    system_reminder_blocks: list[CacheableBlock] = field(default_factory=list)
     dynamic_context_blocks: list[CacheableBlock] = field(default_factory=list)
     dynamic_tail_blocks: list[CacheableBlock] = field(default_factory=list)
     on_demand_expansion_blocks: list[CacheableBlock] = field(default_factory=list)
@@ -51,9 +51,9 @@ class ReplayRequestInput:
             item if isinstance(item, CacheableBlock) else CacheableBlock(**dict(item))
             for item in list(self.system_prompt_blocks or [])
         ]
-        self.runtime_reminder_blocks = [
+        self.system_reminder_blocks = [
             item if isinstance(item, CacheableBlock) else CacheableBlock(**dict(item))
-            for item in list(self.runtime_reminder_blocks or [])
+            for item in list(self.system_reminder_blocks or [])
         ]
         self.dynamic_context_blocks = [
             item if isinstance(item, CacheableBlock) else CacheableBlock(**dict(item))
@@ -67,6 +67,7 @@ class ReplayRequestInput:
             item if isinstance(item, CacheableBlock) else CacheableBlock(**dict(item))
             for item in list(self.on_demand_expansion_blocks or [])
         ]
+        self._validate_prompt_placements()
         if not self.dynamic_tail_blocks and self.dynamic_context_blocks:
             self.dynamic_tail_blocks = [CacheableBlock(**block.to_dict()) for block in self.dynamic_context_blocks]
         if self.system_prompt is None and self.system_prompt_blocks:
@@ -75,9 +76,31 @@ class ReplayRequestInput:
             self.persistent_replay_history = [_clone_payload(item) for item in self.replay_history]
         self._rebuild_replay_history()
 
+    def _validate_prompt_placements(self) -> None:
+        invalid_system = [
+            block.name for block in self.system_prompt_blocks
+            if block.placement != "system"
+        ]
+        if invalid_system:
+            names = ", ".join(invalid_system)
+            raise ValueError(
+                f"system_prompt_blocks must use placement='system': {names}"
+            )
+
+        invalid_reminders = [
+            block.name for block in self.system_reminder_blocks
+            if block.placement != "system_reminder"
+        ]
+        if invalid_reminders:
+            names = ", ".join(invalid_reminders)
+            raise ValueError(
+                "system_reminder_blocks must use "
+                f"placement='system_reminder': {names}"
+            )
+
     def render_system_prompt(self) -> Optional[str]:
         if self.system_prompt_blocks:
-            return render_blocks(self.system_prompt_blocks, include_dynamic=False)
+            return render_blocks(self.system_prompt_blocks, include_dynamic=True)
         return self.system_prompt
 
     @staticmethod
@@ -92,8 +115,8 @@ class ReplayRequestInput:
             )
         return "\n\n".join(rendered) or None
 
-    def render_runtime_reminders(self) -> Optional[str]:
-        return self._render_tagged_blocks(self.runtime_reminder_blocks, tag="system-reminder")
+    def render_system_reminders(self) -> Optional[str]:
+        return self._render_tagged_blocks(self.system_reminder_blocks, tag="system-reminder")
 
     def render_dynamic_tail(self) -> Optional[str]:
         return render_blocks(self.dynamic_tail_blocks, include_dynamic=True)
@@ -146,17 +169,20 @@ class ReplayRequestInput:
         )
         self.append_dynamic_tail_text(content)
 
-    def append_runtime_reminder_text(self, text: str) -> None:
+    def prepend_system_reminder_text(self, text: str) -> None:
         content = str(text or "").strip()
         if not content:
             return
         self.prepend_replay(create_codec(self.provider_name).query_to_replay(content))
 
-    def append_runtime_reminder_block(self, block: CacheableBlock) -> None:
-        self.runtime_reminder_blocks.append(
-            block if isinstance(block, CacheableBlock) else CacheableBlock(**dict(block))
-        )
-        content = self._render_tagged_blocks([self.runtime_reminder_blocks[-1]], tag="system-reminder")
+    def append_system_reminder_block(self, block: CacheableBlock) -> None:
+        resolved = block if isinstance(block, CacheableBlock) else CacheableBlock(**dict(block))
+        if resolved.placement != "system_reminder":
+            raise ValueError(
+                "system reminder blocks must use placement='system_reminder'"
+            )
+        self.system_reminder_blocks.append(resolved)
+        content = self._render_tagged_blocks([self.system_reminder_blocks[-1]], tag="system-reminder")
         if content:
             self.prepend_replay(create_codec(self.provider_name).query_to_replay(content))
 
@@ -220,7 +246,7 @@ class ReplayRequestInput:
 
     def apply_runtime_layers(self) -> None:
         self.prepended_replay_history = []
-        reminders = self.render_runtime_reminders()
+        reminders = self.render_system_reminders()
         if reminders:
             self.prepend_replay(create_codec(self.provider_name).query_to_replay(reminders))
         expansions = self.render_on_demand_expansions()
@@ -241,8 +267,8 @@ class ReplayRequestInput:
             system_prompt_blocks=[
                 CacheableBlock(**block.to_dict()) for block in self.system_prompt_blocks
             ],
-            runtime_reminder_blocks=[
-                CacheableBlock(**block.to_dict()) for block in self.runtime_reminder_blocks
+            system_reminder_blocks=[
+                CacheableBlock(**block.to_dict()) for block in self.system_reminder_blocks
             ],
             dynamic_context_blocks=[
                 CacheableBlock(**block.to_dict()) for block in self.dynamic_tail_blocks

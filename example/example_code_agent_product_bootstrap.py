@@ -11,12 +11,12 @@ project_root = os.path.abspath(os.path.join(example_dir, ".."))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from easyagent import BasicAgent, Config, EasyLLM
+from easyagent import BasicAgent, Config, EasyLLM, InMemoryObservabilityStore
 from easyagent.callbacks import CallbackManager, StreamingCallback
 from easyagent.guardrails import build_default_hook_manager
 from easyagent.hooks import BaseHook, HookDecision, HookManager
 from easyagent.permissions import PermissionContext, PermissionMode
-from easyagent.reminders import BaseRuntimeReminderSource, RuntimeReminder
+from easyagent.prompting import PromptBlock, SystemPromptComposer
 from easyagent.tools import (
     ToolRegistry,
     register_file_edit_tool,
@@ -26,21 +26,23 @@ from easyagent.tools import (
 )
 
 
-class ProductShellReminder(BaseRuntimeReminderSource):
-    """Example product-level runtime reminder."""
+class ProductPromptComposer(SystemPromptComposer):
+    """Add product prompt blocks without replacing framework defaults."""
 
     def __init__(self, product_name: str):
+        super().__init__()
         self.product_name = product_name
 
-    def build_runtime_reminders(self, agent):
+    def build(self, context):
         return [
-            RuntimeReminder(
+            PromptBlock(
                 name="product_shell",
                 content=(
                     f"你运行在 {self.product_name} 产品中。"
                     "在修改代码前先说明计划；如果需要高风险操作，先明确原因和影响范围。"
                 ),
-                stable=True,
+                placement="system_reminder",
+                order=120,
             )
         ]
 
@@ -81,18 +83,18 @@ def build_code_agent(workspace_root: str) -> BasicAgent:
     agent = BasicAgent(
         name="product-code-agent",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         config=config,
-        callback_manager=callback_manager,
-        hook_manager=hook_manager,
-        permission_context=PermissionContext(mode=PermissionMode.ASK),
         system_prompt=(
             "你是一个谨慎的代码助手。"
             "优先理解现有实现，做最小必要改动；如果发现风险，先解释再继续。"
         ),
     )
-    agent.add_runtime_reminder_source(ProductShellReminder("EasyAgent Demo IDE"))
+    agent.with_tool(registry)
+    agent.with_prompt(ProductPromptComposer("EasyAgent Demo IDE"))
+    agent.with_permissions(context=PermissionContext(mode=PermissionMode.ASK))
+    agent.with_callbacks(callback_manager)
+    agent.with_hooks(hook_manager)
+    agent.with_observability(store=InMemoryObservabilityStore())
     return agent
 
 
@@ -110,7 +112,8 @@ def main() -> None:
     print("\n=== Final Result ===\n")
     print(result)
     print("\n=== Observability Summary ===\n")
-    print(agent.get_observability_summary())
+    assert agent.observability is not None
+    print(agent.observability.summary())
 
 
 if __name__ == "__main__":

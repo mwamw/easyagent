@@ -13,6 +13,8 @@ if ROOT not in sys.path:
 from agent import BasicAgent
 from core.llm import EasyLLM
 from core.providers import AnthropicNativeProvider, GoogleNativeProvider, create_codec
+from observability import InMemoryObservabilityStore
+from runtime import AgentStreamEventType
 
 
 def _ns(**kwargs):
@@ -296,26 +298,26 @@ class TestProviderUsageMetrics(unittest.TestCase):
             base_url="http://mock.local/v1",
             client=client,
         )
-        agent = BasicAgent(name="usage-observability", llm=llm)
+        agent = BasicAgent(name="usage-observability", llm=llm).with_observability(
+            store=InMemoryObservabilityStore()
+        )
 
-        result = agent.stream_invoke("stream with usage")
+        events = list(agent.stream("stream with usage"))
 
-        self.assertEqual(result, "hello world")
-        llm_events = agent.get_recent_observability_events(limit=5, event_type="llm")
-        self.assertTrue(llm_events)
-        latest = llm_events[0]
-        self.assertEqual(latest["usageSource"], "provider")
-        self.assertEqual(latest["inputTokens"], 11)
-        self.assertEqual(latest["outputTokens"], 7)
-        self.assertEqual(latest["cachedInputTokens"], 4)
-        self.assertEqual(latest["reasoningTokens"], 3)
+        self.assertEqual(events[-1].type, AgentStreamEventType.FINAL)
+        self.assertEqual(events[-1].content, "hello world")
+        latest = agent.observability.latest()
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest.llm_invokes[-1].stats.input_tokens, 11)
+        self.assertEqual(latest.llm_invokes[-1].stats.output_tokens, 7)
+        self.assertEqual(latest.llm_invokes[-1].stats.cached_input_tokens, 4)
+        self.assertEqual(latest.llm_invokes[-1].stats.reasoning_tokens, 3)
 
-        summary = agent.get_observability_summary()
-        self.assertEqual(summary["inputTokens"], 11)
-        self.assertEqual(summary["outputTokens"], 7)
-        self.assertEqual(summary["totalTokens"], 18)
-        self.assertEqual(summary["cachedInputTokens"], 4)
-        self.assertEqual(summary["reasoningTokens"], 3)
+        summary = agent.observability.summary()
+        self.assertEqual(summary["input_tokens"], 11)
+        self.assertEqual(summary["output_tokens"], 7)
+        self.assertEqual(summary["total_tokens"], 18)
+        self.assertEqual(summary["cached_input_tokens"], 4)
 
 
 if __name__ == "__main__":

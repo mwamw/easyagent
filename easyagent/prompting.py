@@ -1,11 +1,13 @@
 """Stable public prompt-composition exports."""
 
-from agent import BasePromptComposer, DefaultPromptComposer
-from prompt import PromptBlock, SystemPromptTemplate
+from agent import BaseSystemPromptComposer, PromptBuildContext, SystemPromptComposer
+from prompt import PromptBlock, PromptPlacement, SystemPromptTemplate
 
 __all__ = [
-    "BasePromptComposer",
-    "DefaultPromptComposer",
+    "SystemPromptComposer",
+    "BaseSystemPromptComposer",
+    "PromptBuildContext",
     "PromptBlock",
+    "PromptPlacement",
     "SystemPromptTemplate",
 ]

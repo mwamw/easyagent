@@ -22,14 +22,14 @@ def main() -> None:
     agent = BasicAgent(
         name="stream-display-demo",
         llm=llm,
-        verbose_thinking=True,
     )
     agent.with_tool()
     agent.add_tool(CalculatorTool())
     from Tool.builtin import WebSearchTool
     agent.add_tool(WebSearchTool())
     query = "计算 4^12 + 6*412，并查询graphrag的概念"
-    agent.stream_invoke(query)
+    for event in agent.stream(query):
+        print(event)
     
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ from core import enable_logging
 from core.Config import Config
 from core.llm import EasyLLM
 from Tool import ToolRegistry
-from Tool.builtin import register_codeintel_tools, register_filesystem_tools
+from Tool.builtin import register_filesystem_tools
 
 
 enable_logging()
@@ -53,21 +53,14 @@ def build_agent() -> tuple[BasicAgent, str]:
     agent = BasicAgent(
         name="PhaseDCodeIntelManager",
         llm=llm,
-        enable_tool=True,
-        tool_registry=registry,
         config=Config(
             workspace_root=workspace,
             allowed_roots=[workspace],
         ),
-        reasoning={"effort": "high"},
-    )
+    ).with_tool(registry)
+    agent.reasoning = {"effort": "high"}
 
-    register_codeintel_tools(
-        registry,
-        parent_agent=agent,
-        workspace_root=workspace,
-        allowed_roots=(workspace,),
-    )
+    agent.with_codeintel()
     return agent, workspace
 
 
@@ -148,7 +141,7 @@ def main() -> None:
     print("=== Agent Invoke ===")
 
 
-    close_report = agent.close(close_worktree=False)
+    close_report = agent.close()
     print("=== Close Report ===")
     print(close_report)
 
@@ -157,4 +150,8 @@ if __name__ == "__main__":
     # main()
     agent, workspace = build_agent()
 
-    asyncio.run(agent.astream_invoke("先检查 sample.py 的 codeintel 可用性，再看符号树、定义、引用和 diagnostics，如果不可用就退回 FileRead/Grep/Glob。"))
+    async def run() -> None:
+        async for event in agent.astream("先检查 sample.py 的 codeintel 可用性，再看符号树、定义、引用和 diagnostics，如果不可用就退回 FileRead/Grep/Glob。"):
+            print(event)
+
+    asyncio.run(run())

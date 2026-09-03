@@ -46,14 +46,12 @@ def build_agent(workspace_root: str) -> BasicAgent:
     return BasicAgent(
         name="phaseg-sdk-agent",
         llm=build_llm(),
-        tool_registry=registry,
-        task_service=task_service,
-        permission_context=permission_context,
-        enable_tool=True,
         system_prompt=(
             "你是一个通过 EasyAgent 公共 SDK 构建的助手。\n"
             "如果当前问题需要拆解工作，请优先用结构化 task tools。"
         ),
+    ).with_tool(registry).with_task_service(task_service).with_permissions(
+        context=permission_context,
     )
 
 

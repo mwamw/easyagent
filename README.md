@@ -95,10 +95,8 @@ register_shell_tools(registry, workspace_root=".", expose_in_deferred=False)
 agent = BasicAgent(
     name="code-agent",
     llm=llm,
-    enable_tool=True,
     config=config,
-    tool_registry=registry,
-)
+).with_tool(registry)
 ```
 
 更完整的产品装配示例见：
@@ -116,13 +114,13 @@ from easyagent import BasicAgent, EasyLLM, Config
 from easyagent.tools import ToolRegistry, register_filesystem_tools, register_shell_tools
 from easyagent.permissions import PermissionContext, PermissionEngine, PermissionRule
 from easyagent.callbacks import CallbackManager, StreamingCallback
-from easyagent.prompting import PromptBlock, BasePromptComposer
-from easyagent.reminders import RuntimeReminder, BaseRuntimeReminderSource
+from easyagent.prompting import PromptBlock, SystemPromptComposer
 ```
 
 完整公共 API 索引见：
 
 - [Framework API](./docs/framework_api.md)
+- [Modular Agent Architecture](./docs/modular_agent_architecture.md)
 
 ## 6. 文档导航
 
@@ -131,6 +129,7 @@ from easyagent.reminders import RuntimeReminder, BaseRuntimeReminderSource
 - [Framework API](./docs/framework_api.md)
 - [Config Reference](./docs/config_reference.md)
 - [Agent Guide](./docs/agent_guide.md)
+- [Modular Agent Architecture](./docs/modular_agent_architecture.md)
 - [LLM Provider Guide](./docs/llm_provider_guide.md)
 - [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
 
@@ -141,11 +140,10 @@ from easyagent.reminders import RuntimeReminder, BaseRuntimeReminderSource
 - [Tool Authoring Guide](./docs/tool_authoring_guide.md)
 - [Deferred Tools Guide](./docs/deferred_tools_guide.md)
 
-### 6.3 Prompt、Reminder、Skill
+### 6.3 Prompt、Skill
 
 - [Prompt System Guide](./docs/prompt_system_guide.md)
 - [Prompt Composer Guide](./docs/prompt_composer_guide.md)
-- [Runtime Reminders Guide](./docs/runtime_reminders_guide.md)
 - [Skill System Guide](./docs/skill_system_guide.md)
 
 ### 6.4 Context、Memory、Session
@@ -201,15 +199,14 @@ EasyAgent 提供 Tool 基类、ToolRegistry、权限判定、确认中断、defe
 - [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
 - [Tool Authoring Guide](./docs/tool_authoring_guide.md)
 
-### Prompt / Runtime Reminder
+### System Prompt
 
-EasyAgent 不把所有上下文都塞进 system prompt。
-系统提示词、runtime reminder、on-demand expansion、dynamic tail 是不同层，目的包括更清晰的请求结构和更稳定的 cache 前缀。
+EasyAgent 使用统一的 `PromptBlock`，由 `placement="system"` 或 `placement="system_reminder"` 决定两种系统提示词的位置。On-demand expansion 和 dynamic tail 继续承载临时能力与业务上下文。
 
 详见：
 
 - [Prompt System Guide](./docs/prompt_system_guide.md)
-- [Runtime Reminders Guide](./docs/runtime_reminders_guide.md)
+- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
 
 ### Skill
 
@@ -288,7 +285,7 @@ Runtime 负责 subagent、background task、team 协作、mailbox 广播和执�
 4. `ToolRegistry` + builtin tools
 5. `PermissionContext` / `PermissionEngine`
 6. `CallbackManager`
-7. `PromptBlock` / runtime reminders
+7. `PromptBlock` / `SystemPromptComposer`
 8. `SkillManager`
 9. `SessionStore` / `ConversationStore`
 10. `ObservabilityRecorder`

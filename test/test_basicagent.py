@@ -5,12 +5,8 @@ from dotenv import load_dotenv
 load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
-from core.agent import BaseAgent
 from core.llm import EasyLLM
-from core.Message import Message
-from core.Config import Config
 from Tool.ToolRegistry import ToolRegistry
-from Tool.BaseTool import Tool
 from agent.BasicAgent import BasicAgent
 from pydantic import BaseModel,Field
 import serpapi
@@ -20,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 if __name__ == "__main__":
     llm=EasyLLM()
-    print(f"provider: {llm.provide}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
+    print(f"provider: {llm.provider_name}, model: {llm.model}, base_url: {llm.base_url}, api_key: {llm.api_key}")
     tool_registry=ToolRegistry()
     
     
@@ -68,8 +64,7 @@ if __name__ == "__main__":
             return f"搜索时发生错误: {e}"
 
 
-    basic_agent=BasicAgent("搜索助手",llm,tool_registry=tool_registry,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答",verbose_thinking=False)
-    basic_agent.set_enable_tool(True)
+    basic_agent=BasicAgent("搜索助手",llm,description="搜索助手",system_prompt="你是一个搜索的助手，请用中文回答").with_tool(tool_registry)
     print(basic_agent.invoke("GraphRAG是什么"))
     basic_agent.clear_history()
     print("------------------------------异步执行----------------------------------------")

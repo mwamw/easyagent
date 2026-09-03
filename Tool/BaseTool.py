@@ -11,9 +11,6 @@ ToolResultStatus = Literal["success", "error", "needs_confirmation"]
 ToolOutputMode = Literal["text", "json", "markdown"]
 ToolSideEffectLevel = Literal["none", "low", "medium", "high"]
 ToolVisibilityScope = Literal["resident", "runtime", "turn"]
-# 兼容字段：早期版本曾用它控制 tool prompt 是否注入 system/runtime prompt。
-# 当前框架主路径不再读取该字段；tool prompt 会统一折叠进 tool schema 的 description。
-ToolPromptVisibility = Literal["none", "resident", "runtime"]
 
 
 @dataclass(slots=True)
@@ -32,9 +29,6 @@ class ToolSpec:
     source: str = "custom"
     ephemeral: bool = False
     prompt: str = ""
-    prompt_visibility: ToolPromptVisibility = "none"
-    demand_skill_tool: bool = False
-    demand_skill_name: Optional[str] = None
     tags: list[str] = field(default_factory=list)
     risk_categories: list[str] = field(default_factory=list)
     side_effect_level: ToolSideEffectLevel = "none"
@@ -111,12 +105,6 @@ class ToolSpec:
             parts.append(guidance)
         if prompt:
             parts.append(prompt)
-        if self.demand_skill_tool:
-            note = "该工具来自按需 Skill 的临时挂载，不会常驻在 tools 集合中；只有它当前实际出现在本次请求提供的 tools 列表里时，才可以调用。"
-            if self.demand_skill_name:
-                note += f" 若后续还需要它，应先重新调用 `skill_tool(skill_name=\"{self.demand_skill_name}\")`。"
-            parts.append(note)
-
         body = "\n\n".join(part for part in parts if part)
         return body or self.name
 
@@ -135,9 +123,6 @@ class ToolSpec:
             "source": self.source,
             "ephemeral": self.ephemeral,
             "has_prompt": bool(self.prompt.strip()),
-            "prompt_visibility": self.prompt_visibility,
-            "demand_skill_tool": self.demand_skill_tool,
-            "demand_skill_name": self.demand_skill_name,
             "tags": list(self.tags),
             "risk_categories": list(self.risk_categories),
             "side_effect_level": self.side_effect_level,
@@ -259,9 +244,6 @@ class Tool(ABC):
         source: str = "custom",
         ephemeral: bool = False,
         prompt: str = "",
-        prompt_visibility: ToolPromptVisibility = "none",
-        demand_skill_tool: bool = False,
-        demand_skill_name: Optional[str] = None,
         tags: Optional[list[str]] = None,
         risk_categories: Optional[list[str]] = None,
         side_effect_level: Optional[ToolSideEffectLevel] = None,
@@ -292,9 +274,6 @@ class Tool(ABC):
             source=source,
             ephemeral=ephemeral,
             prompt=prompt,
-            prompt_visibility=prompt_visibility,
-            demand_skill_tool=demand_skill_tool,
-            demand_skill_name=demand_skill_name,
             tags=list(tags or []),
             risk_categories=list(risk_categories or []),
             side_effect_level=resolved_side_effect_level,
@@ -322,14 +301,6 @@ class Tool(ABC):
     def get_guidance(self) -> str:
         return self.spec.guidance
 
-    def build_prompt(self) -> str:
-        """兼容接口：返回工具附加说明文本。"""
-        return self.spec.prompt
-
-    def get_prompt_visibility(self) -> ToolPromptVisibility:
-        """兼容接口：当前框架主路径不再使用该字段控制注入方式。"""
-        return self.spec.prompt_visibility
-
     def get_spec(self) -> ToolSpec:
         return ToolSpec(
             name=self.spec.name,
@@ -344,9 +315,6 @@ class Tool(ABC):
             source=self.spec.source,
             ephemeral=self.spec.ephemeral,
             prompt=self.spec.prompt,
-            prompt_visibility=self.spec.prompt_visibility,
-            demand_skill_tool=self.spec.demand_skill_tool,
-            demand_skill_name=self.spec.demand_skill_name,
             tags=list(self.spec.tags),
             risk_categories=list(self.spec.risk_categories),
             side_effect_level=self.spec.side_effect_level,
@@ -355,15 +323,6 @@ class Tool(ABC):
             expose_in_deferred=self.spec.expose_in_deferred,
             metadata=dict(self.spec.metadata),
         )
-
-    def mark_as_demand_skill_tool(self, skill_name: str) -> None:
-        self.spec.demand_skill_tool = True
-        self.spec.demand_skill_name = skill_name
-        self.spec.ephemeral = True
-
-    def clear_demand_skill_tool(self) -> None:
-        self.spec.demand_skill_tool = False
-        self.spec.demand_skill_name = None
 
     def validate_parameters(self, parameters: dict) -> dict[str, Any]:
         validated = self.parameters.model_validate(parameters)

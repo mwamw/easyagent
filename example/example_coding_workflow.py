@@ -42,10 +42,7 @@ async def main():
     agent = BasicAgent(
         name="Coder",
         llm=llm,
-        tool_registry=registry,
-        verbose_thinking=True,
-        enable_tool=True
-    )
+    ).with_tool(registry)
 
     # 4. 真实场景 Query
     query = """
@@ -54,8 +51,9 @@ async def main():
 
     print(f"🚀 开始任务: {query}\n")
 
-    # 5. 使用 astream_invoke 进行流式调用
-    await agent.astream_invoke(query)
+    # 5. 使用结构化 astream 事件进行流式调用
+    async for event in agent.astream(query):
+        print(event)
 
 
 if __name__ == "__main__":

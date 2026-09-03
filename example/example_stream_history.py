@@ -14,16 +14,11 @@ load_dotenv(os.path.join(example_dir, ".env"))
 
 from agent.BasicAgent import BasicAgent
 from core import enable_logging
-from core.Message import Message
 from core.llm import EasyLLM
 from Tool.builtin import CalculatorTool
 
 
 def _history_entry_to_payload(entry: Any) -> dict[str, Any]:
-    if isinstance(entry, Message):
-        payload = entry.model_dump()
-        payload["entry_class"] = type(entry).__name__
-        return payload
     if isinstance(entry, dict):
         return {
             "entry_class": "dict",
@@ -68,18 +63,16 @@ def main() -> None:
     agent = BasicAgent(
         name="history-demo",
         llm=llm,
-        enable_tool=True,
-        verbose_thinking=True,
-    )
+    ).with_tool()
     agent.add_tool(CalculatorTool())
     agent.clear_history()
 
     query = "请先简单说明你要做什么，然后调用工具计算 4^12 + 6*412，最后告诉我结果。"
 
     print("===== STREAM OUTPUT =====")
-    final_result = agent.stream_invoke(query)
+    events = list(agent.stream(query))
     print("\n\n===== FINAL RESULT =====")
-    print(final_result)
+    print(events[-1] if events else None)
 
     print_history(agent)
     print_trace_history(agent)

@@ -26,12 +26,10 @@ from Tool.builtin import (
     register_task_stop_tool,
     register_web_fetch_tool,
     register_todo_write_tool,
-    register_agent_tool,
     register_notebook_edit_tool,
     register_ask_user_question_tool,
     register_exit_plan_mode_tool,
     register_config_tool,
-    register_worktree_tools,
 )
 from Tool.runtime import WorktreeManager
 
@@ -43,10 +41,12 @@ def create_agent(registry: ToolRegistry, name: str) -> BasicAgent:
     return BasicAgent(
         name=name,
         llm=llm,
-        tool_registry=registry,
-        verbose_thinking=True,
-        enable_tool=True
-    )
+    ).with_tool(registry)
+
+
+async def display_stream(agent: BasicAgent, query: str) -> None:
+    async for event in agent.astream(query):
+        print(event)
 
 async def example_calculator_tool():
     """示例：使用计算器工具"""
@@ -57,7 +57,7 @@ async def example_calculator_tool():
     agent = create_agent(registry, "CalcAgent")
     
     query = "请帮我计算 3456 的平方根加上 128 乘以 99 的结果是多少"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_search_tool():
     """示例：使用网络搜索工具"""
@@ -68,7 +68,7 @@ async def example_search_tool():
     agent = create_agent(registry, "SearchAgent")
     
     query = "请搜索一下 'EasyAgent AI 框架' 的相关信息，并总结一下"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_filesystem_tools():
     """示例：使用文件系统读取/搜索工具 (FileRead, Glob, Grep)"""
@@ -80,7 +80,7 @@ async def example_filesystem_tools():
     agent = create_agent(registry, "FSAgent")
     
     query = "请查看当前 example 目录下的所有 python 文件，并找到包含 'enable_logging' 的文件"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_file_write_tool():
     """示例：使用文件写入工具 (FileWrite)"""
@@ -93,7 +93,7 @@ async def example_file_write_tool():
     agent = create_agent(registry, "WriteAgent")
     
     query = "请在 scratch 目录下创建一个 hello.txt 文件，内容为 'Hello World from File Write Tool'"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_file_edit_tool():
     """示例：使用文件编辑工具 (FileEdit)"""
@@ -114,7 +114,7 @@ async def example_file_edit_tool():
     agent = create_agent(registry, "EditAgent")
     
     query = "请修改 scratch 目录下的 target_edit.py，给 add 函数加上具体的类型注解"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_shell_tools():
     """示例：使用终端 Shell 工具 (Bash)"""
@@ -126,7 +126,7 @@ async def example_shell_tools():
     agent = create_agent(registry, "ShellAgent")
     
     query = "告诉我当前目录下有哪些内容"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_web_fetch_tool():
     """示例：使用抓取网页工具 (WebFetch)"""
@@ -137,7 +137,7 @@ async def example_web_fetch_tool():
     agent = create_agent(registry, "FetchAgent")
     
     query = "请抓取 https://example.com 的页面内容，并提取页面上的标题和主要段落"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_todo_write_tool():
     """示例：使用 TODO 写入工具"""
@@ -149,7 +149,7 @@ async def example_todo_write_tool():
     agent = create_agent(registry, "TodoAgent")
     
     query = "我们在开发新功能，请帮我把 '重构数据库连接池', '完善单元测试' 记录到 TODO 中"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_task_management_tools():
     """示例：使用任务管理工具 (TaskOutput, TaskStop)"""
@@ -161,7 +161,7 @@ async def example_task_management_tools():
     agent = create_agent(registry, "TaskAgent")
     
     query = "请帮我总结一段关于 AI Agent 的优缺点，并使用任务输出工具输出最终结果。如果发现无法完成，请直接停止任务并陈述原因。"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_interaction_tools():
     """示例：使用交互工具 (AskUserQuestion, ExitPlanMode)"""
@@ -173,7 +173,7 @@ async def example_interaction_tools():
     agent = create_agent(registry, "PlanAgent")
     
     query = "你现在处于计划模式中。我需要你处理一些模糊的需求。请主动调用询问用户工具来获取更多信息，并在问题得到解答后退出计划模式。"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_config_tool():
     """示例：使用配置访问工具 (ConfigTool)"""
@@ -184,7 +184,7 @@ async def example_config_tool():
     agent = create_agent(registry, "ConfigAgent")
     
     query = "请使用配置工具读取一项名为 'model' 或 'api_key' 的配置信息，如果未知则尝试读取 'test_key' 看看有哪些可用配置。"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_worktree_tools():
     """示例：使用 Git Worktree 切换工具"""
@@ -194,11 +194,11 @@ async def example_worktree_tools():
     
     workspace = os.path.dirname(__file__)
     manager = WorktreeManager(workspace)
-    register_worktree_tools(registry, worktree_manager=manager)
     agent = create_agent(registry, "GitAgent")
+    agent.with_worktree(manager)
     
     query = "请尝试查看当前是否在 git worktree 中"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_notebook_edit_tool():
     """示例：使用 Jupyter Notebook 编辑工具"""
@@ -211,19 +211,18 @@ async def example_notebook_edit_tool():
     agent = create_agent(registry, "NotebookAgent")
     
     query = "请在 scratch 目录下创建一个简单的 test.ipynb 文件，并为其添加一个打印 Hello 的代码 cell"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 async def example_agent_tool():
     """示例：使用 Agent 调用工具 (让 Agent 可以调用具有特定职能的子 Agent)"""
     print("\n" + "="*50)
     print("🚀 示例: Agent Tool\n")
     registry = ToolRegistry()
-    # 假设我们有一个专门处理数学运算的子Agent工具
-    register_agent_tool(registry)
     agent = create_agent(registry, "ManagerAgent")
+    agent.with_multi_agent()
     
     query = "请分配一个子 Agent 去帮我写一篇关于 Python 协程的文章大纲"
-    await agent.astream_invoke(query)
+    await display_stream(agent, query)
 
 
 async def main():
