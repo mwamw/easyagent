@@ -754,6 +754,8 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 state["terminal_emitted"] = True
             return events
         if event_type in {"message_stop", "message_complete"}:
+            if state["terminal_emitted"]:
+                return events
             events.append(
                 {
                     "type": "final_response",

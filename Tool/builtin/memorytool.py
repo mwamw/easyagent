@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
-from memory.V2.MemoryManage import MemoryManage
 from pydantic import BaseModel, Field
-from typing import Literal, Optional, Dict, Any
+from typing import TYPE_CHECKING, Literal, Optional, Dict, Any
 from datetime import datetime
 import logging
+
+if TYPE_CHECKING:
+    from memory.V2.MemoryManage import MemoryManage
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +25,7 @@ def _supported_types_text(memory_manage: MemoryManage) -> str:
     if isinstance(supported, dict):
         supported = supported.keys()
     if not supported:
-        return "无"
+        return "none"
     return ", ".join(str(item) for item in supported)
 
 
@@ -39,35 +43,35 @@ def _build_memory_tool_prompt(tool_name: str, memory_manage: MemoryManage) -> st
     supported = _supported_types_text(memory_manage)
     prompts = {
         "add_memory_tool": (
-            f"当前可用记忆类型: {supported}。\n"
-            "只在信息对后续轮次仍有价值时写入记忆。\n"
-            "- `working` 用于当前任务约束、计划和中间结论。\n"
-            "- `semantic` 用于长期稳定的事实、偏好和约定。\n"
-            "- `episodic` 用于真实发生过的经历或历史事件。\n"
-            "- `perceptual` 用于需要后续引用的多模态内容。"
+            f"Currently enabled memory types: {supported}.\n"
+            "Save information only when it will remain useful in later turns.\n"
+            "- `working` is for current task constraints, plans, and intermediate conclusions.\n"
+            "- `semantic` is for stable facts, preferences, and conventions.\n"
+            "- `episodic` is for experiences and events that actually occurred.\n"
+            "- `perceptual` is for multimodal content needed for later reference."
         ),
         "search_memory_tool": (
-            f"当前可用记忆类型: {supported}。\n"
-            "只有在当前对话、上下文和最新工具结果不足时，再搜索记忆。\n"
-            "优先指定最可能相关的记忆类型，避免无差别搜索所有类型。\n"
-            "搜索结果是历史上下文，不保证仍然为真；回答前应与当前事实交叉验证。"
+            f"Currently enabled memory types: {supported}.\n"
+            "Search memory when the current conversation, context, and latest tool results are insufficient.\n"
+            "Prefer the most relevant memory types instead of searching all types indiscriminately.\n"
+            "Results are historical context, not necessarily current truth. Verify them against current evidence."
         ),
         "get_memory_tool": (
-            "仅当你已经拿到明确的 memory_id，并且确实需要查看完整内容时使用。\n"
-            "如果只是在回忆大致线索，优先使用 `search_memory_tool`。"
+            "Use only when you have known memory IDs and need their complete contents.\n"
+            "If you only have a clue, use `search_memory_tool` first."
         ),
         "update_memory_tool": (
-            "当旧记忆被用户纠正、计划发生变化或事实已失效时使用。\n"
-            "更新时应保留真正仍然有效的信息，不要把临时噪音覆盖进长期记忆。"
+            "Use when the user corrects a memory, plans change, or facts become invalid.\n"
+            "Preserve information that remains valid; do not replace long-term memory with temporary noise."
         ),
         "remove_memory_tool": (
-            "当用户明确要求忘记，或某条记忆已经错误、过时、重复、无意义时使用。\n"
-            "删除前确认 memory_id 与目标内容匹配，避免误删。"
+            "Use when the user asks to forget something, or a memory is wrong, stale, duplicated, or meaningless.\n"
+            "Before deleting, verify that the memory ID matches the intended content."
         ),
         "memory_maintenance_tool": (
-            f"当前可用记忆类型: {supported}。\n"
-            "`stats` 用于查看状态；`consolidate` 用于整合高价值记忆；`forget` 用于清理低价值记忆；`clear` 是危险操作。\n"
-            "只有在任务完成、话题切换、记忆明显混乱或用户明确要求时，才做维护操作。"
+            f"Currently enabled memory types: {supported}.\n"
+            "Use `stats` to inspect state, `consolidate` to integrate valuable memories, and `forget` to clean up low-value memories. `clear` is destructive.\n"
+            "Perform maintenance when a task ends, the topic changes, memory becomes disorganized, or the user explicitly requests it."
         ),
     }
     return prompts.get(tool_name, "")
@@ -93,7 +97,7 @@ def _infer_modality(file_path: Optional[str]) -> str:
 # ==========================================
 class AddMemoryParam(BaseModel):
     content: str = Field(description="memory content")
-    memory_type: Literal["working", "episodic", "semantic", "perceptual"] = Field(description="memory type,working(工作记忆用来保存当前任务的关键上下文信息),episodic(事件记忆用来保存用户过去的经历和事件),semantic(语义记忆用来保存事实知识和概念),perceptual(感知记忆用来保存多模态信息)")
+    memory_type: Literal["working", "episodic", "semantic", "perceptual"] = Field(description="Memory type: working for task context, episodic for past events, semantic for stable facts, perceptual for multimodal information.")
     importance: float = Field(description="memory importance:0-1", default=0.5)
     metadata: Optional[Dict[str, Any]] = Field(description="memory metadata", default_factory=dict)
     modality: Optional[Literal["text", "image", "audio", "video"]] = Field(description="memory modality,need to be set when memory_type is perceptual", default="text")
@@ -105,12 +109,12 @@ class AddMemoryTool(Tool):
         self.memory_manage = memory_manage
         self.current_session_id = current_session_id
         self.conversation_count = 0
-        description = f"添加新的记忆（当前支持: {_supported_types_text(self.memory_manage)}）。用于保存当前关键上下文、经历、事实知识或多模态数据。"
+        description = f"Add memory (enabled types: {_supported_types_text(self.memory_manage)}) to preserve task context, experiences, facts, or multimodal data."
         super().__init__(
             name,
             description,
             AddMemoryParam,
-            guidance="仅在信息对后续轮次仍有价值时写入记忆；不要把临时噪音或当前一步的显然内容写入长期记忆。",
+            guidance="Write memory only when it will be useful in later turns; do not store temporary noise as long-term memory.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             source="builtin",
             tags=["memory", "write"],
@@ -159,23 +163,23 @@ class AddMemoryTool(Tool):
 # 2. SearchMemoryTool
 # ==========================================
 class SearchMemoryParam(BaseModel):
-    query: str = Field(description="search query 记忆搜索词")
-    memory_types: Optional[list[str]] = Field(description="要搜索的记忆类型，例如 ['working', 'episodic']。如果不填写默认搜所有类型。如果确定需要搜索的类型，请指定", default=None)
-    limit: int = Field(description="返回最多几条相关的记忆", default=10)
-    importance_threshold: float = Field(description="只返回重要性大于该值的记忆，默认为 0.0", default=0.0)
-    use_session_id:bool=Field(description="是否仅仅搜索当前会话的记忆,如果为空则不进行过滤,主要用来过滤episodic类型的记忆", default=False)
+    query: str = Field(description="Memory search query.")
+    memory_types: Optional[list[str]] = Field(description="Types to search, e.g. ['working', 'episodic']. Defaults to all enabled types; narrow the types when known.", default=None)
+    limit: int = Field(description="Maximum number of relevant memories to return.", default=10)
+    importance_threshold: float = Field(description="Minimum importance threshold; defaults to 0.0.", default=0.0)
+    use_session_id:bool=Field(description="Restrict results to the current session, primarily for episodic memory. Defaults to no session filter.", default=False)
 class SearchMemoryTool(Tool):
     def __init__(self, memory_manage: MemoryManage,current_session_id:Optional[str]=None):
         name = "search_memory_tool"
         self.memory_manage = memory_manage
         self.current_session_id=current_session_id
-        description = "根据你提供的文本搜索词汇，在记忆库中语义搜索并返回相关的记忆片段。这是回忆过去知识和经历的最常用方法。"
+        description = "Search memory semantically with a text query and return relevant excerpts of past knowledge and experiences."
 
         super().__init__(
             name,
             description,
             SearchMemoryParam,
-            guidance="只有在当前上下文不足时才搜索记忆；优先限定最可能相关的记忆类型，并把结果当作历史线索而非绝对真相。",
+            guidance="Search when current context is insufficient. Narrow to relevant memory types and treat results as historical clues, not unquestionable facts.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             read_only=True,
             source="builtin",
@@ -229,18 +233,18 @@ class SearchMemoryTool(Tool):
 # 3. GetMemoryTool
 # ==========================================
 class GetMemoryParam(BaseModel):
-    memory_ids: list[str] = Field(description="要获取详情的记忆ID列表")
+    memory_ids: list[str] = Field(description="Memory IDs whose complete details should be retrieved.")
 
 class GetMemoryTool(Tool):
     def __init__(self, memory_manage: MemoryManage):
         name = "get_memory_tool"
         self.memory_manage = memory_manage
-        description = "根据一组指定的 memory_id 批量获取这些记忆的完整详细内容。只有当你知道具体的 ID 时才使用此工具。"
+        description = "Retrieve complete details for known memory IDs. Use only when the IDs are already known."
         super().__init__(
             name,
             description,
             GetMemoryParam,
-            guidance="仅在你已经确定 memory_id 时才获取完整内容；如果只是回忆线索，先用 search_memory_tool。",
+            guidance="Fetch full content only for known memory IDs. Use search_memory_tool first when you only have a clue.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             read_only=True,
             source="builtin",
@@ -274,18 +278,18 @@ class GetMemoryTool(Tool):
 # 4. RemoveMemoryTool
 # ==========================================
 class RemoveMemoryParam(BaseModel):
-    memory_id: str = Field(description="要删除的记忆 ID")
+    memory_id: str = Field(description="ID of the memory to remove.")
 
 class RemoveMemoryTool(Tool):
     def __init__(self, memory_manage: MemoryManage):
         name = "remove_memory_tool"
         self.memory_manage = memory_manage
-        description = "根据具体的 memory_id 删除某一条记忆。"
+        description = "Remove a memory by its ID."
         super().__init__(
             name,
             description,
             RemoveMemoryParam,
-            guidance="只在用户明确要求忘记，或记忆已经错误、失效、重复时删除；删除前确认 memory_id 是否匹配。",
+            guidance="Remove memories only when the user asks to forget them or they are incorrect, stale, or duplicated. Verify the memory ID first.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             destructive=True,
             source="builtin",
@@ -309,21 +313,21 @@ class RemoveMemoryTool(Tool):
 # 5. UpdateMemoryTool
 # ==========================================
 class UpdateMemoryParam(BaseModel):
-    memory_id: str = Field(description="要更新的记忆 ID")
-    content: str = Field(description="新覆盖的记忆内容")
-    importance: Optional[float] = Field(description="新的重要性评分", default=None)
-    metadata: Optional[Dict[str, Any]] = Field(description="新的元数据", default=None)
+    memory_id: str = Field(description="ID of the memory to update.")
+    content: str = Field(description="Replacement memory content.")
+    importance: Optional[float] = Field(description="New importance score.", default=None)
+    metadata: Optional[Dict[str, Any]] = Field(description="New metadata.", default=None)
 
 class UpdateMemoryTool(Tool):
     def __init__(self, memory_manage: MemoryManage):
         name = "update_memory_tool"
         self.memory_manage = memory_manage
-        description = "根据记忆 ID，更新修改已有记忆的内容、重要性或元数据。"
+        description = "Update memory content, importance, or metadata by ID."
         super().__init__(
             name,
             description,
             UpdateMemoryParam,
-            guidance="当用户纠正旧信息、偏好变化或原记忆失效时更新；避免把未经确认的新猜测写回旧记忆。",
+            guidance="Update when the user corrects information or facts become invalid; do not overwrite memories with unverified guesses.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             source="builtin",
             tags=["memory", "update"],
@@ -355,27 +359,27 @@ class UpdateMemoryTool(Tool):
 # ==========================================
 class MemoryMaintenanceParam(BaseModel):
     action: Literal["stats", "consolidate", "forget", "clear"] = Field(
-        description="系统维护操作的类型。stats(获取系统状态), consolidate(跨类型转移整合高价值记忆), forget(模拟人类遗忘机制自动清理不重要特征的记忆), clear(格式化危险操作)"
+        description="Maintenance action: stats inspects state, consolidate transfers valuable memories, forget removes low-value memories, and clear destructively erases memories."
     )
     # 对于 consolidate
-    source_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="整合来源的记忆类型 (仅 action=consolidate 需要)", default=None)
-    target_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="整合去往的记忆类型 (仅 action=consolidate 需要)", default=None)
+    source_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="Source memory type; required for consolidate.", default=None)
+    target_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="Target memory type; required for consolidate.", default=None)
     # 对于 forget 和 consolidate 的重要性阈值
-    threshold: Optional[float] = Field(description="遗忘阈值 或 整合的重要性底线", default=0.5)
+    threshold: Optional[float] = Field(description="Threshold for forgetting or minimum importance for consolidation.", default=0.5)
     # 对于 forget 
-    strategy: Optional[Literal["time", "importance", "capacity"]] = Field(description="遗忘的策略类型 (仅 action=forget 需要)", default="importance")
-    max_age_days: Optional[int] = Field(description="时间遗忘策略的天数 (仅 action=forget 需要)", default=30)
-    memory_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="清空指定类型的记忆 (仅 action=clear 需要) 默认清除所有记忆", default=None)
+    strategy: Optional[Literal["time", "importance", "capacity"]] = Field(description="Forgetting strategy; used with forget.", default="importance")
+    max_age_days: Optional[int] = Field(description="Maximum age in days for time-based forgetting.", default=30)
+    memory_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="Memory type to clear; omitting this with clear erases all types.", default=None)
 class MemoryMaintenanceTool(Tool):
     def __init__(self, memory_manage: MemoryManage):
         name = "memory_maintenance_tool"
         self.memory_manage = memory_manage
-        description = "提供对记忆系统的宏观维护。可以使用 stats 查询当前记忆的容量；使用 consolidate 将短期工作记忆合并到长期记忆；使用 forget 让系统自动清理无用记忆；使用 clear 清空指定类型的记忆或全部记忆。"
+        description = "Maintain memory: stats inspects state, consolidate transfers valuable memories, forget removes low-value memories, and clear erases one or all memory types."
         super().__init__(
             name,
             description,
             MemoryMaintenanceParam,
-            guidance="仅在任务结束、话题切换、记忆混乱或用户明确要求时做维护；`clear` 属于危险操作，不要轻易使用。",
+            guidance="Maintain memory when a task ends, the topic changes, memory becomes disorganized, or the user requests it. The clear action is destructive.",
             prompt=_build_memory_tool_prompt(name, self.memory_manage),
             destructive=True,
             source="builtin",

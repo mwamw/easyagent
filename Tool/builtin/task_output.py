@@ -28,7 +28,7 @@ class TaskOutputTool(_ShellToolBase):
     ):
         super().__init__(
             name="TaskOutput",
-            description="读取 Bash 后台任务的当前输出，可按需阻塞等待结束。",
+            description="Retrieves output from a Bash background task, optionally waiting for completion.",
             parameters=ClaudeTaskOutputInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -38,8 +38,16 @@ class TaskOutputTool(_ShellToolBase):
             max_background_tasks=max_background_tasks,
             max_output_chars=max_output_chars,
             process_manager=process_manager,
-            guidance="适合查看后台测试、构建或长任务的输出。若 block=true，可等待任务结束或超时。",
-            prompt="用于读取通过 Bash 启动的后台任务输出。",
+            guidance="Set block=true to wait until completion or timeout.",
+            prompt=(
+                "Retrieves output from a running or completed Bash background task.\n"
+                "- Takes the task_id returned by Bash.\n"
+                "- Returns task output along with status and exit information.\n"
+                "- Use block=true to wait for completion, up to the specified timeout.\n"
+                "- Use block=false for a non-blocking check of current status.\n"
+                "- A running task is not yet a successful result.\n"
+                "- For background agents, use AgentGet or AgentWait instead."
+            ),
             read_only=True,
             destructive=False,
             supports_parallel=True,

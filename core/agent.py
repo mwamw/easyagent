@@ -201,6 +201,7 @@ class BaseAgent(ABC):
             memory=self.memory_manage,
             task_service=self.task_service,
             plan=self.plan,
+            context_manager=self.context_manager,
         )
 
     def with_prompt(self, composer: BaseSystemPromptComposer) -> "BaseAgent":
@@ -447,6 +448,9 @@ class BaseAgent(ABC):
         manager: Any = None,
         *,
         server_source: Any = None,
+        hub: Any = None,
+        server_name: str | None = None,
+        legacy_resource_tools: bool | None = None,
         **manager_kwargs: Any,
     ) -> "BaseAgent":
         from Emcp import MCPRuntimeManager
@@ -466,7 +470,14 @@ class BaseAgent(ABC):
             raise TypeError("Agent MCP integration requires MCPToolManager")
         if self.tool_registry is None:
             self.with_tool()
-        manager.register_to_registry(self.tool_registry)
+        registration = {}
+        if hub is not None:
+            registration["hub"] = hub
+        if server_name is not None:
+            registration["server_name"] = server_name
+        if legacy_resource_tools is not None:
+            registration["legacy_resource_tools"] = legacy_resource_tools
+        manager.register_to_registry(self.tool_registry, **registration)
         self.mcp_managers.append(manager)
         self._refresh_execution_context()
         return self
@@ -559,7 +570,7 @@ class BaseAgent(ABC):
             self.metamessage_manager.emit(
                 MetaMessage(
                     name=f"tool_context:{tool_name}",
-                    content=f"Runtime context produced by tool `{tool_name}`:\n{rendered}",
+                    content=f"<system-reminder>\nRuntime context produced by tool `{tool_name}`:\n{rendered}\n</system-reminder>",
                     lifecycle=MetaMessageLifecycle.INVOCATION,
                     metadata={"source": "tool_result", "toolName": tool_name},
                 )
@@ -887,6 +898,42 @@ class BaseAgent(ABC):
         )
         return session_id
 
+    def fork_session(
+        self,
+        session_id: str,
+        *,
+        store: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """Persist an independent branch without live execution handles.
+
+        Does not mutate this Agent or choose an application's current session.
+        Pending tool interactions must be resolved before branching. Applications
+        own identifiers, lineage metadata and whether client extensions are copied.
+        """
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise SessionSerializationError("session_id must be a non-empty string")
+        if self.get_pending_interruption() is not None:
+            raise SessionSerializationError("Resolve the pending interaction before forking a session")
+        from copy import deepcopy
+
+        snapshot = deepcopy(self._build_session_snapshot())
+        snapshot["currentTaskId"] = None
+        modules = snapshot.get("modules", {})
+        for name in ("multiAgent", "runtimeEvents", "worktree", "interruptions"):
+            modules.pop(name, None)
+        execution = modules.get("executionContext")
+        if isinstance(execution, dict):
+            execution.update(currentTaskId=None, worktreePath=None, worktreeBranch=None, metadata={})
+        session_store = self._resolve_session_store(store)
+        if session_store.get_session(session_id, touch=False) is not None:
+            raise SessionSerializationError("Fork target session already exists")
+        session_store.create_or_update_session(
+            session_id=session_id, agent_type=type(self).__name__, agent_name=self.name,
+            snapshot=snapshot, metadata=dict(metadata or {}),
+        )
+        return session_id
+
     @classmethod
     def load_session(
         cls,
@@ -913,6 +960,7 @@ class BaseAgent(ABC):
         memory_manage: Any = None,
         executor: BaseAgentExecutor | None = None,
         interruption_controller: Any = None,
+        restore_into: "BaseAgent | None" = None,
     ) -> "BaseAgent":
         session_store = cls._resolve_session_store(store)
         record = session_store.get_session(session_id)
@@ -928,7 +976,11 @@ class BaseAgent(ABC):
             from agent import BasicAgent
 
             target_cls = BasicAgent
-        agent = target_cls(
+        if restore_into is not None and not isinstance(restore_into, cls):
+            raise TypeError("restore_into must be an instance of the loading Agent class")
+        if restore_into is not None and restore_into._closed:
+            raise RuntimeError("Cannot restore a closed Agent")
+        agent = restore_into if restore_into is not None else target_cls(
             name=str(snapshot.get("name") or record.get("agent_name") or "agent"),
             llm=llm,
             system_prompt=snapshot.get("systemPrompt"),
@@ -977,7 +1029,8 @@ class BaseAgent(ABC):
 
         supplied_prompt = prompt_composer is not None
         if supplied_prompt:
-            agent.with_prompt(prompt_composer)
+            if restore_into is None or agent.prompt_composer is not prompt_composer:
+                agent.with_prompt(prompt_composer)
         elif implementation_of("prompt") not in {"", "SystemPromptComposer"}:
             note_explicit_module("prompt", "prompt_composer")
         if (supplied_prompt or implementation_of("prompt") in {"", "SystemPromptComposer"}) and hasattr(
@@ -985,15 +1038,18 @@ class BaseAgent(ABC):
         ):
             agent.prompt_composer.restore_state(state_of("prompt"))
         if callback_manager is not None:
-            agent.with_callbacks(callback_manager)
+            if restore_into is None or agent.callback_manager is not callback_manager:
+                agent.with_callbacks(callback_manager)
         if hook_manager is not None:
-            agent.with_hooks(hook_manager)
+            if restore_into is None or agent.hook_manager is not hook_manager:
+                agent.with_hooks(hook_manager)
         restored_permission_context = permission_context or PermissionContext()
         restored_permission_context.restore_state(state_of("permissions"))
         agent.with_permissions(permission_engine, restored_permission_context)
         supplied_metamessage = metamessage_manager is not None
         if supplied_metamessage:
-            agent._install_metamessage_manager(metamessage_manager)
+            if restore_into is None or agent.metamessage_manager is not metamessage_manager:
+                agent._install_metamessage_manager(metamessage_manager)
         elif implementation_of("metamessage") not in {"", "MetaMessageManager"}:
             note_explicit_module("metamessage", "metamessage_manager")
         if (
@@ -1003,9 +1059,11 @@ class BaseAgent(ABC):
             agent.metamessage_manager.restore_state(state_of("metamessage"))
         tool_names = list(dict(state_of("tools") or {}).get("names") or [])
         if tool_registry is not None:
-            agent.with_tool(tool_registry)
+            if restore_into is None or agent.tool_registry is not tool_registry:
+                agent.with_tool(tool_registry)
         if context_manager is not None:
-            agent.with_context(context_manager)
+            if restore_into is None or agent.context_manager is not context_manager:
+                agent.with_context(context_manager)
         elif modules.get("context"):
             report.add_issue(component="context", code="context_manager_missing", message="ContextManager must be supplied explicitly")
         saved_skill_state = dict(state_of("skills") or {})
@@ -1019,7 +1077,8 @@ class BaseAgent(ABC):
         ]
         if skill_manager is not None or saved_skill_directories:
             try:
-                agent.with_skill(*saved_skill_directories, manager=skill_manager)
+                if restore_into is None or agent.skill_manager is not skill_manager or skill_manager is None:
+                    agent.with_skill(*saved_skill_directories, manager=skill_manager)
                 report.note_missing_skills(
                     [
                         name
@@ -1040,18 +1099,21 @@ class BaseAgent(ABC):
                     metadata={"directories": saved_skill_directories},
                 )
         if task_service is not None:
-            agent.with_task_service(task_service)
+            if restore_into is None or agent.task_service is not task_service:
+                agent.with_task_service(task_service)
         elif modules.get("tasks"):
             note_explicit_module("tasks", "task_service")
         if memory_manage is not None:
-            agent.with_memory(memory_manage)
+            if restore_into is None or agent.memory_manage is not memory_manage:
+                agent.with_memory(memory_manage)
         elif modules.get("memory"):
             note_explicit_module("memory", "memory_manage")
         if plan is not None:
             plan_state = state_of("plan")
             if hasattr(plan, "restore_state"):
                 plan.restore_state(plan_state)
-            agent.with_plan(plan)
+            if restore_into is None or agent.plan is not plan:
+                agent.with_plan(plan)
         elif modules.get("plan") and implementation_of("plan") == "PlanModeManager":
             restored_plan = PlanModeManager()
             restored_plan.restore_state(state_of("plan"))
@@ -1059,7 +1121,8 @@ class BaseAgent(ABC):
         elif modules.get("plan"):
             note_explicit_module("plan", "plan")
         if observability_manager is not None:
-            agent.with_observability(observability_manager)
+            if restore_into is None or agent.observability is not observability_manager:
+                agent.with_observability(observability_manager)
         elif modules.get("observability"):
             if implementation_of("observability") == "ObservabilityManager":
                 from observability import InMemoryObservabilityStore, ObservabilityManager
@@ -1070,13 +1133,15 @@ class BaseAgent(ABC):
         if agent.observability is not None and state_of("observability") is not None:
             agent.observability.restore_state(state_of("observability"))
         if worktree_manager is not None:
-            agent.with_worktree(worktree_manager)
+            if restore_into is None or agent.worktree_manager is not worktree_manager:
+                agent.with_worktree(worktree_manager)
             if modules.get("worktree"):
                 report.extend_component("worktree", worktree_manager.restore_state(state_of("worktree")))
         elif modules.get("worktree"):
             report.add_issue(component="worktree", code="worktree_manager_missing", message="WorktreeManager must be supplied explicitly")
         if multi_agent_runtime is not None:
-            agent.with_multi_agent(multi_agent_runtime)
+            if restore_into is None or agent.multi_agent is not multi_agent_runtime:
+                agent.with_multi_agent(multi_agent_runtime)
             if modules.get("multiAgent") and hasattr(agent.multi_agent, "restore_state"):
                 report.extend_component("multi_agent", agent.multi_agent.restore_state(state_of("multiAgent")))
         elif modules.get("multiAgent"):
@@ -1106,7 +1171,8 @@ class BaseAgent(ABC):
                 if callable(restore):
                     identity = str(saved.get("identity") or manager_index)
                     report.extend_component(f"mcp:{identity}", restore(saved.get("state")))
-            agent.with_mcp(manager)
+            if manager not in agent.mcp_managers:
+                agent.with_mcp(manager)
         if saved_mcp and not mcp_managers:
             report.add_issue(component="mcp", code="mcp_managers_missing", message="MCP managers must be supplied explicitly")
         elif unused_mcp:
@@ -1122,7 +1188,8 @@ class BaseAgent(ABC):
                 },
             )
         if codeintel_manager is not None:
-            agent.with_codeintel(codeintel_manager)
+            if restore_into is None or agent.codeintel_manager is not codeintel_manager:
+                agent.with_codeintel(codeintel_manager)
             if modules.get("codeintel"):
                 report.extend_component("codeintel", codeintel_manager.restore_state(state_of("codeintel")))
         elif modules.get("codeintel") and implementation_of("codeintel") == "CodeIntelManager":
@@ -1137,11 +1204,13 @@ class BaseAgent(ABC):
         elif modules.get("codeintel"):
             note_explicit_module("codeintel", "codeintel_manager")
         if executor is not None:
-            agent.with_executor(executor)
+            if restore_into is None or agent.executor is not executor:
+                agent.with_executor(executor)
         elif implementation_of("executor") not in {"", "DefaultAgentExecutor"}:
             note_explicit_module("executor", "executor")
         if interruption_controller is not None:
-            agent.with_interruptions(interruption_controller)
+            if restore_into is None or agent.interrupt_controller is not interruption_controller:
+                agent.with_interruptions(interruption_controller)
         elif modules.get("interruptions") and implementation_of("interruptions") != "InMemoryToolInterruptController":
             note_explicit_module("interruptions", "interruption_controller")
         if (
@@ -1197,6 +1266,28 @@ class BaseAgent(ABC):
         report = resolved_report
         agent.last_restore_report = report
         return agent
+
+    def restore_session(self, session_id: str, *, store: Any = None) -> "BaseAgent":
+        """Restore persisted state into this already configured Agent.
+
+        Live resources belong to the caller's initialized instance. The normal
+        loader restores their data and reports unavailable components; it does
+        not construct another product Agent or replace its execution loop.
+        Call only while the Agent is idle.
+        """
+        return type(self).load_session(
+            session_id, llm=self.llm, store=store, restore_into=self,
+            tool_registry=self.tool_registry, context_manager=self.context_manager,
+            skill_manager=self.skill_manager, permission_engine=self.permission_engine,
+            permission_context=self.permission_context, hook_manager=self.hook_manager,
+            callback_manager=self.callback_manager, metamessage_manager=self.metamessage_manager,
+            task_service=self.task_service, plan=self.plan,
+            prompt_composer=self.prompt_composer, observability_manager=self.observability,
+            multi_agent_runtime=self.multi_agent, mcp_managers=list(self.mcp_managers),
+            codeintel_manager=self.codeintel_manager, worktree_manager=self.worktree_manager,
+            memory_manage=self.memory_manage, executor=self.executor,
+            interruption_controller=self.interrupt_controller,
+        )
 
     @classmethod
     def list_sessions(cls, *, store: Any = None, limit: int = 100, include_expired: bool = False) -> list[dict[str, Any]]:

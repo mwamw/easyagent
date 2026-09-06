@@ -17,18 +17,27 @@ logger = logging.getLogger(__name__)
 
 
 class SearchParams(BaseModel):
-    """搜索参数"""
-    query: str = Field(description="搜索关键词")
-    num_results: int = Field(default=5, description="返回结果数量，默认5条")
-    allowed_domains: list[str] = Field(default_factory=list, description="允许域名白名单")
-    blocked_domains: list[str] = Field(default_factory=list, description="禁止域名黑名单")
+    """Web search parameters."""
+    query: str = Field(description="Search query")
+    num_results: int = Field(default=5, description="Number of results; defaults to 5")
+    allowed_domains: list[str] = Field(default_factory=list, description="Domains to include")
+    blocked_domains: list[str] = Field(default_factory=list, description="Domains to exclude")
 
 
-SEARCH_TOOL_PROMPT = """仅在你需要最新外部信息、公开网页资料或当前上下文无法回答的问题时使用此工具。
-- 搜索结果是候选线索，不是自动可信的最终事实；回答前应基于标题、链接和摘要交叉判断。
-- 若首轮结果不够好，应改写查询词后再次搜索，而不是勉强从弱结果中下结论。
-- 涉及时间敏感信息时，优先选择结果中更具体、更新、更接近原始来源的页面。
-- 在最终答复中引用搜索信息时，优先保留来源线索，如站点名或链接。"""
+SEARCH_TOOL_PROMPT = """Allows the agent to search the web and use the results to inform responses.
+- Provides up-to-date information for current events and recent data.
+- Returns search results with titles, URLs, and snippets.
+- Use this tool for information beyond the model's knowledge or when current facts are needed.
+
+CRITICAL REQUIREMENT:
+- After answering a question using search results, include a "Sources:" section.
+- List relevant URLs from the search results as Markdown hyperlinks: [Title](URL).
+- Never invent sources or treat search snippets as automatically verified facts.
+
+Usage notes:
+- Domain filtering is supported through allowed_domains and blocked_domains.
+- Set num_results to control the number of results.
+- Use the current year when searching for recent documentation or current events. Refer to the current-date context, not an assumed year."""
 
 
 def _format_search_output(query: str, results: list[dict[str, str]]) -> str:
@@ -127,9 +136,9 @@ class WebSearchTool(Tool):
         """
         super().__init__(
             name="web_search",
-            description="在互联网上搜索信息，并返回相关网页摘要。",
+            description="Searches the web and returns relevant page summaries.",
             parameters=SearchParams,
-            guidance="仅在需要最新外部资料、公开网页信息或时间敏感事实时使用；搜索结果应作为线索再判断，不要机械照抄。",
+            guidance="Use for current external information; verify search results before relying on them.",
             prompt=SEARCH_TOOL_PROMPT,
             read_only=True,
             source="builtin",

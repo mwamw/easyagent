@@ -60,6 +60,8 @@ class AnthropicNativeProvider(BaseProvider):
         }
         if self.base_url:
             client_kwargs["base_url"] = self.base_url
+        if self.default_headers:
+            client_kwargs["default_headers"] = dict(self.default_headers)
         if "max_retries" in self.kwargs:
             client_kwargs["max_retries"] = self.kwargs["max_retries"]
         return Anthropic(**client_kwargs)
@@ -82,6 +84,8 @@ class AnthropicNativeProvider(BaseProvider):
             }
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
+            if self.default_headers:
+                client_kwargs["default_headers"] = dict(self.default_headers)
             if "max_retries" in self.kwargs:
                 client_kwargs["max_retries"] = self.kwargs["max_retries"]
             self._async_client = AsyncAnthropic(**client_kwargs)

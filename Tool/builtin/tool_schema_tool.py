@@ -10,7 +10,7 @@ from Tool.BaseTool import Tool
 class ToolSchemaToolParams(BaseModel):
     tool_names: list[str] = Field(
         default_factory=list,
-        description="要为当前轮展开完整 schema 的工具名列表。",
+        description="Names of tools whose full schemas should be loaded for this invocation",
     )
 
 
@@ -19,9 +19,7 @@ class ToolSchemaTool(Tool):
         super().__init__(
             name="tool_schema_tool",
             description=(
-                "按需展开一个或多个 deferred tools 的完整 schema。"
-                "当工具目录里已经出现候选工具，但当前 tools 集合里还没有它们的可调用 schema 时，"
-                "先调用此工具展开所需工具，再在后续回合真正调用这些工具。"
+                "Loads full schemas for one or more deferred tools. If a tool is listed but its callable schema is not present, load it here before invoking it in a subsequent model response."
             ),
             parameters=ToolSchemaToolParams,
             read_only=True,
@@ -51,8 +49,8 @@ class ToolSchemaTool(Tool):
                 for spec in expanded_specs
             ],
             "message": (
-                "已为当前 invoke 展开工具 schema。后续同一轮推理可直接调用这些工具；"
-                "新的 invoke 如需继续使用，应再次展开。"
+                "Tool schemas have been loaded for the current invocation. You may call these tools "
+                "in subsequent model responses in this invocation; load them again in a new invocation if needed."
             ),
         }
 

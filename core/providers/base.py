@@ -93,6 +93,7 @@ class BaseProvider(ABC):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         timeout: int = 60,
+        default_headers: Optional[dict[str, str]] = None,
         **kwargs: Any,
     ):
         self._configured_provider_name = kwargs.pop("_provider_name", None)
@@ -102,6 +103,7 @@ class BaseProvider(ABC):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.default_headers = dict(default_headers or {})
         self.kwargs = kwargs
         self.client = self._create_client()
         self._async_client: Any = None

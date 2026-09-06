@@ -277,6 +277,16 @@ def test_agent_has_no_skill_module_until_with_skill(tmp_path: Path):
     assert agent.tool_registry.has_tool("skill_tool")
 
 
+def test_active_skill_names_are_public_and_deduplicated(tmp_path: Path):
+    write_skill(tmp_path, "review")
+    agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
+    assert agent.skill_manager.active_skill_names == ()
+    agent.skill_manager.invoke("review", args="first", model_initiated=False)
+    agent.skill_manager.invoke("review", args="second", model_initiated=False)
+    assert agent.skill_manager.active_skill_names == ("review",)
+    agent.close()
+
+
 def test_with_skill_accepts_multiple_directories_and_chaining(tmp_path: Path):
     root_a = tmp_path / "a"
     root_b = tmp_path / "b"

@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 class CalculatorParams(BaseModel):
-    """计算器参数"""
-    expression: str = Field(description="数学表达式，如 '2 + 3 * 4' 或 'sqrt(16) + pow(2, 3)'")
+    """Calculator parameters."""
+    expression: str = Field(description="Math expression, such as '2 + 3 * 4' or 'sqrt(16) + pow(2, 3)'")
 
 
 # 允许的操作符和函数
@@ -190,7 +190,7 @@ class CalculatorTool(Tool):
         """初始化计算器工具"""
         super().__init__(
             name="calculator",
-            description="安全的数学计算器，支持基本运算(+,-,*,/,**,%,//)和数学函数(sqrt,sin,cos,log,pow等)。输入数学表达式。",
+            description="Evaluate a math expression using arithmetic operators and supported functions such as sqrt, sin, cos, log, and pow.",
             parameters=CalculatorParams
         )
     

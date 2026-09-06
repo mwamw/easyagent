@@ -133,33 +133,33 @@ def _build_mcp_guidance(
 
     lines.extend(
         [
-            "调用前先确认当前任务是否真的需要远程 MCP 能力，而不是本地 builtin tool、Skill 或已有上下文就能完成。",
-            "参数必须完全遵守 schema；不要臆造字段，也不要把自然语言说明塞进结构化参数。",
-            "如果这是高成本或高副作用操作，先缩小目标范围，再执行最小必要调用。",
+            "Use remote MCP capabilities when local built-in tools, skills, and existing context are insufficient.",
+            "Follow the parameter schema exactly. Do not invent fields or substitute prose for structured arguments.",
+            "For costly or high-impact operations, narrow the target and make the minimum necessary call.",
         ]
     )
 
     if hints["read_only"]:
-        lines.append("该 MCP 能力声明为只读，预期不会修改远程状态。")
+        lines.append("This MCP capability declares itself read-only and is not expected to modify remote state.")
     if hints["destructive"]:
-        lines.append("该 MCP 能力声明可能产生远程副作用；调用前先确认目标、参数和必要性。")
+        lines.append("This MCP capability declares possible remote side effects. Verify the target, arguments, and necessity before calling.")
     if hints["open_world"]:
-        lines.append("该 MCP 能力声明依赖外部世界或外部系统状态；结果可能随时间变化，必要时重新验证。")
+        lines.append("This MCP capability depends on external world or system state. Results may change; revalidate when needed.")
     if hints["idempotent_present"]:
         if hints["idempotent"]:
-            lines.append("该 MCP 能力声明为幂等；在必要时可以安全重试。")
+            lines.append("This MCP capability declares itself idempotent; retry only when necessary and still authorized.")
         else:
-            lines.append("该 MCP 能力未声明为幂等；不要盲目重试或并行重复调用。")
+            lines.append("This MCP capability is not declared idempotent. Do not retry blindly or issue duplicate parallel calls.")
 
     if capability_kind == "resource_read":
-        lines.append("如资源列表项带有 annotations，应结合这些 annotations 判断资源是否适合当前任务。")
-        lines.append("优先先列资源再读资源；不要在不知道 URI 是否存在时盲目读取。")
+        lines.append("Use resource annotations, when present, to assess relevance to the current task.")
+        lines.append("Prefer listing resources before reading. Do not guess resource URIs.")
     elif capability_kind == "resource_list":
-        lines.append("返回的是资源目录，不是资源正文；拿到 URI 后再决定是否继续读取。")
+        lines.append("Returns a resource directory, not resource contents. Use a listed URI to read relevant content.")
     elif capability_kind == "tool":
-        lines.append("如果服务返回内容与本地推断冲突，应优先以远程返回为准，并在必要时解释冲突来源。")
+        lines.append("If remote results conflict with local assumptions, verify the discrepancy and explain it when relevant.")
     elif capability_kind in {"prompt_list", "prompt_get"}:
-        lines.append("MCP prompt 是远程模板，不等于最终答案；应把它作为执行上下文的一部分来理解。")
+        lines.append("An MCP prompt is a remote template, not a final answer. Interpret it in the context of the current task.")
 
     return "\n".join(line for line in lines if line)
 
@@ -169,7 +169,7 @@ class MCPListResourcesParams(BaseModel):
 
 
 class MCPReadResourceParams(BaseModel):
-    uri: str = Field(description="要读取的 MCP 资源 URI")
+    uri: str = Field(description="URI of the MCP resource to read")
 
 
 def _effective_server_name(manager: "MCPToolManager") -> str:
@@ -340,10 +340,10 @@ class MCPWrappedTool(Tool):
 
         parameters = _build_pydantic_model_from_schema(self.mcp_tool_name, input_schema)
         base_guidance = (
-            f"这是一个远程 MCP 工具 `{tool_name}`。\n"
-            f"它映射到 MCP server `{_effective_server_name(manager)}` 上的原始能力 `{self.mcp_tool_name}`。\n"
-            "调用它时要先判断当前问题是否确实需要远程能力，再按最小必要参数执行。\n"
-            "如果你需要复用结果，优先引用返回里的结构化字段，而不是自行改写关键事实。"
+            f"This is the remote MCP tool `{tool_name}`.\n"
+            f"It maps to `{self.mcp_tool_name}` on MCP server `{_effective_server_name(manager)}`.\n"
+            "Check that the task needs this remote capability, then use the minimum necessary arguments.\n"
+            "When reusing results, reference their structured fields rather than rewriting key facts."
         )
         server_name = _effective_server_name(manager)
         source_identifier = _mcp_source_identifier(server_name, "tools", self.mcp_tool_name)
@@ -452,11 +452,11 @@ class MCPListResourcesTool(Tool):
         source_identifier = _mcp_source_identifier(_effective_server_name(manager), "resources")
         super().__init__(
             name=_prefixed_name(prefix, "list_mcp_resources"),
-            description=f"列出 MCP 服务 `{_effective_server_name(manager)}` 当前暴露的资源。",
+            description=f"List resources currently exposed by MCP server `{_effective_server_name(manager)}`.",
             parameters=MCPListResourcesParams,
             guidance=_build_mcp_guidance((
-                "当你需要浏览远程 MCP 资源目录、确认有哪些 URI 可读取时使用。\n"
-                "先看资源目录，再决定是否继续读取具体资源；不要把它当成资源正文读取工具。"
+                "Use to browse a remote MCP resource directory and discover readable URIs.\n"
+                "Inspect the directory before reading specific resources. This tool does not read resource contents."
             ), {}, capability_kind="resource_list"),
             read_only=True,
             source="mcp",
@@ -512,12 +512,12 @@ class MCPReadResourceTool(Tool):
         source_identifier = _mcp_source_identifier(_effective_server_name(manager), "resources", "{uri}")
         super().__init__(
             name=_prefixed_name(prefix, "read_mcp_resource"),
-            description=f"读取 MCP 服务 `{_effective_server_name(manager)}` 上指定 URI 的资源内容。",
+            description=f"Read the resource at a specified URI on MCP server `{_effective_server_name(manager)}`.",
             parameters=MCPReadResourceParams,
             guidance=_build_mcp_guidance((
-                "先通过 `list_mcp_resources` 确认可用 URI，再读取具体资源。\n"
-                "如果你还没确认 URI 是否存在，先不要直接读取。\n"
-                "如果返回的是二进制内容，结果会以 base64 形式返回。"
+                "Use `list_mcp_resources` to discover available URIs, then read a specific resource.\n"
+                "Do not read an unverified or guessed URI.\n"
+                "Binary resource content is returned as base64."
             ), {}, capability_kind="resource_read"),
             read_only=True,
             source="mcp",
@@ -560,12 +560,10 @@ class MCPHubListResourcesTool(Tool):
         self.hub = hub
         super().__init__(
             name="ListMcpResources",
-            description="列出已注册 MCP server 暴露的资源；可按 server 过滤。",
+            description="Lists resources exposed by registered MCP servers.",
             parameters=ClaudeListMcpResourcesInput,
             guidance=(
-                "当需要浏览 MCP 资源目录时使用。\n"
-                "若已知目标 server，优先显式提供 server；否则会聚合所有已注册 server 的资源。\n"
-                "它返回的是资源目录，不是资源正文；拿到 URI 后再用 `ReadMcpResource` 读取。"
+                "Use to discover resource URIs. Specify server when known; otherwise resources from registered servers are aggregated. Use ReadMcpResource for resource content."
             ),
             read_only=True,
             source="mcp",
@@ -619,12 +617,10 @@ class MCPHubReadResourceTool(Tool):
         self.hub = hub
         super().__init__(
             name="ReadMcpResource",
-            description="读取指定 MCP server 上某个 URI 的资源内容。",
+            description="Reads resource content from a specified MCP server and URI.",
             parameters=ClaudeReadMcpResourceInput,
             guidance=(
-                "先通过 `ListMcpResources` 确认可用 server 和 URI，再读取资源正文。\n"
-                "如果你还不能确认 server/URI 是否正确，先不要盲读。\n"
-                "读取结果来自远程 MCP server，应优先以远程返回为准。"
+                "Use a known server and URI from ListMcpResources. Resource content comes from the remote server."
             ),
             read_only=True,
             source="mcp",

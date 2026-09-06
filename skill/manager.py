@@ -74,6 +74,12 @@ class SkillManager:
         with self._lock:
             return tuple(sorted(self._skills))
 
+    @property
+    def active_skill_names(self) -> tuple[str, ...]:
+        """Names currently activated for the bound Agent invocation."""
+        with self._lock:
+            return tuple(sorted({key.rsplit(":", 1)[0] for key in self._active_keys}))
+
     def bind_agent(self, agent: Any) -> None:
         """Bind this module to one Agent and its RuntimeEvent stream."""
 
@@ -190,7 +196,7 @@ class SkillManager:
             return ""
         lines = [
             "<available_skills>",
-            "The following Skills are available through `skill_tool`. Use a Skill when its "
+            "The following skills are available for use with the `skill_tool` tool. Use a Skill when its "
             "description or usage guidance matches the task. Load it before following its workflow; "
             "do not guess instructions that have not been loaded.",
         ]
@@ -288,11 +294,14 @@ class SkillManager:
     def _render_inline_content(manifest: SkillManifest, body: str, args: str) -> str:
         argument_text = args.strip() or "(none)"
         return (
+            "<system-reminder>\n"
+            "The following skill was invoked. Continue to follow these guidelines "
+            "for the current Agent invocation:\n\n"
             f'<skill name="{manifest.name}">\n'
             f"Skill directory: {manifest.directory}\n"
             f"Invocation arguments: {argument_text}\n\n"
             f"{body}\n"
-            "</skill>"
+            "</skill>\n</system-reminder>"
         )
 
     def invoke(

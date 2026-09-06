@@ -11,9 +11,19 @@ from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeAskUserQuestionInput
 
 
-ASK_USER_PROMPT = """用于结构化向用户提问。
-- 当信息缺失且继续执行风险较高时使用。
-- 该工具不会直接得到答案，而是会中断当前 tool loop，把问题交回调用方/UI。"""
+ASK_USER_PROMPT = """Use this tool when you need to ask the user questions during execution. This allows you to:
+1. Gather user preferences or requirements.
+2. Clarify ambiguous instructions.
+3. Get decisions on implementation choices as you work.
+4. Offer choices about what direction to take.
+
+Usage notes:
+- Provide 1-4 questions, each with 2-4 clearly described options.
+- Use multiSelect=true to allow multiple answers for a question.
+- If recommending an option, put it first and add "(Recommended)" to its label.
+- This tool interrupts the current execution and returns the questions to the caller. Wait for the caller to supply answers.
+
+Plan mode note: Clarify requirements or choose between approaches before finalizing a plan. Use ExitPlanMode for plan approval, not AskUserQuestion."""
 
 def _interrupt_result(
     *,
@@ -36,9 +46,9 @@ class AskUserQuestionTool(Tool):
     def __init__(self):
         super().__init__(
             name="AskUserQuestion",
-            description="向用户发起结构化提问，并中断当前执行等待回答。",
+            description="Asks the user structured questions and interrupts execution to await answers.",
             parameters=ClaudeAskUserQuestionInput,
-            guidance="适合在存在 2-4 个清晰选项时请求用户决策。调用后会中断当前 tool loop。",
+            guidance="Provide 2-4 clear options per question. The caller handles the resulting interruption.",
             prompt=ASK_USER_PROMPT,
             read_only=True,
             destructive=False,

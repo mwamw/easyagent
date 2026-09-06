@@ -68,22 +68,28 @@ class OpenAICompatibleProviderBase(BaseProvider):
         injected = self.kwargs.get("client")
         if injected is not None:
             return injected
-        return OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            timeout=self.timeout,
-        )
+        client_kwargs: dict[str, Any] = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+            "timeout": self.timeout,
+        }
+        if self.default_headers:
+            client_kwargs["default_headers"] = dict(self.default_headers)
+        return OpenAI(**client_kwargs)
 
     def _get_async_client(self) -> AsyncOpenAI:
         injected = self.kwargs.get("async_client")
         if injected is not None:
             return injected
         if self._async_client is None:
-            self._async_client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
+            client_kwargs: dict[str, Any] = {
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+                "timeout": self.timeout,
+            }
+            if self.default_headers:
+                client_kwargs["default_headers"] = dict(self.default_headers)
+            self._async_client = AsyncOpenAI(**client_kwargs)
         return self._async_client
 
     def build_request(

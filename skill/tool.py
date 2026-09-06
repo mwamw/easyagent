@@ -15,29 +15,26 @@ from .manager import (
 )
 
 
-SKILL_TOOL_PROMPT = """Load one available Agent Skill and activate its instructions.
+SKILL_TOOL_PROMPT = """Execute a skill within the current Agent `invoke`.
 
-Use this tool when:
-- A Skill listed in `<available_skills>` matches the user's task.
-- The task needs a specialized workflow, domain policy, or reusable procedure from that Skill.
-- You need the Skill's full instructions before deciding which steps or tools to use.
+When users ask you to perform tasks, check if any available skills match. Skills provide specialized capabilities and domain knowledge.
 
-How it works:
-- Pass the exact Skill name from `<available_skills>` in `skill`.
-- Put any user-supplied operands, target names, paths, issue IDs, or other command arguments in `args`.
-- For an inline Skill, the full `SKILL.md` body is injected as a user-role meta message after this tool result. Continue the task using those instructions on the next model turn.
-- The injected instructions remain available only until the current Agent `invoke` finishes. A later `invoke` must call `skill_tool` again.
-- A Skill may temporarily expose deferred tools or add narrowly scoped allow rules declared by `allowed-tools`; normal explicit deny rules still take precedence.
-- A Skill declared with `context: fork` runs synchronously in a subagent and returns that subagent's result, agent ID, and output file.
+How to invoke:
+- Use skill with the name from the <available_skills> listing.
+- Supply optional args for the skill's input.
+- Available skills are listed in system-reminder messages.
+- When a skill matches the user's request, invoke skill_tool before following its workflow.
+- Never claim to have used a skill without actually calling this tool.
+- Do not invoke a skill that is already active in this invocation.
+- Do not use this tool for built-in CLI or TUI commands.
 
-Important constraints:
-- Never invent a Skill name. Use only names shown in `<available_skills>`.
-- Do not claim that a Skill has been applied merely because it was listed; call this tool first.
-- If the conversation already contains a `<skill name="...">` block for that Skill, follow the loaded instructions instead of invoking it recursively.
-- Do not repeatedly load the same Skill with the same arguments in one invocation. The tool reports `alreadyActive` when it is already loaded.
-- Skills with `disable-model-invocation: true` cannot be called by the model and are omitted from the available listing.
-- A successful inline result is not the final user answer. It means the instructions are ready for the next reasoning step.
-"""
+Execution:
+- For an inline skill, the full SKILL.md body is injected after the tool result as a <skill name="..."> block. Follow those instructions in the next model step.
+- If that block is already present for this invocation, follow it instead of recursively loading the skill.
+- Instructions remain active only for the current Agent invocation; load the skill again in a later invocation when needed.
+- A skill configured with context: fork delegates its task to Agent instead.
+- Use the returned skill directory to resolve supporting scripts, references, and assets. Do not guess instructions that have not been loaded.
+- Skill-scoped tool permissions cannot override a denial or expose unavailable tools."""
 
 
 class SkillToolInput(BaseModel):

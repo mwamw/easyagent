@@ -23,34 +23,39 @@ from .task_output import TaskOutputTool
 from .task_stop import TaskStopTool
 
 
-AGENT_TOOL_PROMPT = """把一个边界清晰、可独立推进的子任务委派给独立子 agent。
+AGENT_TOOL_PROMPT = """Launch a new agent to handle complex, multi-step tasks autonomously.
 
-何时使用：
-- 当你已经知道要拆出去的子问题，并且它有明确的输入、边界和交付物。
-- 当任务可以和当前主线并行推进，或者需要独立的 worktree / mailbox / task 绑定。
-- 当你希望把复杂工作分配给多个 agent，再通过 `AgentWait`、`AgentGet` 或 `AgentList` 汇总结果。
+The Agent tool launches subagents that handle a clearly scoped task using the tools and runtime capabilities available to them. Each invocation starts fresh; provide a complete task description.
 
-如何写好 prompt：
-- 明确目标：子 agent 最终必须交付什么，成功标准是什么。
-- 明确边界：哪些文件、目录、模块、接口属于它，哪些不要碰。
-- 明确约束：是否只读、是否允许改代码、是否允许运行测试、是否必须遵守某种输出格式。
-- 明确汇报方式：是直接给出结论，还是修改文件后再总结，还是把结果写入 outputFile 供后续读取。
-- 如果你已经知道关键路径、候选文件、函数名或任务上下文，应直接写进 prompt，不要让子 agent盲搜。
+When NOT to use Agent:
+- To read a specific file path, use FileRead or Glob instead.
+- To find a specific class or symbol, use Grep.
+- To search within a known set of 2-3 files, use FileRead or Grep.
 
-后台运行语义：
-- `run_in_background=true` 只表示“启动成功并返回 handle”，不表示任务已经完成。
-- 启动后应继续用 `AgentGet` / `AgentWait` / `AgentList` 跟踪状态，必要时读取 `outputFile`。
-- 如果子 agent 是团队协作成员，后续可以用 `SendMessage` 发运行时消息；子 agent 会通过 mailbox 看到这些消息。
+Usage notes:
+- Always include a short description (3-5 words) summarizing what the agent will do.
+- Launch independent agents with multiple Agent tool calls in a single message when parallel work is appropriate.
+- Clearly tell the agent whether you expect it to write code or just do research. Include the goal, relevant paths, constraints, and expected deliverable.
+- When the agent finishes, summarize the result for the user; do not assume the caller displayed its full output.
+- Foreground vs background: Use foreground when you need the result before proceeding. Use run_in_background=true when you have genuinely independent work to do.
+- A background response is a handle, not a completed result. Use AgentGet, AgentWait, or AgentList to inspect status and outputFile.
+- SendMessage delivers runtime messages through the mailbox. It does not itself resume a completed agent.
+- Set isolation="worktree" for an isolated copy of the repository when code changes require it. Use the returned worktree path and branch.
+- Use team_name for an existing team created with TeamCreate.
+- When the parent has a structured task, the runtime creates a child task automatically. Do not create a duplicate task.
 
-隔离与协作：
-- 当子任务需要隔离代码修改或临时 git 分支时，设置 `isolation=worktree`。
-- 当多个子 agent 需要共享团队身份时，设置 `team_name`，并先用 `TeamCreate` 建立团队。
-- 当父任务已经绑定结构化 task 时，Agent tool 会自动创建 child task 并把 runtime 元数据回写到任务系统。
+## Writing the prompt
 
-不要这样用：
-- 不要把高度耦合、需要你当前回合立即依赖结果的最关键一步无脑拆出去。
-- 不要只给一个笼统标题；prompt 过短会让子 agent 把时间浪费在重新理解需求上。
-- 不要把“启动后台 agent”当成“工作已完成”。"""
+Brief the agent like a smart colleague who just walked into the room -- it hasn't seen this conversation, doesn't know what you've tried, doesn't understand why this task matters.
+- Explain what you're trying to accomplish and why.
+- Describe what you've already learned or ruled out.
+- Give enough context about the surrounding problem that the agent can make judgment calls rather than just following a narrow instruction.
+- If you need a short response, say so ("report in under 200 words").
+- Lookups: hand over the exact command. Investigations: hand over the question -- prescribed steps become dead weight when the premise is wrong.
+
+Terse command-style prompts produce shallow, generic work.
+
+Never delegate understanding. Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change."""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -199,9 +204,9 @@ class AgentTool(Tool):
         self.subagent_manager = self.agent_runtime.subagent_manager
         super().__init__(
             name="Agent",
-            description="启动独立子 agent 处理一个明确子任务，支持后台运行和 worktree 隔离。",
+            description="Launches a subagent for a scoped task, optionally in the background or an isolated worktree.",
             parameters=ClaudeAgentInput,
-            guidance="适合把边界清楚、可以独立完成的子任务委派出去。prompt 应包含目标、约束和预期产物。",
+            guidance="Provide a complete goal, scope, constraints, and expected deliverable.",
             prompt=AGENT_TOOL_PROMPT,
             read_only=False,
             destructive=False,

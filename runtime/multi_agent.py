@@ -115,11 +115,11 @@ class MultiAgentRuntime(BaseMultiAgentRuntime):
                 MetaMessage(
                     name=f"mailbox:{message.message_id}",
                     content=(
-                        "A runtime mailbox message was delivered to this agent. Treat it as current "
+                        "<system-reminder>\nA runtime mailbox message was delivered to this agent. Treat it as current "
                         "collaboration input and adjust the task when it changes goals or constraints.\n"
                         f"Sender: {message.sender_id or 'unknown'}\n"
                         f"Message ID: {message.message_id}\n"
-                        f"Content: {message.content}"
+                        f"Content: {message.content}\n</system-reminder>"
                     ),
                     lifecycle=MetaMessageLifecycle.PERMANENT,
                     dedup_key=f"mailbox:{message.message_id}",

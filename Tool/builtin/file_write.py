@@ -22,26 +22,15 @@ from ..runtime import (
 from .input_normalization import normalize_path_input
 
 
-FILE_WRITE_PROMPT = """用于创建新文件或整体覆盖已有文件。
+FILE_WRITE_PROMPT = """Writes a file to the local filesystem.
 
-何时使用：
-- 你已经确定完整文件内容，准备一次性写入整个文件。
-- 目标文件不存在，需要完整创建。
-- 现有文件应该整体替换，而不是做局部 patch。
-
-何时不要用：
-- 只想改局部文本时，不要用它；优先使用 `FileEdit`。
-- 还没看过现有文件就想整体覆盖时，不要直接写；先 `FileRead` 理解上下文。
-
-执行语义：
-- 如果目标文件已存在，会整体替换原内容。
-- 写入采用原子替换，尽量避免半写状态。
-- 若文件存在但自上次读取后已变化，工具会拒绝写入并要求重新读取。
-
-最佳实践：
-- 先确认路径、目录、文件名是否正确。
-- 生成代码文件时，尽量一次写出可运行的完整版本，而不是先写残缺骨架再多次覆盖。
-- 返回里的 `created`、`chars_written`、`bytes_written`、`file_version` 可用于后续校验。"""
+Usage:
+- This tool will overwrite the existing file if there is one at the provided path.
+- If this is an existing file, you MUST use FileRead first to read its contents. This tool will fail if you did not read it first or it changed since that read.
+- Prefer FileEdit for modifying existing files — it only sends the replacement. Only use this tool to create new files or for complete rewrites.
+- NEVER create documentation files (*.md) or README files unless explicitly requested by the user.
+- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
+- Paths must be within the configured workspace or allowed roots. Writes use atomic replacement."""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -250,12 +239,12 @@ class FileWriteTool(_WorkspaceWriteTool):
     ):
         super().__init__(
             name="FileWrite",
-            description="创建新文件或整体覆盖已有文件。",
+            description="Writes a file to the local filesystem.",
             parameters=ClaudeFileWriteInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合一次性生成完整文件；如果只想替换局部内容，优先使用 FileEdit。",
+            guidance="Use for new files or complete rewrites; prefer FileEdit for local changes.",
             prompt=FILE_WRITE_PROMPT,
             tags=["filesystem", "write", "claude_code"],
         )

@@ -16,87 +16,83 @@ from .input_normalization import normalize_generic_input, normalize_path_input
 from .display_utils import format_error_display, format_structured_display
 
 
-CODEINTEL_STATUS_PROMPT = """用于检查当前工作区是否具备可用的 code intelligence / LSP 能力。
-- 当你准备依赖定义跳转、引用检索、符号树或 diagnostics 之前，先用它确认可用性。
-- 如果返回 `available=false`，不要继续盲目重试 codeintel 工具，直接退回 `Grep` / `FileRead` / `Glob`。
-- `file_path` 最好指向当前要分析的语言文件，这样可以按语言自动挑选合适的 LSP server。"""
+CODEINTEL_STATUS_PROMPT = """Checks whether code intelligence / LSP is available in the current workspace.
+- Check availability before relying on definitions, references, symbols, or diagnostics.
+- If available=false, use Grep, FileRead, or Glob instead of repeatedly retrying.
+- Supply a relevant source file_path to select the server for its language."""
 
-FIND_DEFINITION_PROMPT = """用于按源码中的“引用点”跳到定义位置。
-- 只有在你已经知道具体文件和精确行列时才调用；它不是模糊搜索工具。
-- `line` 和 `column` 使用 1-based；尽量把坐标放在标识符字符上，而不是空白、逗号或括号上。
-- 优先用于定位函数、类、变量、方法的声明位置，再配合 `FileRead` 读取定义上下文。
-- 如果结果为空，先检查坐标是否准确；若工具返回 `unavailable` 或依然找不到，再退回 `Grep` / `FileRead` / `Glob`。"""
+FIND_DEFINITION_PROMPT = """Finds a symbol's definition from a precise source position.
+- Use only when the file and exact line and column are known.
+- line and column are 1-based and should point to the identifier.
+- Read the returned definition with FileRead for context.
+- If no result is found, check the coordinates; if unavailable, use Grep, FileRead, or Glob."""
 
-FIND_REFERENCES_PROMPT = """用于按源码中的“定义点或引用点”查找所有引用位置。
-- 适合做影响面分析、重构前摸排、确认 API 是否还在使用。
-- `line` 和 `column` 使用 1-based；坐标必须落在你要跟踪的符号上。
-- 默认不包含声明本身；若你希望结果里包含定义位置，显式传 `include_declaration=true`。
-- 引用结果通常很多，先看结构化返回，再有选择地 `FileRead` 少量关键文件，不要把所有命中都读一遍。"""
+FIND_REFERENCES_PROMPT = """Finds references to a symbol at a source position.
+- Use for impact analysis and before refactoring.
+- line and column are 1-based and must point to the target symbol.
+- Set include_declaration=true to include its declaration.
+- Inspect the structured results and read selected relevant files, not every match."""
 
-DOCUMENT_SYMBOLS_PROMPT = """用于获取单个文件的符号树。
-- 适合先快速理解一个文件的类、函数、方法、字段结构，再决定读哪些行。
-- 优先在“文件很大、但你只想先看结构”时使用，而不是直接整文件 `FileRead`。
-- 如果返回 `unavailable`，退回 `FileRead` 查看文件目录与关键段落。"""
+DOCUMENT_SYMBOLS_PROMPT = """Returns the symbol tree for one source file.
+- Use to understand its classes, functions, methods, and fields before reading selected sections.
+- Useful for exploring the structure of a large file.
+- If unavailable, inspect the file with FileRead."""
 
-WORKSPACE_SYMBOLS_PROMPT = """用于在整个工作区按符号名模糊检索。
-- 适合已知道大致名称，但不知道文件位置时使用。
-- 典型场景：找 `TaskService`、`SessionRestoreReport`、`FooBarManager` 这类类型或函数。
-- `query` 应尽量使用较稳定的名字片段，不要把自然语言整句塞进去。
-- 如果结果为空或 `unavailable`，退回 `Grep` / `Glob`。"""
+WORKSPACE_SYMBOLS_PROMPT = """Searches workspace symbols by name.
+- Use when the approximate symbol name is known but its file is not.
+- Supply a stable name fragment, not an entire natural-language question.
+- If unavailable or empty, fall back to Grep or Glob."""
 
-DIAGNOSTICS_PROMPT = """用于读取语言服务器为某个文件生成的 diagnostics。
-- 适合在修改代码前后检查报错、警告、类型问题。
-- 这不是编译器替代品；它反映的是当前 LSP server 能看到的诊断结果。
-- 若 diagnostics 不可用或为空，不代表代码绝对正确；必要时仍应结合测试、构建或 `FileRead` 继续分析。"""
+DIAGNOSTICS_PROMPT = """Reads the language server's diagnostics for a source file.
+- Use before or after changes to inspect errors, warnings, and type issues.
+- This is not a replacement for a compiler or test suite.
+- Empty or unavailable diagnostics do not prove the code is correct."""
 
-CACHE_STATUS_PROMPT = """用于检查当前工作区 codeintel cache / offline index 的状态。
-- 当你想知道当前会话是否已经做过 prewarm、缓存了多少文件、workspace symbol 离线索引是否可用时，先调用它。
-- 这不是查询源码定义的工具；它返回的是缓存层状态，而不是符号结果本身。
-- 如果 `offlineIndexAvailable=false`，说明当前缓存还不足以承担 workspace-level 的离线回退；这时不要假设 `GetWorkspaceSymbols` 在 provider 不可用时还能给出结果。
-- 如果你准备在同一仓库里做一连串 symbol/diagnostics 查询，先看它，再决定要不要运行 `CodeIntelPrewarmWorkspace`。"""
+CACHE_STATUS_PROMPT = """Reports the code intelligence cache and offline index status.
+- Inspect cached file counts, offline symbol index availability, and the last prewarm summary.
+- This returns cache status, not source definitions.
+- If offlineIndexAvailable=false, do not assume workspace symbol queries can work without a provider.
+- Use before deciding whether CodeIntelPrewarmWorkspace is needed."""
 
-PREWARM_WORKSPACE_PROMPT = """用于预热当前工作区的 codeintel cache / offline index。
-- 它会扫描代码文件，并把 document symbols（以及可选 diagnostics）写入内存缓存，供后续 `GetWorkspaceSymbols`、`GetDocumentSymbols`、`GetDiagnostics` 在 provider 不稳定或重启后离线回退。
-- 这是读操作，但代价可能不低；不要在超大仓库上无脑全量跑。优先结合 `path_prefix` 和 `max_files` 做局部预热。
-- 典型场景：
-  1. 你接下来要连续做很多代码查询；
-  2. 你怀疑 LSP server 可能不稳定；
-  3. 你想让 workspace symbol 检索具备离线快照。
-- `path_prefix` 应尽量指向具体子目录，比如 `src/`, `core/`, `api/`，不要传文件路径。
-- `force=false` 时，会复用仍然新鲜的缓存，避免重复扫同一批文件；只有在你明确知道代码树变化很大时，才考虑 `force=true`。"""
+PREWARM_WORKSPACE_PROMPT = """Prewarms the workspace code intelligence cache and offline symbol index.
+- Scans source files and caches document symbols and, optionally, diagnostics.
+- Bound the work with path_prefix and max_files, especially in a large repository.
+- path_prefix should identify a directory, not a file.
+- force=false reuses fresh cached entries. Use force=true only when a refresh is needed.
+- This reads source files but may be expensive; use it when subsequent queries benefit from the cache."""
 
 
 class CodeIntelStatusInput(BaseModel):
     file_path: Optional[str] = Field(
         default=None,
-        description="可选。用于帮助按文件语言选择合适的 LSP server，支持相对当前工作区的路径。",
+        description="Optional file path used to select a language server; may be workspace-relative.",
     )
 
 
 class DefinitionInput(BaseModel):
-    file_path: str = Field(description="要查询定义的源码文件路径，支持相对当前工作区的路径。")
-    line: int = Field(ge=1, description="1-based 行号。")
-    column: int = Field(ge=1, description="1-based 列号。")
+    file_path: str = Field(description="Source file containing the reference; may be workspace-relative.")
+    line: int = Field(ge=1, description="Line number (1-based).")
+    column: int = Field(ge=1, description="Column number (1-based).")
 
 
 class ReferencesInput(BaseModel):
-    file_path: str = Field(description="要查询引用的源码文件路径，支持相对当前工作区的路径。")
-    line: int = Field(ge=1, description="1-based 行号。")
-    column: int = Field(ge=1, description="1-based 列号。")
-    include_declaration: bool = Field(default=False, description="是否把声明/定义位置也包含进返回结果。")
+    file_path: str = Field(description="Source file containing the symbol; may be workspace-relative.")
+    line: int = Field(ge=1, description="Line number (1-based).")
+    column: int = Field(ge=1, description="Column number (1-based).")
+    include_declaration: bool = Field(default=False, description="Include the declaration or definition in results.")
 
 
 class DocumentSymbolsInput(BaseModel):
-    file_path: str = Field(description="要查询符号树的源码文件路径，支持相对当前工作区的路径。")
+    file_path: str = Field(description="Source file whose symbol tree should be inspected; may be workspace-relative.")
 
 
 class WorkspaceSymbolsInput(BaseModel):
-    query: str = Field(description="要检索的符号名或稳定片段。")
-    limit: int = Field(default=50, ge=1, le=200, description="最多返回多少个符号。")
+    query: str = Field(description="Symbol name or stable name fragment.")
+    limit: int = Field(default=50, ge=1, le=200, description="Maximum number of symbols.")
 
 
 class DiagnosticsInput(BaseModel):
-    file_path: str = Field(description="要拉取 diagnostics 的源码文件路径，支持相对当前工作区的路径。")
+    file_path: str = Field(description="Source file whose diagnostics should be retrieved; may be workspace-relative.")
 
 
 class CodeIntelCacheStatusInput(BaseModel):
@@ -106,21 +102,21 @@ class CodeIntelCacheStatusInput(BaseModel):
 class CodeIntelPrewarmWorkspaceInput(BaseModel):
     path_prefix: Optional[str] = Field(
         default=None,
-        description="可选。限制预热到当前工作区下的某个子目录，比如 `src` 或 `core/runtime`。",
+        description="Optional workspace subdirectory to prewarm, such as src or core/runtime.",
     )
     max_files: int = Field(
         default=200,
         ge=1,
         le=1000,
-        description="最多扫描多少个代码文件。仓库很大时应主动收紧，而不是默认全量扫描。",
+        description="Maximum source files to scan. Use a smaller bound in large repositories.",
     )
     include_diagnostics: bool = Field(
         default=True,
-        description="是否在预热时同时拉取 diagnostics。开启后更完整，但也更慢。",
+        description="Include diagnostics during prewarming; more complete but slower.",
     )
     force: bool = Field(
         default=False,
-        description="是否强制刷新已有缓存。默认仅在缓存缺失或文件变化时才重新扫描。",
+        description="Force cache refresh; normally only missing or changed files are scanned.",
     )
 
 
@@ -226,10 +222,10 @@ class CodeIntelStatusTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="CodeIntelStatus",
-            description="检查当前工作区的 code intelligence / LSP 是否可用，并给出 provider、server 命令和回退建议。",
+            description="Checks workspace code intelligence availability, server configuration, and fallback options.",
             parameters=CodeIntelStatusInput,
             manager=manager,
-            guidance="先确认 codeintel 可用性，再决定是否依赖 definition/references/diagnostics；不可用时应立即退回文件级工具。",
+            guidance="Check availability before relying on LSP queries; use file tools if unavailable.",
             prompt=CODEINTEL_STATUS_PROMPT,
         )
 
@@ -253,10 +249,10 @@ class FindDefinitionTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="FindDefinition",
-            description="按文件中的精确行列定位符号定义位置，适合跳转到函数、类、变量或方法的声明处。",
+            description="Finds a symbol definition at an exact source line and column.",
             parameters=DefinitionInput,
             manager=manager,
-            guidance="只在已知精确引用点时使用；若 server 不可用或返回为空，立即退回 Grep/FileRead/Glob。",
+            guidance="Use known coordinates; fall back to Grep, FileRead, or Glob if unavailable.",
             prompt=FIND_DEFINITION_PROMPT,
         )
 
@@ -287,10 +283,10 @@ class FindReferencesTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="FindReferences",
-            description="按文件中的精确行列查找符号引用位置，适合评估影响面、做重构前摸排。",
+            description="Finds references to a symbol at an exact source line and column.",
             parameters=ReferencesInput,
             manager=manager,
-            guidance="结果可能很多，优先看结构化结果，再选择少量关键文件做 FileRead。",
+            guidance="Inspect structured results before reading selected relevant files.",
             prompt=FIND_REFERENCES_PROMPT,
         )
 
@@ -322,10 +318,10 @@ class GetDocumentSymbolsTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="GetDocumentSymbols",
-            description="读取单个文件的符号树，适合先看类、函数、方法结构，再决定是否进一步读源码。",
+            description="Returns a source file's symbol tree.",
             parameters=DocumentSymbolsInput,
             manager=manager,
-            guidance="优先用于大文件结构摸排，而不是替代整文件读取。",
+            guidance="Use to explore a large file's structure before reading selected sections.",
             prompt=DOCUMENT_SYMBOLS_PROMPT,
         )
 
@@ -354,10 +350,10 @@ class GetWorkspaceSymbolsTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="GetWorkspaceSymbols",
-            description="按符号名在整个工作区检索类、函数、变量等定义，适合先定位候选文件。",
+            description="Searches workspace symbols by name.",
             parameters=WorkspaceSymbolsInput,
             manager=manager,
-            guidance="输入尽量是稳定的名字片段，而不是自然语言整句。",
+            guidance="Use a stable name fragment, not a natural-language sentence.",
             prompt=WORKSPACE_SYMBOLS_PROMPT,
         )
 
@@ -380,10 +376,10 @@ class GetDiagnosticsTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="GetDiagnostics",
-            description="读取某个文件的 LSP diagnostics，适合查看报错、警告、类型问题。",
+            description="Reads a file's language-server diagnostics.",
             parameters=DiagnosticsInput,
             manager=manager,
-            guidance="用于查看语言服务器当前能看到的诊断结果；diagnostics 为空不代表绝对正确。",
+            guidance="Empty diagnostics do not prove the file is correct.",
             prompt=DIAGNOSTICS_PROMPT,
         )
 
@@ -412,10 +408,10 @@ class CodeIntelCacheStatusTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="CodeIntelCacheStatus",
-            description="查看当前工作区 codeintel cache / offline index 的状态，包括缓存文件数、symbol 索引可用性和最近一次预热摘要。",
+            description="Reports code intelligence cache and offline index status.",
             parameters=CodeIntelCacheStatusInput,
             manager=manager,
-            guidance="在大规模代码查询前先确认 cache 是否已预热；若离线索引还不可用，再决定是否执行 CodeIntelPrewarmWorkspace。",
+            guidance="Inspect the cache before deciding whether to prewarm the workspace.",
             prompt=CACHE_STATUS_PROMPT,
         )
 
@@ -434,10 +430,10 @@ class CodeIntelPrewarmWorkspaceTool(_CodeIntelTool):
     def __init__(self, manager: CodeIntelManager):
         super().__init__(
             name="CodeIntelPrewarmWorkspace",
-            description="预热当前工作区的 codeintel cache / offline symbol index，适合在连续做很多代码查询前先建立离线快照。",
+            description="Prewarms the code intelligence cache and offline symbol index.",
             parameters=CodeIntelPrewarmWorkspaceInput,
             manager=manager,
-            guidance="优先限定 path_prefix 和 max_files，不要默认对大仓库做无边界全量预热。",
+            guidance="Bound work with path_prefix and max_files.",
             prompt=PREWARM_WORKSPACE_PROMPT,
         )
 

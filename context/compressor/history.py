@@ -21,6 +21,32 @@ from core.llm import EasyLLM
 
 logger = logging.getLogger(__name__)
 
+# Claude Code 2.1.88 services/compact/prompt.ts; retain EasyAgent's JSON
+# array protocol instead of Claude's analysis/summary XML response format.
+HISTORY_COMPACTION_PROMPT_EN = """CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.
+Your entire response must be a JSON array of strings, with no Markdown fences or explanation outside the array. Each string is a summary section; keep events in chronological order within sections.
+
+Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
+This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context. Summarize only the information present in the supplied history; do not invent missing details.
+
+Your summary should include the following sections when relevant:
+1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail.
+2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
+3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Pay special attention to the most recent messages and include exact code snippets where available and necessary, and why the file read or edit is important.
+4. Errors and fixes: List all errors encountered and how they were fixed. Pay special attention to specific user feedback, especially if the user requested a different approach.
+5. Problem Solving: Document problems solved and ongoing troubleshooting efforts.
+6. All user messages: Preserve the user's non-tool messages, especially corrections and changing intent.
+7. Pending Tasks: Outline pending tasks that you have explicitly been asked to work on.
+8. Current Work: Describe precisely what was being worked on immediately before this summary request, paying special attention to the most recent user and assistant messages. Include file names and code snippets where available.
+9. Optional Next Step: List the next step directly related to the most recent work and the user's most recent explicit request. If the last task was concluded, list next steps only if explicitly requested. Do not restart tangential or already completed requests without confirming with the user. Preserve direct quotes from recent messages where available to avoid drift in task interpretation.
+
+Follow any relevant additional summarization instructions in the supplied context. Preserve user constraints, granted permissions, blockers, and important tool results accurately. Distinguish attempted actions from verified outcomes. Return only the JSON array of summary strings."""
+
+COMPACTION_CONTINUATION_REMINDER = """<system-reminder>
+This session is being continued from a conversation whose earlier messages were compacted. The summary below covers that earlier context.
+Continue the conversation from where it left off. Resume directly -- do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened. Follow the most recent user request and current permissions; do not revive completed or superseded tasks.
+</system-reminder>"""
+
 
 class BaseHistoryCompactor(ABC):
     """History 压缩器抽象接口。"""
@@ -406,13 +432,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
                             5. 不要输出解释。\n\n"""
                         
         else:
-            system_prompt = """you are a history compressor. You only output JSON arrays, do not output explanations, Markdown or code blocks.\n
-                            Requirements:\n
-                            1. Output must be a JSON array.\n
-                            2. Each item must be a string summary.\n
-                            3. Preserve key constraints, facts, important tool results, and unfinished tasks.\n
-                            4. Keep chronological order from old to new.\n
-                            5. Do not add any explanation.\n\n"""
+            system_prompt = HISTORY_COMPACTION_PROMPT_EN
         try:
             response = self.llm.invoke(
                 [
@@ -468,13 +488,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
                             5. 不要输出解释。\n\n"""
                         
         else:
-            system_prompt = """you are a history compressor. You only output JSON arrays, do not output explanations, Markdown or code blocks.\n
-                            Requirements:\n
-                            1. Output must be a JSON array.\n
-                            2. Each item must be a string summary.\n
-                            3. Preserve key constraints, facts, important tool results, and unfinished tasks.\n
-                            4. Keep chronological order from old to new.\n
-                            5. Do not add any explanation.\n\n"""
+            system_prompt = HISTORY_COMPACTION_PROMPT_EN
         try:
             response = await self.llm.ainvoke(
                 [
@@ -541,6 +555,8 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
             content = str(content or "").strip()
             if not content:
                 continue
+            if not messages:
+                content = COMPACTION_CONTINUATION_REMINDER + "\n\n" + content
             messages.append(self._formatter._build_summary_message(content))
         return messages
 

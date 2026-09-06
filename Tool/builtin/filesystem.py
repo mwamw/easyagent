@@ -37,24 +37,50 @@ DEFAULT_MAX_RESULTS = 500
 DEFAULT_MAX_HEAD_LIMIT = 250
 DEFAULT_MAX_OUTPUT_CHARS = 120000
 
-FILESYSTEM_READ_PROMPT = """用于读取本地文件内容。
-- 优先先用 `Glob` / `Grep` 缩小范围，再按需读取具体文件。
-- 对大文件优先提供 `offset` / `limit`，避免一次性读取过多上下文。
-- 读取 PDF 时，尽量显式指定 `pages`。"""
+# Claude Code 2.1.88: FileReadTool/FileReadTool.ts.
+FILE_READ_SECURITY_REMINDER = """<system-reminder>
+Whenever you read a file, you should consider whether it would be considered malware. You CAN and SHOULD provide analysis of malware, what it is doing. But you MUST refuse to improve or augment the code. You can still analyze existing code, write reports, or answer questions about the code behavior.
+</system-reminder>"""
 
-GLOB_PROMPT = """用于按文件名模式查找本地路径。
-- 适合先定位候选文件，再调用 `FileRead` 或 `Grep`。
-- pattern 支持 `**` 递归匹配。"""
+FILESYSTEM_READ_PROMPT = """Reads a file from the local filesystem. You can access files within the configured workspace and allowed roots directly using this tool. If the user provides a path, use that path. It is okay to read a file that does not exist; an error will be returned.
 
-GREP_PROMPT = """用于在本地文件内容中检索模式。
-- 默认优先返回命中文件；若要看具体上下文，显式设置 `output_mode=content`。
-- 适合先定位调用点、配置项或关键字，再读取目标文件。"""
+Usage:
+- file_path accepts absolute paths or paths relative to the current working directory. Do not include Markdown wrappers or a :line suffix.
+- By default, it reads the whole text file, subject to the output character limit.
+- You can optionally specify a 1-based line offset and limit, especially handy for long files.
+- Results include line numbers starting at 1, followed by " | " and the original file content.
+- This tool can extract text from PDF files (.pdf). For large PDFs (more than 20 pages), you MUST provide pages to read specific page ranges (e.g., pages: "1-5"). Maximum 20 pages per request.
+- This implementation reads text and PDF text; it does not return images as visual input. Notebook files are read as their JSON source.
+- This tool can only read files, not directories. To read a directory, use List.
+- If you read a file that exists but has empty contents, you will receive a system reminder warning in place of file contents.
+- Reading an existing file records its version for subsequent FileEdit, FileWrite, or NotebookEdit operations. If it changes externally, read it again before editing."""
 
-LIST_PROMPT = """用于列出本地目录结构，适合替代 `ls` / `ls -al` 查看项目结构。
-- 不填 `path` 时默认从当前 cwd 列出，而不是整个 workspace root。
-- 默认包含隐藏文件和隐藏目录，便于查看 `.gitignore`、`.github/`、`.env.example` 这类项目结构项。
-- 若项目很大，优先限制 `path` 或设置 `recursive=false`，避免一次性展开过多目录。
-- 只想看目录骨架时，使用 `directories_only=true`。"""
+GLOB_PROMPT = """- Fast file pattern matching tool.
+- Supports glob patterns like "**/*.js" or "src/**/*.ts".
+- Returns matching file paths sorted by modification time.
+- Use this tool when you need to find files by name patterns.
+- The pattern is a shell-style glob, not a regular expression. Use ** explicitly for recursive matching.
+- If path is omitted, searches start at the current working directory.
+- For open-ended searches that require multiple rounds of globbing and grepping, consider Agent when available."""
+
+GREP_PROMPT = """A powerful search tool built on ripgrep, with a local fallback when ripgrep is unavailable.
+
+Usage:
+- ALWAYS use Grep for search tasks when it is available. Do not invoke grep or rg as a Bash command when this tool can accomplish the task.
+- Supports regular expressions such as "log.*Error".
+- Filter files with glob (e.g., "*.js", "**/*.tsx") or type (e.g., "js", "py", "rust").
+- Output modes: "content" shows matching lines, "files_with_matches" shows only file paths (default), "count" shows match counts.
+- Use Agent, when available, for open-ended searches requiring multiple rounds.
+- Literal braces in a regex need escaping.
+- By default patterns match within single lines only. Set multiline=true for cross-line patterns.
+- Limit output with head_limit and offset. Use context, -A, -B, or -C when surrounding lines are needed."""
+
+LIST_PROMPT = """Lists local directory contents.
+- Use this tool to inspect a directory instead of running ls through Bash.
+- If path is omitted, lists the current working directory.
+- Hidden files and directories are included by default.
+- Limit the path and recursion depth for large repositories.
+- Set directories_only=true for a directory-only view."""
 
 
 def _format_line_window(lines: list[str], start_line: int) -> str:
@@ -169,12 +195,12 @@ class FileReadTool(_WorkspaceTool):
         self.max_output_chars = max_output_chars
         super().__init__(
             name="FileRead",
-            description="读取本地文件。支持按行窗口读取文本文件，按页读取 PDF。",
+            description="Read a file from the local filesystem.",
             parameters=ClaudeFileReadInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合读取源码、配置、日志等本地文件；路径必须位于允许的工作区内。",
+            guidance="Reads text or PDF text within the configured allowed roots.",
             prompt=FILESYSTEM_READ_PROMPT,
             tags=["filesystem", "read", "claude_code"],
         )
@@ -222,6 +248,21 @@ class FileReadTool(_WorkspaceTool):
         display_text, truncated = _clip_text(display_text, max_chars=self.max_output_chars)
         raw_content = "\n".join(window)
         version = remember_file_version(path)
+
+        if total_lines == 0:
+            display_text = "<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>"
+        elif start_line > total_lines:
+            display_text = (
+                "<system-reminder>Warning: the file exists but is shorter than the provided "
+                f"offset ({start_line}). The file has {total_lines} lines.</system-reminder>"
+            )
+        elif window:
+            display_text += "\n\n" + FILE_READ_SECURITY_REMINDER
+        if truncated:
+            display_text += (
+                "\n\n<system-reminder>The file output was truncated. Use FileRead with "
+                "offset and limit to read the relevant remaining lines.</system-reminder>"
+            )
 
         return ToolResult.success(
             display_text,
@@ -294,12 +335,12 @@ class ListTool(_WorkspaceTool):
         self.max_results = max_results
         super().__init__(
             name="List",
-            description="列出本地目录内容。适合替代 `ls` 查看项目结构。",
+            description="Lists local directory contents.",
             parameters=ClaudeListInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合先看目录骨架，再决定是否用 FileRead / Glob / Grep 深入查看。",
+            guidance="Inspect directory structure, then use FileRead, Glob, or Grep as needed.",
             prompt=LIST_PROMPT,
             tags=["filesystem", "list", "claude_code"],
         )
@@ -482,12 +523,12 @@ class GlobTool(_WorkspaceTool):
         self.max_results = max_results
         super().__init__(
             name="Glob",
-            description="按 glob 模式查找本地文件或目录。",
+            description="Finds local paths matching a glob pattern.",
             parameters=ClaudeGlobInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合先定位候选文件，再调用 FileRead 或 Grep 深入查看。",
+            guidance="Find files by name patterns before reading or searching their contents.",
             prompt=GLOB_PROMPT,
             tags=["filesystem", "search", "claude_code"],
         )
@@ -576,12 +617,12 @@ class GrepTool(_WorkspaceTool):
         self.max_output_chars = max_output_chars
         super().__init__(
             name="Grep",
-            description="在本地文件内容中按模式检索。",
+            description="Searches local file contents for a pattern.",
             parameters=ClaudeGrepInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合定位符号、关键字、配置项和调用点。默认优先返回命中文件列表。",
+            guidance="Find symbols, settings, and call sites. Returns matching file paths by default.",
             prompt=GREP_PROMPT,
             tags=["filesystem", "search", "claude_code"],
         )

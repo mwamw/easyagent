@@ -10,6 +10,10 @@ from Tool import (
     ToolVisibilityScope,
 )
 from Tool.builtin import (
+    register_config_tool,
+    register_notebook_edit_tool,
+    register_search_tool,
+    register_web_fetch_tool,
     register_agent_tool,
     register_agent_runtime_tools,
     register_ask_user_question_tool,
@@ -29,6 +33,10 @@ from Tool.builtin import (
 from plan import register_enter_plan_mode_tool, register_exit_plan_mode_tool
 
 __all__ = [
+    "register_config_tool",
+    "register_notebook_edit_tool",
+    "register_search_tool",
+    "register_web_fetch_tool",
     "Tool",
     "ToolConflictPolicy",
     "ToolRegistry",

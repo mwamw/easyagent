@@ -13,9 +13,15 @@ from ..claude_compat.models import ClaudeConfigInput
 from core.Config import Config
 
 
-CONFIG_PROMPT = """用于读取或更新当前 Agent 的运行时配置。
-- `value` 为空时读取当前值。
-- 仅修改内存中的 live Config，不会自动写回环境变量或配置文件。"""
+CONFIG_PROMPT = """Get or set the current Agent's runtime configuration.
+
+Use when the user requests configuration changes, asks about current settings, or an adjustment is relevant to the task.
+
+Usage:
+- Get the current value: omit value.
+- Set a new value: include value; complex values may be passed as a JSON string.
+- Only keys supported by the live Config are accepted.
+- Changes apply to the current runtime. This tool does not edit product YAML files or terminal appearance settings."""
 
 
 def _split_roots(value: str) -> list[str]:
@@ -31,9 +37,9 @@ class ConfigTool(Tool):
         self.config = config or Config.from_env()
         super().__init__(
             name="Config",
-            description="读取或更新当前 Agent 的运行时配置。",
+            description="Get or set the current Agent's runtime configuration.",
             parameters=ClaudeConfigInput,
-            guidance="value 为空时读取；value 非空时更新当前 live Config。主要用于调试或切换少量运行参数。",
+            guidance="Omit value to read; supply value to update the live Config.",
             prompt=CONFIG_PROMPT,
             read_only=False,
             destructive=False,

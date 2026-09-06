@@ -107,6 +107,36 @@ def _registry() -> ToolRegistry:
     return registry
 
 
+def test_restore_into_product_preserves_initialized_components(tmp_path):
+    class ProductAgent(BasicAgent):
+        def __init__(self, required_product_setting):
+            super().__init__('product', SessionLLM())
+            self.required_product_setting = required_product_setting
+            self.with_tool(_registry())
+            self.with_prompt(CustomPrompt())
+
+    store = SessionStore(str(tmp_path / 'product.sqlite3'))
+    product = ProductAgent('explicit setting')
+    try:
+        product.add_user_message('saved')
+        product.save_session('product', store=store)
+        components = (product.tool_registry, product.prompt_composer, product.executor,
+                      product.hook_manager, product.metamessage_manager)
+        product.add_user_message('discard')
+        assert product.restore_session('product', store=store) is product
+        assert product.get_history_length() == 1
+        assert product.required_product_setting == 'explicit setting'
+        assert components == (product.tool_registry, product.prompt_composer, product.executor,
+                              product.hook_manager, product.metamessage_manager)
+        assert product.restore_session('product', store=store) is product
+        assert product.get_history_length() == 1
+    finally:
+        product.close()
+    import pytest
+    with pytest.raises(RuntimeError, match='closed'):
+        product.restore_session('product', store=store)
+
+
 def test_session_store_crud_and_expiration(tmp_path):
     store = SessionStore(str(tmp_path / "sessions.sqlite3"))
     store.create_or_update_session(

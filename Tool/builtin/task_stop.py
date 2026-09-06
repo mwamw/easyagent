@@ -28,7 +28,7 @@ class TaskStopTool(_ShellToolBase):
     ):
         super().__init__(
             name="TaskStop",
-            description="停止 Bash 后台任务。",
+            description="Stops a running Bash background task by its ID.",
             parameters=ClaudeTaskStopInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -38,8 +38,14 @@ class TaskStopTool(_ShellToolBase):
             max_background_tasks=max_background_tasks,
             max_output_chars=max_output_chars,
             process_manager=process_manager,
-            guidance="用于终止已启动的后台任务。优先传 task_id；shell_id 会作为兼容别名处理。",
-            prompt="用于终止通过 Bash 启动的后台任务。",
+            guidance="Use task_id; shell_id is a legacy alias.",
+            prompt=(
+                "Stops a running Bash background task by its ID.\n"
+                "- Takes task_id identifying the task to stop.\n"
+                "- Returns a success or failure status.\n"
+                "- Use this tool when you need to terminate a long-running task.\n"
+                "- For background agents, use AgentStop instead."
+            ),
             read_only=False,
             destructive=True,
             supports_parallel=False,

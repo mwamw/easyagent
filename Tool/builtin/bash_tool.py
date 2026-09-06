@@ -16,30 +16,126 @@ from .input_normalization import normalize_generic_input
 
 DEFAULT_BASH_OUTPUT_CHARS = 120000
 
-BASH_TOOL_PROMPT = """用于执行本地 shell 命令，是 code agent 的高风险执行面之一。
+BASH_TOOL_PROMPT = """Executes a given bash command and returns its output.
 
-适用场景：
-- 运行测试、构建、格式化、lint、git 查询、日志排查、包管理脚本。
-- 做“仓库真实状态验证”，例如确认测试是否通过、确认某个命令输出、确认生成产物。
+Commands run in the configured working directory and shell. Shell state is not preserved between calls.
 
-调用前要求：
-- 先明确目标是什么，再执行最小必要命令，不要把多步探索揉成一个超长命令。
-- 如果命令会修改文件、安装依赖、删除内容或启动长期进程，必须清楚副作用边界。
-- 需要读取某个文件后再改动时，应先读文件或用更精确的文件工具，而不是直接靠 shell 粗暴修改。
+IMPORTANT: Avoid using this tool to run find, grep, cat, head, tail, sed, awk, or echo commands, unless explicitly instructed or after verifying that a dedicated tool cannot accomplish your task. Instead, use the appropriate dedicated tool:
+- File search: Use Glob.
+- Content search: Use Grep.
+- Read files: Use FileRead.
+- Edit files: Use FileEdit.
+- Write files: Use FileWrite.
+- Communication: Output text directly, not through echo or printf.
 
-后台任务：
-- 长时间运行的命令请设置 `run_in_background=true`。
-- 后台启动后，使用 `TaskOutput` 轮询 stdout/stderr，再视情况用 `TaskStop` 停止。
-- 不要假设后台任务已经成功完成；必须看输出或退出码。
+While Bash can do similar things, the built-in tools make it easier to review tool calls and give permission.
 
-输出解读：
-- 返回里会包含 `task_id`、`status`、`return_code`、`stdout`、`stderr` 等结构化字段。
-- 如果输出被截断，要根据 `truncated` 字段决定是否继续轮询或缩小命令范围。
+# Instructions
+- If your command will create directories or files, verify the parent directory exists and is the correct location.
+- Always quote file paths that contain spaces with double quotes.
+- Try to maintain your current working directory throughout the session by using absolute paths and avoiding cd. You may use cd if the user explicitly requests it.
+- You may specify an optional timeout in milliseconds. If omitted, the configured command timeout applies.
+- When issuing multiple commands:
+  - If the commands are independent and can run in parallel, make multiple Bash tool calls in a single message. Example: if you need to run "git status" and "git diff", send a single message with two Bash tool calls.
+  - If commands depend on each other and must run sequentially, use a single Bash call with && to chain them together.
+  - Use ; only when commands must run sequentially but later commands need not depend on earlier success.
+  - Do not use newlines to separate commands; newlines inside quoted strings are fine.
+- For git commands:
+  - Prefer creating a new commit rather than amending an existing commit.
+  - Before destructive operations (git reset --hard, git push --force, git checkout --), consider a safer alternative.
+  - Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c commit.gpgsign=false) unless explicitly asked. If a hook fails, investigate and fix it.
+  - Never commit or push unless the user requests it.
+  - Review git status and git diff before staging. Avoid committing secrets or unrelated user changes.
+  - If a commit fails because of a hook, fix the issue and create a new commit; do not amend a previous commit.
+- Avoid unnecessary sleep commands:
+  - Do not sleep between commands that can run immediately.
+  - Do not retry failing commands in a sleep loop — diagnose the root cause.
+  - For long-running commands, set run_in_background=true and use TaskOutput to obtain output and completion status.
+  - A background task handle means the command started, not that it succeeded. Check its exit status.
+  - Use TaskStop when a background task must be terminated.
 
-安全边界：
-- 命令会在当前工作目录执行。
-- 极度危险的命令会被 guardrail 阻断。
-- 这不是默认首选的文本编辑工具；精确改文件优先用 `FileEdit` / `FileWrite`。"""
+Results include task_id, status, return_code, stdout, stderr, and truncation information. Inspect failures and truncated output before deciding on the next action.
+
+# Committing changes with git
+
+Only create commits when requested by the user. If unclear, ask first. When the user asks you to create a new git commit, follow these steps carefully:
+
+You can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.
+
+Git Safety Protocol:
+- NEVER update the git config.
+- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive actions is unhelpful and can result in lost work, so it's best to ONLY run these commands when given direct instructions.
+- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it.
+- NEVER run force push to main/master, warn the user if they request it.
+- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen -- so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit.
+- When staging files, prefer adding specific files by name rather than using "git add -A" or "git add .", which can accidentally include sensitive files (.env, credentials) or large binaries.
+- NEVER commit changes unless the user explicitly asks you to. It is VERY IMPORTANT to only commit when explicitly asked, otherwise the user will feel that you are being too proactive.
+
+1. Run the following bash commands in parallel, each using the Bash tool:
+   - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.
+   - Run a git diff command to see both staged and unstaged changes that will be committed.
+   - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.
+2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
+   - Summarize the nature of the changes (e.g. new feature, enhancement, bug fix, refactoring, test, docs). Ensure the message accurately reflects the changes and their purpose.
+   - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files.
+   - Draft a concise (1-2 sentences) commit message that focuses on the "why" rather than the "what".
+   - Ensure it accurately reflects the changes and their purpose.
+3. Run these dependent commands sequentially:
+   - Add relevant untracked files to the staging area.
+   - Create the commit with the message.
+   - Run git status after the commit completes to verify success.
+4. If the commit fails due to a pre-commit hook: fix the issue and create a NEW commit.
+
+Important notes:
+- During this commit workflow, NEVER run additional commands to read or explore code, besides git bash commands.
+- NEVER use the TodoWrite or Agent tools for this commit workflow.
+- DO NOT push to the remote repository unless the user explicitly asks you to do so.
+- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.
+- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid option for git rebase.
+- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit.
+- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, as in this example:
+<example>
+git commit -m "$(cat <<'EOF'
+Commit message here.
+EOF
+)"
+</example>
+
+# Creating pull requests
+
+Use the gh command via the Bash tool for GitHub-related tasks including working with issues, pull requests, checks, and releases, when gh is installed and authenticated. If given a GitHub URL, use gh to get the information needed when available.
+
+IMPORTANT: When the user asks you to create a pull request, follow these steps carefully:
+
+1. Run the following bash commands in parallel using the Bash tool, in order to understand the current state of the branch since it diverged from the main branch:
+   - Run a git status command to see all untracked files (never use -uall).
+   - Run a git diff command to see both staged and unstaged changes that will be committed.
+   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote.
+   - Run a git log command and `git diff [base-branch]...HEAD` to understand the full commit history for the current branch (from the time it diverged from the base branch).
+2. Analyze all changes that will be included in the pull request, making sure to look at ALL relevant commits, NOT just the latest commit, and draft a pull request title and summary:
+   - Keep the PR title short (under 70 characters).
+   - Use the description/body for details, not the title.
+3. Run these dependent commands sequentially:
+   - Create a new branch if needed.
+   - Push to remote with -u if needed and authorized.
+   - Create the PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting.
+<example>
+gh pr create --title "the pr title" --body "$(cat <<'EOF'
+## Summary
+<1-3 bullet points>
+
+## Test plan
+[Bulleted markdown checklist of TODOs for testing the pull request...]
+EOF
+)"
+</example>
+
+Important:
+- DO NOT use the TodoWrite or Agent tools for this PR workflow.
+- Return the PR URL when you're done, so the user can see it.
+
+# Other common operations
+- View comments on a GitHub PR: gh api repos/foo/bar/pulls/123/comments"""
 
 
 def _normalize_workspace_root(workspace_root: Optional[str]) -> str:
@@ -183,7 +279,7 @@ class BashTool(_ShellToolBase):
     ):
         super().__init__(
             name="Bash",
-            description="执行本地 shell 命令。支持前台执行和后台任务。",
+            description="Executes a shell command in the foreground or background.",
             parameters=ClaudeBashInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
@@ -193,7 +289,7 @@ class BashTool(_ShellToolBase):
             max_background_tasks=max_background_tasks,
             max_output_chars=max_output_chars,
             process_manager=process_manager,
-            guidance="适合运行测试、构建、格式化、脚本和 git 查询。长任务请放后台，然后使用 TaskOutput 查看输出。",
+            guidance="Run tests, builds, scripts, and Git commands. Use TaskOutput for background results.",
             prompt=BASH_TOOL_PROMPT,
             read_only=False,
             destructive=True,

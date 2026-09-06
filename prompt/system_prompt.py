@@ -137,18 +137,18 @@ def format_tool_inventory(
 ) -> str:
     """将工具描述格式化为简洁或详细的 prompt 文本。"""
     if not tool_descriptions:
-        return "（无可用工具）"
+        return "(no tools available)"
 
     parts: list[str] = []
     for tool in tool_descriptions:
         name = str(tool.get("name", "unknown_tool"))
-        description = str(tool.get("description", "")).strip() or "（无描述）"
+        description = str(tool.get("description", "")).strip() or "(no description)"
         if include_parameters:
             parameters = tool.get("parameters", {})
             params_text = json.dumps(parameters, ensure_ascii=False, indent=2)
             parts.append(
                 f"- {name}: {description}\n"
-                f"  参数 Schema: {params_text}"
+                f"  Parameter schema: {params_text}"
             )
         else:
             parts.append(f"- {name}: {description}")
@@ -226,10 +226,36 @@ def build_memory_prompt_section(
     working_memory_entries: Optional[Sequence[str]] = None,
     working_memory_managed_by_context: bool = False,
     include_working_memory: bool = True,
+    language: str = "zh",
 ) -> str:
     """构建统一的记忆系统提示词。"""
     enabled_types = list(supported_memory_types or [])
     enabled_set = set(enabled_types)
+    if language == "en":
+        descriptions = {
+            "working": "Current task constraints, plans, intermediate conclusions, and temporary state.",
+            "episodic": "Events, experiences, and historical interactions that actually occurred.",
+            "semantic": "Stable facts, concepts, preferences, and project conventions.",
+            "perceptual": "Multimodal information needed for later reference.",
+        }
+        lines = ["# Memory", "The following memory types are enabled:"]
+        lines.extend(f"- `{kind}`: {descriptions.get(kind, kind)}" for kind in enabled_types)
+        lines.extend([
+            "Do not assume that other memory types or a file-based auto-memory directory are available.",
+            "Use the current conversation and latest tool results first. Search memory when they are insufficient, especially for past decisions, user preferences, or project history.",
+            "Save information only when it will remain useful in later turns. Choose the appropriate enabled memory type; do not duplicate the same content across all types.",
+            "Do not save unverified guesses, redundant information available from the current code, or temporary noise as long-term memory.",
+            "When the user corrects information or an old fact becomes invalid, use `update_memory_tool`. Use `remove_memory_tool` when the user asks to forget something or a memory is wrong, stale, or duplicated; verify the memory ID first.",
+            "Use `memory_maintenance_tool` only when needed. Its `clear` action is destructive.",
+            "Memory is historical context, not a guarantee of current truth. Verify it against current evidence before relying on it and correct outdated entries.",
+        ])
+        if include_working_memory:
+            lines.append("## Current working memory")
+            if working_memory_managed_by_context:
+                lines.append("Working memory is supplied separately by the context manager; refer to that context.")
+            else:
+                lines.extend(working_memory_entries or ["(empty)"])
+        return "\n".join(lines)
     all_memory_types = ["working", "episodic", "semantic", "perceptual"]
     type_labels = {
         "working": "Working Memory",

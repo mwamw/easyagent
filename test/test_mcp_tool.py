@@ -313,7 +313,7 @@ class TestMCPToolIntegration(unittest.TestCase):
         self.assertTrue(read_spec.supports_parallel)
         self.assertFalse(read_spec.requires_confirmation)
         self.assertTrue(read_spec.metadata["mcp_read_only"])
-        self.assertIn("只读", read_spec.build_schema_description())
+        self.assertIn("read-only", read_spec.build_schema_description())
 
         write_spec = self.registry.get_tool_spec("mcp_remote_write")
         assert write_spec is not None
@@ -321,8 +321,8 @@ class TestMCPToolIntegration(unittest.TestCase):
         self.assertTrue(write_spec.requires_confirmation)
         self.assertFalse(write_spec.supports_parallel)
         self.assertTrue(write_spec.metadata["mcp_open_world"])
-        self.assertIn("远程副作用", write_spec.build_schema_description())
-        self.assertIn("外部世界", write_spec.build_schema_description())
+        self.assertIn("remote side effects", write_spec.build_schema_description())
+        self.assertIn("external world", write_spec.build_schema_description())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

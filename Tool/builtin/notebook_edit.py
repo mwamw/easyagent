@@ -15,10 +15,15 @@ from .file_write import _WorkspaceWriteTool
 from .input_normalization import normalize_path_input
 
 
-NOTEBOOK_EDIT_PROMPT = """用于编辑 Jupyter Notebook 的单元格内容。
-- `replace` 需要定位到已有单元格。
-- `insert` 若提供 `cell_id`，会在该单元格后插入；否则追加到末尾。
-- `delete` 只删除目标单元格，不会自动清理其他输出或元数据。"""
+NOTEBOOK_EDIT_PROMPT = """Completely replaces the contents of a specific cell in a Jupyter notebook (.ipynb file) with new source. Jupyter notebooks are interactive documents that combine code, text, and visualizations, commonly used for data analysis and scientific computing.
+
+Usage:
+- Read the notebook with FileRead before editing. Re-read it if it has changed externally.
+- notebook_path accepts an absolute path or a path relative to the working directory.
+- Use cell_id to identify the target cell for replace or delete.
+- Use edit_mode=insert to add a cell after cell_id, or append a cell when cell_id is omitted.
+- Use edit_mode=delete to delete the identified cell.
+- Set cell_type to code or markdown when inserting a cell. This tool does not accept cell_number."""
 
 MAX_NOTEBOOK_FILE_SIZE = 4 * 1024 * 1024
 
@@ -103,12 +108,12 @@ class NotebookEditTool(_WorkspaceWriteTool):
     ):
         super().__init__(
             name="NotebookEdit",
-            description="编辑 Jupyter Notebook 的单元格内容。",
+            description="Replace, insert, or delete a Jupyter notebook cell.",
             parameters=ClaudeNotebookEditInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合修改 `.ipynb` 单元格。replace/delete 需要提供可定位的 cell_id；insert 不提供 cell_id 时默认追加到末尾。",
+            guidance="replace/delete require cell_id; insert without cell_id appends a cell.",
             prompt=NOTEBOOK_EDIT_PROMPT,
             tags=["notebook", "edit", "claude_code"],
         )

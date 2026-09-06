@@ -109,8 +109,8 @@ class TestWebSearchTool(unittest.TestCase):
         
         self.assertEqual(schema["type"], "function")
         self.assertEqual(schema["function"]["name"], "web_search")
-        self.assertIn("仅在需要最新外部资料", schema["function"]["description"])
-        self.assertIn("搜索结果是候选线索", schema["function"]["description"])
+        self.assertIn("current external information", schema["function"]["description"])
+        self.assertIn("Never invent sources", schema["function"]["description"])
         self.assertIn("parameters", schema["function"])
 
 

@@ -60,7 +60,7 @@ class _ManagedBackgroundTask:
         with self.lock:
             self.stderr_chunks.append(chunk)
 
-    def snapshot(self) -> BackgroundTaskSnapshot:
+    def snapshot(self, *, include_output: bool = True) -> BackgroundTaskSnapshot:
         return_code = self.process.poll()
         if return_code is not None and self.finished_at is None:
             self.finished_at = time.time()
@@ -76,8 +76,8 @@ class _ManagedBackgroundTask:
             cwd=self.cwd,
             status=status,
             return_code=return_code,
-            stdout="".join(self.stdout_chunks),
-            stderr="".join(self.stderr_chunks),
+            stdout="".join(self.stdout_chunks) if include_output else "",
+            stderr="".join(self.stderr_chunks) if include_output else "",
             started_at=self.started_at,
             finished_at=self.finished_at,
         )
@@ -211,9 +211,9 @@ class ProcessManager:
         self._finalize_task(task)
         return task.snapshot()
 
-    def list_tasks(self) -> list[BackgroundTaskSnapshot]:
+    def list_tasks(self, *, include_output: bool = True) -> list[BackgroundTaskSnapshot]:
         with self._lock:
-            return [task.snapshot() for task in self._tasks.values()]
+            return [task.snapshot(include_output=include_output) for task in self._tasks.values()]
 
     def close(self) -> None:
         for snapshot in self.list_tasks():

@@ -14,10 +14,21 @@ from ..runtime import TodoItemSnapshot, set_todo_items
 if TYPE_CHECKING:
     from task import TaskRecord, TaskService, TaskStatus
 
-TODO_WRITE_PROMPT = """用于维护当前任务的完整 todo 列表。
-- 每次调用都要提供完整的 todo 列表，而不是增量 patch。
-- `in_progress` 同一时刻最好只有 0 或 1 个。
-- `activeForm` 应写成正在进行中的动作，便于模型复述当前步骤。"""
+TODO_WRITE_PROMPT = """Use this tool to create and manage a structured task list for your current work. This helps track progress, organize complex tasks, and demonstrate thoroughness.
+
+When to use:
+- Complex multi-step tasks or multiple tasks requested by the user.
+- Work that benefits from an explicit progress checklist.
+- Skip it for a single straightforward task or a purely conversational response.
+
+Task management:
+- Provide the complete todo list on every call, not an incremental patch.
+- Use pending for work not yet started, in_progress for active work, and completed only for finished work.
+- Keep at most one task in_progress whenever possible.
+- Supply content in imperative form and activeForm in present-progressive form.
+- Update progress as work proceeds, not all at the end.
+- Do not mark a task completed if tests fail, implementation is incomplete, or an unresolved blocker remains.
+- Remove obsolete tasks rather than maintaining a stale list."""
 
 VERIFICATION_KEYWORDS = (
     "verify",
@@ -291,9 +302,9 @@ class TodoWriteTool(Tool):
     ):
         super().__init__(
             name="TodoWrite",
-            description="维护当前任务的完整 todo 列表。",
+            description="Create and manage the complete todo list for the current task.",
             parameters=ClaudeTodoWriteInput,
-            guidance="每次传入完整 todo 列表；适合把任务拆成 pending / in_progress / completed 三种状态。",
+            guidance="Send the complete list each time, using pending, in_progress, and completed.",
             read_only=False,
             supports_parallel=False,
             source="builtin",

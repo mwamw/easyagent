@@ -151,6 +151,40 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         )
 
     @staticmethod
+    def _error_payload(exc: Exception) -> dict[str, Any]:
+        """Preserve safe provider diagnostics without leaking request credentials."""
+
+        payload: dict[str, Any] = {
+            "error_type": exc.__class__.__name__,
+            "error_message": str(exc),
+        }
+        status_code = getattr(exc, "status_code", None)
+        if status_code is not None:
+            try:
+                payload["status_code"] = int(status_code)
+            except (TypeError, ValueError):
+                payload["status_code"] = str(status_code)
+
+        error_code = getattr(exc, "code", None)
+        if error_code:
+            payload["error_code"] = str(error_code)
+
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is not None:
+            request_id = (
+                getattr(exc, "request_id", None)
+                or headers.get("x-request-id")
+                or headers.get("x-oneapi-request-id")
+            )
+            edge_trace_id = headers.get("cf-ray")
+            if request_id:
+                payload["request_id"] = str(request_id)
+            if edge_trace_id:
+                payload["edge_trace_id"] = str(edge_trace_id)
+        return payload
+
+    @staticmethod
     def _stream_event(
         services: AgentExecutionServices,
         state: AgentInvocationState,
@@ -180,6 +214,17 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         reason = services.stop_checker()
         if reason is not None:
             raise AgentStopRequested(reason or "Agent stop requested")
+
+    @staticmethod
+    def _select_terminal_event(
+        current: dict[str, Any] | None,
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        if current is None or candidate.get("type") == "tool_calls":
+            return candidate
+        if current.get("type") == "tool_calls":
+            return current
+        return candidate
 
     @staticmethod
     def _tool_payload(services: AgentExecutionServices) -> Any:
@@ -511,7 +556,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 services.metamessage_manager.emit(
                     MetaMessage(
                         name=f"tool_context:{tool_name}",
-                        content=f"Runtime context produced by tool `{tool_name}`:\n{content}",
+                        content=f"<system-reminder>\nRuntime context produced by tool `{tool_name}`:\n{content}\n</system-reminder>",
                         lifecycle=MetaMessageLifecycle.INVOCATION,
                         metadata={"source": "tool_result", "toolName": tool_name},
                     )
@@ -523,7 +568,10 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             services.metamessage_manager.emit(
                 MetaMessage(
                     name="deferred_tools_expanded",
-                    content="The following deferred tool schemas are now available: " + ", ".join(names),
+                    content=(
+                        "<system-reminder>\nThe following deferred tool schemas are now available: "
+                        + ", ".join(names) + "\n</system-reminder>"
+                    ),
                     lifecycle=MetaMessageLifecycle.INVOCATION,
                     dedup_key=f"deferred:{','.join(names)}",
                     metadata={"source": "deferred_tools", "expandedToolNames": names},
@@ -734,7 +782,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         services,
                         RuntimeEventType.LLM_INVOKE_FAILED,
                         state,
-                        {"llm_invoke_id": llm_id, "error_type": exc.__class__.__name__, "error_message": str(exc)},
+                        {"llm_invoke_id": llm_id, **self._error_payload(exc)},
                     )
                     raise
                 output_messages = services.llm.response_to_canonical(response, include_reasoning=True)
@@ -808,7 +856,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         services,
                         RuntimeEventType.LLM_INVOKE_FAILED,
                         state,
-                        {"llm_invoke_id": llm_id, "error_type": exc.__class__.__name__, "error_message": str(exc)},
+                        {"llm_invoke_id": llm_id, **self._error_payload(exc)},
                     )
                     raise
                 output_messages = services.llm.response_to_canonical(response, include_reasoning=True)
@@ -895,13 +943,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                             sequence += 1
                             yield self._stream_event(services, state, AgentStreamEventType.REASONING_DELTA, sequence, content=delta)
                         elif event_type in {"tool_calls", "final_response"}:
-                            terminal = provider_event
+                            terminal = self._select_terminal_event(terminal, provider_event)
                 except Exception as exc:
                     self._publish(
                         services,
                         RuntimeEventType.LLM_INVOKE_FAILED,
                         state,
-                        {"llm_invoke_id": llm_id, "error_type": exc.__class__.__name__, "error_message": str(exc)},
+                        {"llm_invoke_id": llm_id, **self._error_payload(exc)},
                     )
                     raise
                 terminal = terminal or {"type": "final_response", "content": "".join(text_parts), "thinking": "".join(thinking_parts)}
@@ -980,7 +1028,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 sequence,
                 content=str(exc),
                 data={
-                    "error_type": exc.__class__.__name__,
+                    **self._error_payload(exc),
                     "interrupted": isinstance(exc, (ToolInterruption, AgentStopRequested)),
                 },
             )
@@ -1040,13 +1088,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                             sequence += 1
                             yield self._stream_event(services, state, AgentStreamEventType.REASONING_DELTA, sequence, content=delta)
                         elif event_type in {"tool_calls", "final_response"}:
-                            terminal = provider_event
+                            terminal = self._select_terminal_event(terminal, provider_event)
                 except Exception as exc:
                     self._publish(
                         services,
                         RuntimeEventType.LLM_INVOKE_FAILED,
                         state,
-                        {"llm_invoke_id": llm_id, "error_type": exc.__class__.__name__, "error_message": str(exc)},
+                        {"llm_invoke_id": llm_id, **self._error_payload(exc)},
                     )
                     raise
                 terminal = terminal or {"type": "final_response", "content": "".join(text_parts), "thinking": "".join(thinking_parts)}
@@ -1125,7 +1173,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 sequence,
                 content=str(exc),
                 data={
-                    "error_type": exc.__class__.__name__,
+                    **self._error_payload(exc),
                     "interrupted": isinstance(exc, (ToolInterruption, AgentStopRequested)),
                 },
             )

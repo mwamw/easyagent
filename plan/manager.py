@@ -159,7 +159,11 @@ class PlanModeManager(BasePlanMode):
         actions = list(self.state.allowed_actions)
         if not actions:
             return self.config.enter_message
-        return f"{self.config.enter_message}\nExplicitly allowed actions: {', '.join(actions)}"
+        detail = f"Explicitly allowed actions: {', '.join(actions)}"
+        message = self.config.enter_message
+        if message.rstrip().endswith("</system-reminder>"):
+            return message.rstrip().removesuffix("</system-reminder>") + detail + "\n</system-reminder>"
+        return f"{message}\n{detail}"
 
     def export_state(self) -> dict:
         return {

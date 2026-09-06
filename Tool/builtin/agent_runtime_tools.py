@@ -15,73 +15,51 @@ from .display_utils import format_structured_display
 
 
 class AgentGetParams(BaseModel):
-    agent_id: str = Field(description="要查询的子 agent ID")
+    agent_id: str = Field(description="Subagent ID to inspect")
 
 
 class AgentListParams(BaseModel):
-    status: Optional[str] = Field(default=None, description="按状态过滤")
-    team_id: Optional[str] = Field(default=None, description="按团队 ID 或团队名称过滤")
-    current_task_id: Optional[str] = Field(default=None, description="按当前任务 ID 过滤")
-    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+    status: Optional[str] = Field(default=None, description="Filter by status")
+    team_id: Optional[str] = Field(default=None, description="Filter by team ID or name")
+    current_task_id: Optional[str] = Field(default=None, description="Filter by current task ID")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
 
 
 class AgentWaitParams(BaseModel):
-    agent_id: str = Field(description="要等待的子 agent ID")
-    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+    agent_id: str = Field(description="Subagent ID to wait for")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="Wait timeout in milliseconds")
 
 
 class AgentStopParams(BaseModel):
-    agent_id: str = Field(description="要停止的子 agent ID")
-    reason: str = Field(default="", description="停止原因")
-    wait: bool = Field(default=False, description="是否等待子 agent 进入终态")
-    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+    agent_id: str = Field(description="Subagent ID to stop")
+    reason: str = Field(default="", description="Reason for stopping")
+    wait: bool = Field(default=False, description="Wait for the subagent to reach a terminal state")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="Wait timeout in milliseconds")
 
 
-AGENT_GET_PROMPT = """读取单个子 agent 的完整运行时句柄。
-
-适合：
-- 你已经知道 `agent_id`，想查看它的状态、outputFile、executionContext、team/task 绑定和 mailbox 概况。
-- 你需要确认后台子 agent 当前是否还在运行、是否已报错、是否已有输出。
-
-不要用它做什么：
-- 不要用 `AgentGet` 代替 `AgentWait` 等待完成；它只是读取当前状态快照。
-- 如果你想看所有 handles 的整体分布，优先用 `AgentList`。"""
+AGENT_GET_PROMPT = """Reads a subagent's full runtime handle.
+- Use a known agent_id to inspect status, outputFile, executionContext, team/task bindings, and mailbox summary.
+- This returns the current snapshot; it does not wait for completion. Use AgentWait to wait.
+- Use AgentList to discover handles."""
 
 
-AGENT_LIST_PROMPT = """列出当前 runtime 中的子 agent handles，并支持按状态、team、task 过滤。
-
-适合：
-- 你需要发现当前有哪些后台/前台子 agent。
-- 你需要查看某个 team 或 task 下面有哪些 agent 正在运行。
-- 你需要在多个 handles 之间挑出目标，再配合 `AgentGet` / `AgentWait` / `AgentStop` 使用。
-
-最佳实践：
-- agent 数量较多时，先加 `status`、`team_id` 或 `current_task_id` 过滤。
-- 如果已经知道具体 `agent_id`，优先用 `AgentGet`。"""
+AGENT_LIST_PROMPT = """Lists subagent handles in the current runtime.
+- Filter by status, team_id, or current_task_id when many agents exist.
+- Use returned agent_id values with AgentGet, AgentWait, or AgentStop.
+- If the agent_id is already known, prefer AgentGet."""
 
 
-AGENT_WAIT_PROMPT = """阻塞等待指定子 agent 到达终态或当前可观察状态。
-
-适合：
-- `Agent(run_in_background=true)` 之后等待结果落定，再继续汇总。
-- 你需要在继续执行前确认某个子 agent 是否已完成、报错或停止。
-
-重要语义：
-- 超时不代表失败，只表示在 `timeout_ms` 内没有进入你希望观察到的状态。
-- 超时后应继续看返回的 handle、status、outputFile，并决定是继续等待还是中断。
-- `AgentWait` 返回的是最新 handle，不只是一个布尔结果。"""
+AGENT_WAIT_PROMPT = """Waits for a specified subagent and returns its latest handle.
+- Use after Agent(run_in_background=true) when its result is needed.
+- timeout_ms limits the wait. A timeout is not an agent failure.
+- Inspect status and outputFile to decide whether to wait again, collect results, or stop the agent."""
 
 
-AGENT_STOP_PROMPT = """向后台子 agent 发送协作停止请求，并可选择等待它进入终态。
-
-适合：
-- 当前任务已不再需要该子 agent 继续运行。
-- 你发现子 agent 跑偏、跑得太久，或收到新的高优先级约束，需要中止它。
-
-重要语义：
-- 这不是强杀进程语义，而是协作停止协议；默认 BasicAgent 子 agent 会收到停止请求并尽量优雅退出。
-- `wait=true` 时通常应配合 `timeout_ms`，确保你能确认它是否真正进入终态。
-- 停止请求成功不代表结果可用；停止后应检查返回 handle 中的 `status`、`stopReason` 和 `outputFile`。"""
+AGENT_STOP_PROMPT = """Sends a cooperative stop request to a background subagent.
+- Use when its work is no longer needed or new constraints require stopping it.
+- This is not a force-kill operation. The agent stops at a cooperative checkpoint.
+- Use wait=true with timeout_ms to observe whether it actually stopped.
+- Inspect status, stopReason, and outputFile; an accepted stop request does not imply a completed result."""
 
 
 class _AgentRuntimeToolBase(Tool):
@@ -131,9 +109,9 @@ class AgentGetTool(_AgentRuntimeToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="AgentGet",
-            description="读取单个子 agent 的结构化运行时状态。",
+            description="Reads the structured runtime state of a subagent.",
             parameters=AgentGetParams,
-            guidance="适合在多 agent 协作中查看指定子 agent 的当前状态、输出文件和 execution context。",
+            guidance="Inspect the subagent's current status, output file, and execution context.",
             prompt=AGENT_GET_PROMPT,
             read_only=True,
             supports_parallel=True,
@@ -173,9 +151,9 @@ class AgentListTool(_AgentRuntimeToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="AgentList",
-            description="列出当前 runtime 中的子 agent handles。",
+            description="Lists subagent handles in the current runtime.",
             parameters=AgentListParams,
-            guidance="适合查看所有子 agent，或按状态、team、current_task_id 过滤。",
+            guidance="Discover agents, optionally filtered by status, team, or current_task_id.",
             prompt=AGENT_LIST_PROMPT,
             read_only=True,
             supports_parallel=True,
@@ -228,9 +206,9 @@ class AgentWaitTool(_AgentRuntimeToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="AgentWait",
-            description="阻塞等待指定子 agent 到达当前可观察状态或终态。",
+            description="Waits for a subagent and returns its latest observable state.",
             parameters=AgentWaitParams,
-            guidance="适合在后台子 agent 运行后等待它完成，再读取结构化 handle。",
+            guidance="Wait for a background subagent when its result is needed.",
             prompt=AGENT_WAIT_PROMPT,
             read_only=True,
             supports_parallel=False,
@@ -282,9 +260,9 @@ class AgentStopTool(_AgentRuntimeToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="AgentStop",
-            description="请求停止一个后台子 agent，可选择等待其进入终态。",
+            description="Requests cooperative shutdown of a background subagent.",
             parameters=AgentStopParams,
-            guidance="对默认 BasicAgent 子 agent，这是协作停止协议：先发停止请求，再按需等待终态。",
+            guidance="This requests cooperative stopping, with an optional wait for a terminal state.",
             prompt=AGENT_STOP_PROMPT,
             read_only=False,
             destructive=True,

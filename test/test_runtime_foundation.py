@@ -77,6 +77,11 @@ class RuntimeFoundationTestCase(unittest.TestCase):
         output = manager.get_output(snapshot.task_id)
         self.assertIn("start", output.stdout)
         self.assertIn("done", output.stdout)
+        lightweight = manager.list_tasks(include_output=False)[0]
+        self.assertEqual(lightweight.stdout, "")
+        self.assertEqual(lightweight.stderr, "")
+        self.assertEqual(lightweight.return_code, output.return_code)
+        self.assertIn("done", manager.list_tasks()[0].stdout)
         manager.close()
 
     def test_worktree_manager_round_trip(self):

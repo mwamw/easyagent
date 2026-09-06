@@ -14,30 +14,16 @@ from .file_write import _WorkspaceWriteTool, _build_file_diff_payload
 from .input_normalization import normalize_path_input
 
 
-FILE_EDIT_PROMPT = """用于对已有文件做精确文本替换。
+FILE_EDIT_PROMPT = """Performs exact string replacements in files.
 
-核心原则：
-- 这是“精确编辑工具”，不是模糊编辑器。
-- `old_string` 必须与目标文件中的现有文本真实匹配。
-- 默认要求唯一命中；若有多处相同文本，必须显式设置 `replace_all=true`。
-
-何时使用：
-- 你已经知道要替换的原文和新文本，且只想改局部。
-- 你希望尽量减少 diff，只动必要行。
-
-何时不要用：
-- 还不确定原始文本是否真实存在时，不要直接调用；先 `FileRead`。
-- 需要重写整个文件结构时，优先用 `FileWrite`。
-- 想做基于语义的复杂重构时，不要把一个模糊想法硬塞成 `old_string`。
-
-失败语义：
-- `no_match`：`old_string` 没命中。
-- `non_unique_match`：命中多处但未设置 `replace_all=true`。
-- `stale_file` / `read_required`：文件已变化或未读取过，需先重新 `FileRead`。
-
-最佳实践：
-- `old_string` 尽量包含足够上下文，避免多处重复命中。
-- 先小步精确改，再运行测试或 diagnostics 验证，而不是一次拼很多大替换。"""
+Usage:
+- You must use FileRead to read the target file before editing. This tool will error if you attempt an edit without reading the file, or if it has changed since that read.
+- When editing text from FileRead output, preserve the exact indentation after the line number prefix. The prefix is a line number followed by " | ". Never include that prefix in old_string or new_string.
+- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
+- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
+- The edit will FAIL if old_string is not unique in the file. Provide more surrounding context to make it unique or use replace_all to change every instance.
+- Use replace_all for replacing and renaming strings across the file.
+- The file must be within the configured workspace or allowed roots."""
 
 MAX_EDIT_FILE_SIZE = 2 * 1024 * 1024
 SMART_QUOTE_TRANSLATION = str.maketrans({
@@ -127,12 +113,12 @@ class FileEditTool(_WorkspaceWriteTool):
     ):
         super().__init__(
             name="FileEdit",
-            description="对已有文件执行精确文本替换。",
+            description="Performs exact string replacements in files.",
             parameters=ClaudeFileEditInput,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             cwd=cwd,
-            guidance="适合精确替换已有文本。默认要求 old_string 唯一命中；多处命中时请显式设置 replace_all=true。",
+            guidance="old_string must uniquely match unless replace_all=true.",
             prompt=FILE_EDIT_PROMPT,
             tags=["filesystem", "edit", "claude_code"],
         )

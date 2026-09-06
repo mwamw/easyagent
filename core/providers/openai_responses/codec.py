@@ -608,8 +608,6 @@ class OpenAIResponsesCodec(BaseProviderCodec):
             item = getattr(event, "item", None)
             if item is not None:
                 self._merge_responses_output_item(item, state)
-                if getattr(item, "type", None) == "function_call" and event_type.endswith(".done"):
-                    state["terminal_emitted"] = True
             return events
         if event_type == "response.completed":
             response = getattr(event, "response", None)

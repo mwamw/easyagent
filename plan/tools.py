@@ -14,17 +14,43 @@ if TYPE_CHECKING:
     from .manager import PlanModeManager
 
 
-ENTER_PLAN_MODE_PROMPT = """用于请求进入 plan 模式。
-- 适合在继续执行存在较大不确定性时，先进入规划阶段。
-- 该工具会中断当前调用，把模式切换请求交回调用方/UI。"""
+ENTER_PLAN_MODE_PROMPT = """Use this tool when you are about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment.
 
-EXIT_PLAN_MODE_PROMPT = """用于请求退出 plan 模式并声明后续允许的操作类别。
-- 它本身不执行权限切换，而是把请求结构化抛给调用方/UI。"""
+When to use:
+- New features, multiple valid approaches, architectural decisions, or multi-file changes.
+- Unclear requirements where exploration is needed before choosing an implementation.
+
+When not to use:
+- Simple, obvious fixes or tasks with specific, detailed instructions.
+- Pure research or exploration that does not require implementation planning.
+
+What happens in plan mode:
+1. Explore the codebase using read-only tools.
+2. Understand existing patterns and architecture.
+3. Design an implementation approach.
+4. Present the plan to the user.
+5. Use AskUserQuestion to clarify requirements.
+6. Use ExitPlanMode to request approval before implementation.
+
+This tool interrupts execution and returns a mode-change request to the caller. It does not itself grant permission or create a plan file."""
+
+EXIT_PLAN_MODE_PROMPT = """Use this tool when you are in plan mode, have finished preparing your plan, and are ready for user approval.
+
+When to use:
+- Only when planning implementation steps for a task that requires code changes.
+- Do not use it for a research-only task.
+
+Before using:
+- Resolve questions about requirements or approach with AskUserQuestion.
+- Present a complete, unambiguous plan in the conversation.
+- Use ExitPlanMode to request approval, not AskUserQuestion.
+
+This tool interrupts execution and returns allowedPrompts to the caller for permission handling. It does not read a plan file or automatically approve the plan."""
 
 
 class EnterPlanModeInput(BaseModel):
-    reason: str = Field(default="", description="进入 plan 模式的原因")
-    allowedActions: list[str] = Field(default_factory=list, description="计划阶段允许的动作类别")
+    reason: str = Field(default="", description="Reason for entering plan mode")
+    allowedActions: list[str] = Field(default_factory=list, description="Action categories allowed during planning")
 
 
 def _interrupt_result(
@@ -48,9 +74,9 @@ class EnterPlanModeTool(Tool):
     def __init__(self, *, plan_manager: "PlanModeManager | None" = None):
         super().__init__(
             name="EnterPlanMode",
-            description="请求进入 plan 模式，并中断当前执行等待调用方切换模式。",
+            description="Requests plan mode and interrupts execution for caller approval.",
             parameters=EnterPlanModeInput,
-            guidance="适合在需求尚不明确或需要先做方案分析时使用。",
+            guidance="Use when requirements or implementation choices need investigation.",
             prompt=ENTER_PLAN_MODE_PROMPT,
             read_only=True,
             destructive=False,
@@ -81,9 +107,9 @@ class ExitPlanModeTool(Tool):
     def __init__(self, *, plan_manager: "PlanModeManager | None" = None):
         super().__init__(
             name="ExitPlanMode",
-            description="请求退出 plan 模式，并把允许的执行权限交回调用方处理。",
+            description="Requests plan approval and returns requested permissions to the caller.",
             parameters=ClaudeExitPlanModeInput,
-            guidance="适合在计划已确认、准备进入执行阶段时使用。调用后会中断当前 tool loop。",
+            guidance="Use when the plan is ready for approval before implementation.",
             prompt=EXIT_PLAN_MODE_PROMPT,
             read_only=True,
             destructive=False,

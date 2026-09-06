@@ -986,6 +986,50 @@ class TestNativeProviders(unittest.TestCase):
         self.assertEqual(assistant_message["content"][0]["type"], "tool_use")
         self.assertEqual(assistant_message["content"][0]["input"], {"city": "Beijing"})
 
+    def test_anthropic_tool_use_stream_emits_only_one_terminal_event(self):
+        codec = create_codec("anthropic_native")
+        state = codec._init_anthropic_stream_state()
+        events = [
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "call_1",
+                    "name": "weather",
+                    "input": {},
+                },
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": '{"city": "Beijing"}',
+                },
+            },
+            {"type": "message_delta", "delta": {"stop_reason": "tool_use"}},
+            {"type": "message_stop"},
+        ]
+
+        emitted = []
+        for event in events:
+            emitted.extend(codec._extract_anthropic_stream_events(event, state))
+
+        terminal_events = [
+            event
+            for event in emitted
+            if event["type"] in {"tool_calls", "final_response"}
+        ]
+        self.assertEqual(len(terminal_events), 1)
+        self.assertEqual(terminal_events[0]["type"], "tool_calls")
+        self.assertEqual(terminal_events[0]["tool_calls"][0]["id"], "call_1")
+        self.assertEqual(terminal_events[0]["tool_calls"][0]["name"], "weather")
+        self.assertEqual(
+            terminal_events[0]["tool_calls"][0]["arguments"],
+            {"city": "Beijing"},
+        )
+
     def test_anthropic_provider_stream_tool_calls_fallback_to_start_block_input(self):
         codec = create_codec("anthropic_native")
         state = codec._init_anthropic_stream_state()

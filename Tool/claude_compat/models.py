@@ -8,125 +8,125 @@ from pydantic import BaseModel, Field
 
 
 class ClaudeAgentInput(BaseModel):
-    description: str = Field(description="3-5 个词的任务概述")
-    prompt: str = Field(description="交给子 agent 的完整任务描述")
-    subagent_type: Optional[str] = Field(default=None, description="子 agent 类型")
-    model: Optional[str] = Field(default=None, description="子 agent 使用的模型 ID 或模型别名")
-    run_in_background: bool = Field(default=False, description="是否后台运行")
-    name: Optional[str] = Field(default=None, description="子 agent 名称")
-    team_name: Optional[str] = Field(default=None, description="团队名称")
+    description: str = Field(description="A short (3-5 word) description of the task")
+    prompt: str = Field(description="The complete task for the subagent")
+    subagent_type: Optional[str] = Field(default=None, description="Subagent type")
+    model: Optional[str] = Field(default=None, description="Model ID or alias for the subagent")
+    run_in_background: bool = Field(default=False, description="Run in the background")
+    name: Optional[str] = Field(default=None, description="Subagent name")
+    team_name: Optional[str] = Field(default=None, description="Team name")
     mode: Optional[Literal["acceptEdits", "bypassPermissions", "default", "dontAsk", "plan"]] = Field(
         default=None,
-        description="子 agent 权限模式",
+        description="Subagent permission mode",
     )
-    isolation: Optional[Literal["worktree"]] = Field(default=None, description="隔离模式")
+    isolation: Optional[Literal["worktree"]] = Field(default=None, description="Isolation mode")
 
 
 class ClaudeAgentGetInput(BaseModel):
-    agent_id: str = Field(description="子 agent ID")
+    agent_id: str = Field(description="Subagent ID")
 
 
 class ClaudeAgentListInput(BaseModel):
-    status: Optional[str] = Field(default=None, description="状态过滤")
-    team_id: Optional[str] = Field(default=None, description="团队 ID 或名称过滤")
-    current_task_id: Optional[str] = Field(default=None, description="当前任务 ID 过滤")
-    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+    status: Optional[str] = Field(default=None, description="Filter by status")
+    team_id: Optional[str] = Field(default=None, description="Filter by team ID or name")
+    current_task_id: Optional[str] = Field(default=None, description="Filter by current task ID")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
 
 
 class ClaudeAgentWaitInput(BaseModel):
-    agent_id: str = Field(description="子 agent ID")
-    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+    agent_id: str = Field(description="Subagent ID")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="Wait timeout in milliseconds")
 
 
 class ClaudeAgentStopInput(BaseModel):
-    agent_id: str = Field(description="子 agent ID")
-    reason: str = Field(default="", description="停止原因")
-    wait: bool = Field(default=False, description="是否等待子 agent 进入终态")
-    timeout_ms: Optional[int] = Field(default=None, ge=0, description="等待超时时间，毫秒")
+    agent_id: str = Field(description="Subagent ID")
+    reason: str = Field(default="", description="Reason for stopping")
+    wait: bool = Field(default=False, description="Wait for the subagent to reach a terminal state")
+    timeout_ms: Optional[int] = Field(default=None, ge=0, description="Wait timeout in milliseconds")
 
 
 class ClaudeBashInput(BaseModel):
-    command: str = Field(description="要执行的 shell 命令")
-    timeout: Optional[int] = Field(default=None, description="超时时间，毫秒")
-    description: Optional[str] = Field(default=None, description="命令用途说明")
-    run_in_background: bool = Field(default=False, description="是否后台运行")
-    dangerouslyDisableSandbox: bool = Field(default=False, description="是否禁用沙箱")
+    command: str = Field(description="The shell command to execute")
+    timeout: Optional[int] = Field(default=None, description="Timeout in milliseconds")
+    description: Optional[str] = Field(default=None, description="Description of what the command does")
+    run_in_background: bool = Field(default=False, description="Run in the background")
+    dangerouslyDisableSandbox: bool = Field(default=False, description="Request execution outside the sandbox, subject to runtime policy")
 
 
 class ClaudeTaskOutputInput(BaseModel):
-    task_id: str = Field(description="后台任务 ID")
-    block: bool = Field(default=False, description="是否阻塞等待")
-    timeout: int = Field(default=0, description="阻塞等待超时时间，毫秒")
+    task_id: str = Field(description="Background task ID")
+    block: bool = Field(default=False, description="Whether to wait for completion")
+    timeout: int = Field(default=0, description="Blocking wait timeout in milliseconds")
 
 
 class ClaudeExitPlanModePrompt(BaseModel):
-    tool: Literal["Bash"] = Field(description="权限提示关联的工具")
-    prompt: str = Field(description="权限类别描述")
+    tool: Literal["Bash"] = Field(description="Tool associated with the requested permission")
+    prompt: str = Field(description="Description of the requested permission category")
 
 
 class ClaudeExitPlanModeInput(BaseModel):
     allowedPrompts: list[ClaudeExitPlanModePrompt] = Field(
         default_factory=list,
-        description="退出计划模式时声明的权限类别",
+        description="Permissions requested when exiting plan mode",
     )
 
 
 class ClaudeEnterPlanModeInput(BaseModel):
-    reason: str = Field(default="", description="进入 plan 模式的原因")
-    allowedActions: list[str] = Field(default_factory=list, description="计划阶段允许的动作类别")
+    reason: str = Field(default="", description="Reason for entering plan mode")
+    allowedActions: list[str] = Field(default_factory=list, description="Action categories allowed during planning")
 
 
 class ClaudeFileEditInput(BaseModel):
-    file_path: str = Field(description="要修改的绝对路径")
-    old_string: str = Field(description="待替换文本")
-    new_string: str = Field(description="替换后的文本")
-    replace_all: bool = Field(default=False, description="是否替换所有匹配项")
+    file_path: str = Field(description="Path of the file to edit")
+    old_string: str = Field(description="The exact text to replace")
+    new_string: str = Field(description="Replacement text")
+    replace_all: bool = Field(default=False, description="Replace all occurrences")
 
 
 class ClaudeFileReadInput(BaseModel):
-    file_path: str = Field(description="要读取的文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
-    offset: Optional[int] = Field(default=None, description="起始行号")
-    limit: Optional[int] = Field(default=None, description="读取行数")
-    pages: Optional[str] = Field(default=None, description="PDF 页范围")
+    file_path: str = Field(description="File path to read. Relative paths are supported; omit :line suffixes and Markdown wrappers.")
+    offset: Optional[int] = Field(default=None, description="Starting line number (1-based)")
+    limit: Optional[int] = Field(default=None, description="Number of lines to read")
+    pages: Optional[str] = Field(default=None, description="PDF page range, for example 1-5")
 
 
 class ClaudeFileWriteInput(BaseModel):
-    file_path: str = Field(description="目标文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
-    content: str = Field(description="写入内容")
+    file_path: str = Field(description="Target file path. Relative paths are supported; omit :line suffixes and Markdown wrappers.")
+    content: str = Field(description="Content to write")
 
 
 class ClaudeListInput(BaseModel):
-    path: Optional[str] = Field(default=None, description="要列出的目录；不填时默认当前 cwd")
-    recursive: bool = Field(default=False, description="是否递归列出子目录")
-    max_depth: Optional[int] = Field(default=None, ge=0, description="递归深度上限；0 表示仅当前目录")
-    include_hidden: bool = Field(default=True, description="是否包含隐藏文件和隐藏目录")
-    directories_only: bool = Field(default=False, description="是否只返回目录")
-    limit: int = Field(default=500, ge=1, le=5000, description="最多返回多少条目录项")
+    path: Optional[str] = Field(default=None, description="Directory to list; defaults to the current working directory")
+    recursive: bool = Field(default=False, description="List subdirectories recursively")
+    max_depth: Optional[int] = Field(default=None, ge=0, description="Maximum recursion depth; 0 lists only the current directory")
+    include_hidden: bool = Field(default=True, description="Include hidden files and directories")
+    directories_only: bool = Field(default=False, description="Return directories only")
+    limit: int = Field(default=500, ge=1, le=5000, description="Maximum number of directory entries")
 
 
 class ClaudeGlobInput(BaseModel):
-    pattern: str = Field(description="glob 匹配模式。使用 shell 风格通配符，不是 regex；递归请显式写 `**`。")
-    path: Optional[str] = Field(default=None, description="搜索目录；不填时默认从当前 cwd 搜索")
+    pattern: str = Field(description="Shell-style glob pattern, not a regex. Use ** explicitly for recursive matching.")
+    path: Optional[str] = Field(default=None, description="Search directory; defaults to the current working directory")
 
 
 class ClaudeGrepInput(BaseModel):
-    pattern: str = Field(description="正则匹配模式。这里是内容 regex，不是文件 glob。")
-    path: Optional[str] = Field(default=None, description="搜索路径；不填时默认从当前 cwd 搜索")
-    glob: Optional[str] = Field(default=None, description="文件过滤 glob，例如 `**/*.py`")
+    pattern: str = Field(description="Regular expression for content matching, not a file glob")
+    path: Optional[str] = Field(default=None, description="Search path; defaults to the current working directory")
+    glob: Optional[str] = Field(default=None, description="File filter glob, for example **/*.py")
     output_mode: Optional[Literal["content", "files_with_matches", "count"]] = Field(
         default="files_with_matches",
-        description="输出模式",
+        description="Output mode",
     )
-    before_context: Optional[int] = Field(default=None, alias="-B", description="前文行数")
-    after_context: Optional[int] = Field(default=None, alias="-A", description="后文行数")
-    full_context: Optional[int] = Field(default=None, alias="-C", description="上下文行数")
-    context: Optional[int] = Field(default=None, description="上下文行数别名")
-    line_numbers: Optional[bool] = Field(default=True, alias="-n", description="是否显示行号")
-    ignore_case: Optional[bool] = Field(default=None, alias="-i", description="是否忽略大小写")
-    type: Optional[str] = Field(default=None, description="ripgrep 文件类型")
-    head_limit: Optional[int] = Field(default=None, description="返回条数上限")
-    offset: Optional[int] = Field(default=None, description="跳过条数")
-    multiline: bool = Field(default=False, description="是否开启 multiline")
+    before_context: Optional[int] = Field(default=None, alias="-B", description="Lines of context before a match")
+    after_context: Optional[int] = Field(default=None, alias="-A", description="Lines of context after a match")
+    full_context: Optional[int] = Field(default=None, alias="-C", description="Lines of context around a match")
+    context: Optional[int] = Field(default=None, description="Alias for context lines")
+    line_numbers: Optional[bool] = Field(default=True, alias="-n", description="Show line numbers")
+    ignore_case: Optional[bool] = Field(default=None, alias="-i", description="Ignore case")
+    type: Optional[str] = Field(default=None, description="Ripgrep file type")
+    head_limit: Optional[int] = Field(default=None, description="Maximum number of results")
+    offset: Optional[int] = Field(default=None, description="Number of results to skip")
+    multiline: bool = Field(default=False, description="Enable multiline matching")
 
     model_config = {
         "populate_by_name": True,
@@ -134,156 +134,156 @@ class ClaudeGrepInput(BaseModel):
 
 
 class ClaudeTaskStopInput(BaseModel):
-    task_id: Optional[str] = Field(default=None, description="后台任务 ID")
-    shell_id: Optional[str] = Field(default=None, description="旧版 shell ID")
+    task_id: Optional[str] = Field(default=None, description="Background task ID")
+    shell_id: Optional[str] = Field(default=None, description="Legacy alias for the background task ID")
 
 
 class ClaudeTaskCreateInput(BaseModel):
-    title: str = Field(description="任务标题")
-    description: str = Field(default="", description="任务描述")
+    title: str = Field(description="Task title")
+    description: str = Field(default="", description="Task description")
     status: Literal["open", "in_progress", "blocked", "completed", "cancelled"] = Field(
         default="open",
-        description="任务状态",
+        description="Task status",
     )
-    owner: Optional[str] = Field(default=None, description="任务归属者")
-    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+    owner: Optional[str] = Field(default=None, description="Task owner")
+    parent_task_id: Optional[str] = Field(default=None, description="Parent task ID")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class ClaudeTaskGetInput(BaseModel):
-    task_id: str = Field(description="任务 ID")
+    task_id: str = Field(description="Task ID")
 
 
 class ClaudeTaskUpdateInput(BaseModel):
-    task_id: str = Field(description="任务 ID")
-    title: Optional[str] = Field(default=None, description="新标题")
-    description: Optional[str] = Field(default=None, description="新描述")
+    task_id: str = Field(description="Task ID")
+    title: Optional[str] = Field(default=None, description="New title")
+    description: Optional[str] = Field(default=None, description="New description")
     status: Optional[Literal["open", "in_progress", "blocked", "completed", "cancelled"]] = Field(
         default=None,
-        description="新状态",
+        description="New status",
     )
-    owner: Optional[str] = Field(default=None, description="新归属者")
-    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID")
-    metadata: Optional[dict[str, Any]] = Field(default=None, description="元数据增量")
+    owner: Optional[str] = Field(default=None, description="New owner")
+    parent_task_id: Optional[str] = Field(default=None, description="Parent task ID")
+    metadata: Optional[dict[str, Any]] = Field(default=None, description="Metadata fields to merge")
 
 
 class ClaudeTaskListInput(BaseModel):
     status: Optional[Literal["open", "in_progress", "blocked", "completed", "cancelled"]] = Field(
         default=None,
-        description="状态过滤",
+        description="Filter by status",
     )
-    owner: Optional[str] = Field(default=None, description="归属者过滤")
-    parent_task_id: Optional[str] = Field(default=None, description="父任务 ID 过滤")
-    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
+    owner: Optional[str] = Field(default=None, description="Filter by owner")
+    parent_task_id: Optional[str] = Field(default=None, description="Filter by parent task ID")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
 
 
 class ClaudeSendMessageInput(BaseModel):
-    recipient_type: Literal["agent", "team", "task"] = Field(description="接收方类型")
-    recipient_id: str = Field(description="接收方 ID 或团队名称")
-    content: str = Field(description="要发送的消息内容")
-    sender_id: Optional[str] = Field(default=None, description="发送方标识")
-    ttl_ms: Optional[int] = Field(default=None, ge=0, description="消息 TTL，毫秒")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+    recipient_type: Literal["agent", "team", "task"] = Field(description="Recipient type")
+    recipient_id: str = Field(description="Recipient ID or team name")
+    content: str = Field(description="Message content to send")
+    sender_id: Optional[str] = Field(default=None, description="Sender identity")
+    ttl_ms: Optional[int] = Field(default=None, ge=0, description="Message time to live in milliseconds")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class ClaudeTeamCreateInput(BaseModel):
-    name: str = Field(description="团队名称")
-    description: str = Field(default="", description="团队描述")
-    member_agent_ids: list[str] = Field(default_factory=list, description="初始成员 agent ID 列表")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="附加元数据")
+    name: str = Field(description="Team name")
+    description: str = Field(default="", description="Team description")
+    member_agent_ids: list[str] = Field(default_factory=list, description="Initial member agent IDs")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
 
 class ClaudeTeamDeleteInput(BaseModel):
-    team_id: str = Field(description="团队 ID，也支持团队名称")
+    team_id: str = Field(description="Team ID or name")
 
 
 class ClaudeMailboxReadInput(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="agent ID，不填则默认当前 agent")
-    limit: int = Field(default=100, ge=1, le=500, description="返回数量上限")
-    include_consumed: bool = Field(default=False, description="是否包含已消费消息")
-    include_expired: bool = Field(default=False, description="是否包含已过期消息")
-    mark_delivered: bool = Field(default=True, description="是否把 queued 消息标记为 delivered")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID; defaults to the current agent")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
+    include_consumed: bool = Field(default=False, description="Include consumed messages")
+    include_expired: bool = Field(default=False, description="Include expired messages")
+    mark_delivered: bool = Field(default=True, description="Mark queued messages as delivered")
 
 
 class ClaudeMailboxAckInput(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="agent ID，不填则默认当前 agent")
-    message_ids: list[str] = Field(default_factory=list, description="待确认消费的消息 ID")
-    ack_all: bool = Field(default=False, description="是否确认当前 agent 所有未消费消息")
+    agent_id: Optional[str] = Field(default=None, description="Agent ID; defaults to the current agent")
+    message_ids: list[str] = Field(default_factory=list, description="Message IDs to acknowledge as consumed")
+    ack_all: bool = Field(default=False, description="Acknowledge all unconsumed messages for the current agent")
 
 
 class ClaudeListMcpResourcesInput(BaseModel):
-    server: Optional[str] = Field(default=None, description="MCP server 名称")
+    server: Optional[str] = Field(default=None, description="MCP server name")
 
 
 class ClaudeNotebookEditInput(BaseModel):
-    notebook_path: str = Field(description="Notebook 文件路径。支持相对路径；不要附带 `:line` 行号或 Markdown 包装。")
-    cell_id: Optional[str] = Field(default=None, description="单元格 ID")
-    new_source: str = Field(description="新的单元格内容")
-    cell_type: Optional[Literal["code", "markdown"]] = Field(default=None, description="单元格类型")
-    edit_mode: Optional[Literal["replace", "insert", "delete"]] = Field(default="replace", description="编辑模式")
+    notebook_path: str = Field(description="Notebook path. Relative paths are supported; omit :line suffixes and Markdown wrappers.")
+    cell_id: Optional[str] = Field(default=None, description="Cell ID")
+    new_source: str = Field(description="New cell source")
+    cell_type: Optional[Literal["code", "markdown"]] = Field(default=None, description="Cell type")
+    edit_mode: Optional[Literal["replace", "insert", "delete"]] = Field(default="replace", description="Edit mode")
 
 
 class ClaudeReadMcpResourceInput(BaseModel):
-    server: str = Field(description="MCP server 名称")
-    uri: str = Field(description="资源 URI")
+    server: str = Field(description="MCP server name")
+    uri: str = Field(description="Resource URI")
 
 
 class ClaudeTodoItem(BaseModel):
-    content: str = Field(description="todo 内容")
-    status: Literal["pending", "in_progress", "completed"] = Field(description="todo 状态")
-    activeForm: str = Field(description="当前进行式描述")
+    content: str = Field(description="Task content")
+    status: Literal["pending", "in_progress", "completed"] = Field(description="Task status")
+    activeForm: str = Field(description="Present-progressive description of the active task")
 
 
 class ClaudeTodoWriteInput(BaseModel):
-    todos: list[ClaudeTodoItem] = Field(default_factory=list, description="完整 todo 列表")
+    todos: list[ClaudeTodoItem] = Field(default_factory=list, description="The complete todo list")
 
 
 class ClaudeWebFetchInput(BaseModel):
-    url: str = Field(description="要抓取的 URL")
-    prompt: str = Field(description="对抓取内容的处理提示")
+    url: str = Field(description="URL to fetch")
+    prompt: str = Field(description="What to extract from the fetched content")
 
 
 class ClaudeWebSearchInput(BaseModel):
-    query: str = Field(description="搜索词")
-    allowed_domains: list[str] = Field(default_factory=list, description="允许域名白名单")
-    blocked_domains: list[str] = Field(default_factory=list, description="禁止域名黑名单")
+    query: str = Field(description="Search query")
+    allowed_domains: list[str] = Field(default_factory=list, description="Domains to include")
+    blocked_domains: list[str] = Field(default_factory=list, description="Domains to exclude")
 
 
 class ClaudeAskUserOption(BaseModel):
-    label: str = Field(description="选项标签")
-    description: str = Field(description="选项说明")
-    preview: Optional[str] = Field(default=None, description="选项预览")
+    label: str = Field(description="Option label")
+    description: str = Field(description="Option description")
+    preview: Optional[str] = Field(default=None, description="Optional preview")
 
 
 class ClaudeAskUserQuestion(BaseModel):
-    question: str = Field(description="完整问题")
-    header: str = Field(description="短标签")
-    options: list[ClaudeAskUserOption] = Field(min_length=2, max_length=4, description="候选选项")
-    multiSelect: bool = Field(default=False, description="是否多选")
+    question: str = Field(description="Complete question")
+    header: str = Field(description="Short label")
+    options: list[ClaudeAskUserOption] = Field(min_length=2, max_length=4, description="Available options")
+    multiSelect: bool = Field(default=False, description="Allow multiple selections")
 
 
 class ClaudeAskUserQuestionInput(BaseModel):
-    questions: list[ClaudeAskUserQuestion] = Field(min_length=1, max_length=4, description="问题列表")
-    source: Optional[str] = Field(default=None, description="问题来源")
+    questions: list[ClaudeAskUserQuestion] = Field(min_length=1, max_length=4, description="Questions to ask")
+    source: Optional[str] = Field(default=None, description="Question source")
 
 
 class ClaudeConfigInput(BaseModel):
-    setting: str = Field(description="配置 key")
-    value: Optional[str] = Field(default=None, description="新的配置值(如果是复杂类型可以转字符串传入)")
+    setting: str = Field(description="Configuration key")
+    value: Optional[str] = Field(default=None, description="New configuration value; complex values may be encoded as JSON strings")
 
 
 class ClaudeEnterWorktreeInput(BaseModel):
-    name: Optional[str] = Field(default=None, description="worktree 名称")
+    name: Optional[str] = Field(default=None, description="Worktree name")
 
 
 class ClaudeExitWorktreeInput(BaseModel):
-    action: Literal["keep", "remove"] = Field(description="退出行为")
-    discard_changes: bool = Field(default=False, description="是否丢弃改动")
+    action: Literal["keep", "remove"] = Field(description="Exit action")
+    discard_changes: bool = Field(default=False, description="Discard changes when removing the worktree")
 
 
 class ClaudeToolCompatibilityEnvelope(BaseModel):
-    """便于序列化 catalog/manifest 的统一结构。"""
+    """Serializable catalog and manifest envelope."""
 
-    tool_name: str = Field(description="Claude 风格工具名")
-    parameters_model_name: str = Field(description="参数模型名称")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="额外元信息")
+    tool_name: str = Field(description="Claude-style tool name")
+    parameters_model_name: str = Field(description="Parameter model name")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")

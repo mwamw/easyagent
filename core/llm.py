@@ -56,6 +56,7 @@ class EasyLLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: Optional[int] = None,
+        default_headers: Optional[dict[str, str]] = None,
         provider: Optional[str] = "auto",
         **kwargs
     ):
@@ -69,7 +70,8 @@ class EasyLLM:
             api_key: API 密钥
             base_url: API 地址
             timeout: 超时时间
-        provider: Provider 类型 (auto, openai, openai_responses, google, google_native, anthropic, anthropic_native, ...)
+            default_headers: 传给底层 Provider SDK 的默认 HTTP 请求头
+            provider: Provider 类型 (auto, openai, openai_responses, google, google_native, anthropic, anthropic_native, ...)
         """
         self.provider_name = provider
         self.model = model or os.getenv("LLM_MODEL_ID")
@@ -78,6 +80,7 @@ class EasyLLM:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout or int(os.getenv("LLM_TIMEOUT", "60"))
+        self.default_headers = dict(default_headers or {})
         self.kwargs = kwargs
         
         # 自动检测 Provider
@@ -106,6 +109,7 @@ class EasyLLM:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             timeout=self.timeout,
+            default_headers=self.default_headers,
             **kwargs
         )
         self.codec: BaseProviderCodec = create_codec(self.provider_name)

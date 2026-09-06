@@ -43,6 +43,7 @@ class PromptBuildContext:
     memory: Any = None
     task_service: Any = None
     plan: Any = None
+    context_manager: Any = None
 
     @property
     def tools_enabled(self) -> bool:
@@ -129,13 +130,44 @@ class SystemPromptComposer(BaseSystemPromptComposer):
                 PromptBlock("output_efficiency", build_output_efficiency_section(), order=next_order + 10, metadata=static),
             ]
         )
-        blocks.extend(self._skill_blocks(context, start_order=100))
-        memory_block = self._memory_block(context, order=140)
+        blocks.extend(self.build_capability_blocks(context))
+        return blocks
+
+    def build_capability_blocks(
+        self, context: PromptBuildContext, *, language: str = "zh"
+    ) -> list[PromptBlock]:
+        """Describe installed capabilities without adding default behavior rules.
+
+        Products owning their entire system prompt can reuse capability discovery
+        with ``include_defaults=False`` instead of copying framework composition.
+        """
+        blocks = self._skill_blocks(context, start_order=100)
+        memory_block = self._memory_block(context, order=140, language=language)
         if memory_block is not None:
             blocks.append(memory_block)
         inventory = self._tool_inventory_block(context, order=160)
         if inventory is not None:
             blocks.append(inventory)
+        if context.plan is not None and context.plan.mode == "plan":
+            blocks.append(PromptBlock(
+                "plan_mode",
+                "Plan mode still active (see full instructions earlier in conversation). "
+                "Read-only inspection and planning only; do not modify files or run non-readonly tools. "
+                "Follow the 5-phase workflow: understand, design, review, present the plan, request approval. "
+                "Use AskUserQuestion for clarifications or ExitPlanMode for plan approval when available. "
+                "Never ask about plan approval via text or AskUserQuestion.",
+                placement="system_reminder", order=190,
+                metadata={"cache_partition": "dynamic", "cacheable": False},
+            ))
+        if context.context_manager is not None:
+            blocks.append(PromptBlock(
+                "compaction",
+                "Auto-compact is enabled. When the context window is nearly full, older messages "
+                "will be automatically compacted so you can continue working. Continue from the "
+                "retained context; do not stop or rush merely because the conversation is long. "
+                "Re-read source files when exact details are no longer available after compaction.",
+                placement="system_reminder", order=200,
+            ))
         return blocks
 
     @staticmethod
@@ -155,15 +187,18 @@ class SystemPromptComposer(BaseSystemPromptComposer):
         return []
 
     @staticmethod
-    def _memory_block(context: PromptBuildContext, *, order: int) -> PromptBlock | None:
+    def _memory_block(
+        context: PromptBuildContext, *, order: int, language: str = "zh"
+    ) -> PromptBlock | None:
         if context.memory is None:
             return None
         memory_types = list(getattr(context.memory, "memory_types", {}).keys())
         content = build_memory_prompt_section(
             supported_memory_types=memory_types,
             include_working_memory=False,
+            language=language,
         )
-        return PromptBlock("memory_policy", content, order=order)
+        return PromptBlock("memory_policy", content, placement="system_reminder", order=order)
 
     @staticmethod
     def _tool_inventory_block(context: PromptBuildContext, *, order: int) -> PromptBlock | None:
@@ -178,7 +213,7 @@ class SystemPromptComposer(BaseSystemPromptComposer):
         content = format_tool_inventory(descriptors, include_parameters=False)
         return PromptBlock(
             "tool_inventory",
-            "## 可用工具概览\n当前按需展开工具 schema；需要隐藏工具时先调用 `tool_schema_tool`。\n\n" + content,
+            "## Available tools\nTool schemas are loaded on demand. Call `tool_schema_tool` to load the schemas of tools not yet exposed in this request.\n\n" + content,
             placement="system_reminder",
             order=order,
             metadata={"cache_partition": "session", "cacheable": True},

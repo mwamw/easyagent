@@ -13,55 +13,33 @@ from ..ToolRegistry import ToolRegistry
 from .display_utils import format_structured_display
 
 
-MAILBOX_READ_PROMPT = """读取某个 agent mailbox 中当前可见的消息，并可把 `queued` 消息标记为 `delivered`。
-
-何时使用：
-- 当你需要查看某个子 agent 或当前 agent 最近收到的运行时消息。
-- 当你需要确认 team 广播、task 广播或点对点消息是否已经送达。
-- 当你需要读取自动注入到系统提示之外的完整结构化 mailbox payload。
-
-关键语义：
-- `queued` 表示消息已送达 mailbox，但该 agent 还未显式读取。
-- `delivered` 表示消息已经被读取或自动注入到 prompt 中，但还没有被确认消费。
-- `consumed` 表示消息已经被 `MailboxAck` 确认处理。
-- `expired` 表示消息超过 TTL，不应再作为当前执行输入。
-
-使用建议：
-- 对当前 agent，通常不需要手填 `agent_id`；工具会默认读取自己的 mailbox。
-- 如果你只是想确认系统提示里已经自动注入了哪些协作消息，也可以直接调用本工具。
-- 读取后如果你已经把消息纳入执行，应再调用 `MailboxAck`。
-- 如果只是排查协作状态，可设置 `include_consumed` 或 `include_expired` 查看完整历史。"""
+MAILBOX_READ_PROMPT = """Reads runtime messages from an agent's mailbox.
+- Omit agent_id to read the current agent's mailbox.
+- queued means not yet read; delivered means read or injected into context; consumed means acknowledged; expired means the TTL elapsed.
+- mark_delivered marks queued messages as delivered.
+- Use MailboxAck after processing messages, not merely receiving them.
+- include_consumed and include_expired are useful for inspecting collaboration history."""
 
 
-MAILBOX_ACK_PROMPT = """把 mailbox 消息标记为 `consumed`，表示当前 agent 已经处理了这些运行时输入。
-
-何时使用：
-- 当你已经阅读并执行了某条 manager / team / task 消息。
-- 当你希望从“待处理消息”中移除已处理项，避免下一轮继续重复看到它们。
-- 当你在复杂协作流中需要明确区分“消息已送达”和“消息已消费”。
-
-关键语义：
-- `MailboxAck` 不会删除消息，只会把状态改成 `consumed` 并记录 ack 行为。
-- 如果要一次性确认当前 agent 的所有待处理消息，可使用 `ack_all=true`。
-- 如果只想确认部分消息，应精确传入 `message_ids`。
-
-注意：
-- 不要在真正阅读之前先 ack；这会让后续协作状态变得不准确。
-- 如果消息仍然需要保留为未处理输入，就不要 ack。"""
+MAILBOX_ACK_PROMPT = """Marks mailbox messages as consumed after the agent has processed them.
+- Specify message_ids to acknowledge selected messages.
+- Use ack_all=true only after processing all pending messages.
+- Acknowledgment does not delete messages.
+- Do not acknowledge unread messages or work that still needs attention."""
 
 
 class MailboxReadParams(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="[重要]如果你是想查收自己收到的协作消息，请务必留空不填！切勿填入文件名或任务名。仅仅在你是 manager 替其他 agent 查询时才填目标 agentId。")
-    limit: int = Field(default=100, ge=1, le=500, description="返回消息数量上限")
-    include_consumed: bool = Field(default=False, description="是否包含已消费消息")
-    include_expired: bool = Field(default=False, description="是否包含已过期消息")
-    mark_delivered: bool = Field(default=True, description="是否把 queued 消息标记为 delivered")
+    agent_id: Optional[str] = Field(default=None, description="IMPORTANT: Omit this to read your own mailbox. Do not use a file or task name. Specify another agent ID only when inspecting that agent as its manager.")
+    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of messages")
+    include_consumed: bool = Field(default=False, description="Include consumed messages")
+    include_expired: bool = Field(default=False, description="Include expired messages")
+    mark_delivered: bool = Field(default=True, description="Mark queued messages as delivered")
 
 
 class MailboxAckParams(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="[重要]如果是确认你自己收到的消息，请务必留空不填！")
-    message_ids: list[str] = Field(default_factory=list, description="要确认消费的消息 ID 列表")
-    ack_all: bool = Field(default=False, description="是否确认当前 agent 所有未消费消息")
+    agent_id: Optional[str] = Field(default=None, description="IMPORTANT: Omit this when acknowledging messages in your own mailbox.")
+    message_ids: list[str] = Field(default_factory=list, description="Message IDs to acknowledge")
+    ack_all: bool = Field(default=False, description="Acknowledge all unconsumed messages for the current agent")
 
 
 class _MailboxToolBase(Tool):
@@ -95,11 +73,10 @@ class MailboxReadTool(_MailboxToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="MailboxRead",
-            description="读取 agent runtime mailbox，并可把 queued 消息标记为 delivered。",
+            description="Reads an agent mailbox and optionally marks messages delivered.",
             parameters=MailboxReadParams,
             guidance=(
-                "适合在多 agent 协作中读取当前 agent 或指定 agent 的运行时消息。"
-                " 如果消息已经自动注入 prompt，本工具可用于再次查看完整结构化载荷。"
+                "Inspect runtime messages and full structured payloads, including messages already injected into context."
             ),
             prompt=MAILBOX_READ_PROMPT,
             read_only=False,
@@ -154,11 +131,10 @@ class MailboxAckTool(_MailboxToolBase):
             agent_runtime=agent_runtime,
             parent_agent=parent_agent,
             name="MailboxAck",
-            description="确认 mailbox 消息已被当前 agent 处理，把状态更新为 consumed。",
+            description="Acknowledges processed mailbox messages as consumed.",
             parameters=MailboxAckParams,
             guidance=(
-                "适合在多 agent 协作中显式确认消息已被处理。"
-                " 这会把“已送达”和“已消费”区分开，便于 manager 跟踪协作进度。"
+                "Distinguishes message delivery from completed processing."
             ),
             prompt=MAILBOX_ACK_PROMPT,
             read_only=False,

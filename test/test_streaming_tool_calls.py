@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm import EasyLLM
 from core.providers import AnthropicProvider, GoogleProvider, OpenAIProvider, OpenAIResponsesProvider, create_codec
+from agent.components.executor import DefaultAgentExecutor
 from runtime import AgentStreamEvent, AgentStreamEventType
 from Tool.ToolRegistry import ToolRegistry
 
@@ -348,6 +349,28 @@ class TestAgentStreamingContract(unittest.IsolatedAsyncioTestCase):
 
 
 class TestProviderStreamingHelpers(unittest.TestCase):
+    def test_executor_terminal_selection_preserves_tool_calls(self):
+        tool_terminal = {
+            "type": "tool_calls",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "name": "echo",
+                    "arguments": '{"text":"ping"}',
+                }
+            ],
+        }
+        empty_final = {"type": "final_response", "content": ""}
+
+        self.assertIs(
+            DefaultAgentExecutor._select_terminal_event(tool_terminal, empty_final),
+            tool_terminal,
+        )
+        self.assertIs(
+            DefaultAgentExecutor._select_terminal_event(empty_final, tool_terminal),
+            tool_terminal,
+        )
+
     def test_openai_compatible_tool_call_aggregation(self):
         codec = create_codec("openai")
 
@@ -446,6 +469,25 @@ class TestProviderStreamingHelpers(unittest.TestCase):
         self.assertEqual(events[0]["type"], "tool_calls")
         self.assertEqual(events[0]["tool_calls"][0]["name"], "weather")
         self.assertEqual(events[0]["tool_calls"][0]["arguments"], "{\"city\": \"Beijing\"}")
+
+    def test_responses_provider_finalizes_tool_call_without_completed_event(self):
+        codec = create_codec("openai_responses")
+        done_event = SimpleNamespace(
+            type="response.output_item.done",
+            item=SimpleNamespace(
+                type="function_call",
+                id="fc_1",
+                call_id="call_1",
+                name="weather",
+                arguments='{\"city\": \"Beijing\"}',
+            ),
+        )
+
+        events = list(codec.stream_events([done_event], tools=True))
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["type"], "tool_calls")
+        self.assertEqual(events[0]["tool_calls"][0]["name"], "weather")
 
     def test_responses_provider_event_aggregation_preserves_assistant_item_order(self):
         codec = create_codec("openai_responses")
