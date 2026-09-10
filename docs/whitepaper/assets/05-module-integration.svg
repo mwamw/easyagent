@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 1020" role="img" aria-labelledby="title desc">
+  <title id="title">模块如何接入默认 Agent 执行管线</title>
+  <desc id="desc">开发者实现契约并安装模块；框架在安装时注册绑定，在请求时依次处理可选 Hook、提示词、上下文、模型与工具。工具结果回到历史。会话保存恢复由产品显式调用，不是每轮自动保存。</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#62788a"/></marker>
+    <style>text{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b44}.h{font-size:27px;font-weight:700}.b{font-size:23px}.s{font-size:20px;fill:#53677e}.k{font-size:16px;font-weight:700;letter-spacing:2px}.line{fill:none;stroke:#62788a;stroke-width:2;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1440" height="1020" rx="24" fill="#f5f7fa"/>
+  <text x="52" y="58" class="k">EASYAGENT / INSTALLATION AND EXECUTION</text>
+  <text x="52" y="107" font-size="36" font-weight="700">用户交付模块行为，框架安排它怎样参与运行</text>
+  <text x="52" y="159" class="h">安装时</text>
+  <rect x="52" y="184" width="378" height="123" rx="14" fill="white" stroke="#cbd8e4"/>
+  <text x="79" y="224" class="b">用户实现公开契约</text>
+  <text x="79" y="262" class="s">如 Memory：说明、工具、Hook</text>
+  <text x="79" y="289" class="s">只提供该机制需要的部分</text>
+  <path d="M437 244H479" class="line"/>
+  <rect x="492" y="184" width="370" height="123" rx="14" fill="white" stroke="#cbd8e4"/>
+  <text x="519" y="224" class="b">应用显式安装</text>
+  <text x="519" y="262" class="s">agent.with_memory(memory)</text>
+  <text x="519" y="289" class="s">其他模块使用各自安装入口</text>
+  <path d="M869 244H911" class="line"/>
+  <rect x="924" y="184" width="464" height="123" rx="14" fill="#eaf6f4" stroke="#168883"/>
+  <text x="951" y="224" class="b">框架绑定与注册</text>
+  <text x="951" y="262" class="s">绑定服务 · 检查冲突 · 注册工具 / Hook</text>
+  <text x="951" y="289" class="s">无需往执行器内部添加专用分支</text>
+  <text x="52" y="371" class="h">运行时：每次模型请求准备与响应处理</text>
+  <text x="52" y="408" class="s">输入与已有历史由框架组织；以下是默认管线的职责示意，而非要求用户编写的工作流。</text>
+  <g stroke="#a8c9c7" fill="white">
+    <rect x="52" y="460" width="236" height="151" rx="13" stroke-dasharray="7 5"/>
+    <rect x="328" y="460" width="236" height="151" rx="13"/>
+    <rect x="604" y="460" width="236" height="151" rx="13"/>
+    <rect x="880" y="460" width="236" height="151" rx="13"/>
+    <rect x="1156" y="460" width="232" height="151" rx="13"/>
+  </g>
+  <text x="170" y="502" text-anchor="middle" class="b">可选 Hook</text><text x="170" y="545" text-anchor="middle" class="s">公开生命周期</text><text x="170" y="577" text-anchor="middle" class="s">MetaMessage 注入</text>
+  <text x="446" y="502" text-anchor="middle" class="b">Prompt</text><text x="446" y="545" text-anchor="middle" class="s">产品规则</text><text x="446" y="577" text-anchor="middle" class="s">合并模块说明</text>
+  <text x="722" y="502" text-anchor="middle" class="b">Context</text><text x="722" y="545" text-anchor="middle" class="s">组装 · 总预算</text><text x="722" y="577" text-anchor="middle" class="s">需要时调用压缩器</text>
+  <text x="998" y="502" text-anchor="middle" class="b">Model</text><text x="998" y="545" text-anchor="middle" class="s">模型调用</text><text x="998" y="577" text-anchor="middle" class="s">响应与动作</text>
+  <text x="1272" y="502" text-anchor="middle" class="b">Tool</text><text x="1272" y="545" text-anchor="middle" class="s">通过检查后执行</text><text x="1272" y="577" text-anchor="middle" class="s">返回结果</text>
+  <path d="M296 533H316" class="line"/><path d="M572 533H592" class="line"/><path d="M848 533H868" class="line"/>
+  <path d="M1124 533H1144" class="line"/>
+  <text x="1138" y="440" text-anchor="middle" class="s">有工具动作时</text>
+  <path d="M1272 619V675H170V623" class="line"/>
+  <rect x="398" y="650" width="550" height="48" rx="10" fill="#f5f7fa"/>
+  <text x="673" y="681" text-anchor="middle" class="s">工具结果 → 当前历史 → 下一次请求</text>
+  <text x="52" y="740" class="s">无需工具时结束相应响应；失败、等待审批和取消依既有执行与交互规则处理。</text>
+  <rect x="52" y="792" width="1336" height="150" rx="16" fill="#e8eef9" stroke="#bdcde0"/>
+  <text x="80" y="836" class="h">独立的显式边界：会话保存与恢复</text>
+  <text x="80" y="879" class="b">产品调用 save_session / restore_session → SessionPersistence → Session Store</text>
+  <text x="80" y="917" class="s">保存已声明的状态，恢复到已装配实例；不代表每轮自动保存，也不自动恢复外部进程。</text>
+  <text x="52" y="986" class="s">普通工具返回不重复注入。异步 Hook 和异步 I/O 需使用相应异步契约；框架不猜测领域实现的行为。</text>
+</svg>

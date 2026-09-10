@@ -214,13 +214,11 @@ answer = pipeline.query("这个项目的 session 是怎么恢复的？")
 
 RAG 一般有两种接法。
 
-### 方式一：做成 context source
-
-最推荐的方式。
+### 方式一：模块自行检索后注入动态消息
 
 适合：
 
-- 你希望 RAG 像 memory 一样自动参与请求构建
+- 你显式选择自动召回策略，而不是让模型主动调用检索工具
 - 你希望统一受 `ContextManager` 的预算控制
 
 ### 方式二：做成 Tool
@@ -232,7 +230,7 @@ RAG 一般有两种接法。
 
 通常不建议直接把 `RAGPipeline` 塞进 Agent，而是让它变成：
 
-- `BaseContextSource`
+- `before_context` / `abefore_context` Hook：由调用方检索后使用 MetaMessage 注入
 - 或 Tool
 
 ## 9. RAG 和 Memory 的区别

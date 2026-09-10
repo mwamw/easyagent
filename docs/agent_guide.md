@@ -77,7 +77,7 @@ MetaMessageManager 是 Agent 内建运行时基础设施，不通过 `with_*` �
 ```python
 from easyagent.context import ContextManager
 
-agent.with_context(ContextManager(max_tokens=16000, auto_history=True))
+agent.with_context(ContextManager(max_tokens=16000))
 ```
 
 ### Permission 和 Hook
@@ -188,13 +188,14 @@ agent.resolve_pending_interruption(
 
 ```python
 agent.save_session("session-id")
-restored = BasicAgent.load_session("session-id", llm=llm)
+restored = build_agent()  # 应用自己的装配函数
+restored.restore_session("session-id")
 print(restored.get_last_restore_report())
 
 report = agent.close()
 ```
 
-自定义模块恢复时需要向 `load_session` 显式提供对应实例。关闭返回结构化报告，并按依赖顺序释放重模块。
+先装配需要的模块，再恢复其会话数据；持久化层不会创建模块实例。关闭返回结构化报告。
 
 ## 7. 自定义 Agent 行为
 

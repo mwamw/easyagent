@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+from copy import deepcopy
 from typing import Any, AsyncIterator, Callable, Iterator
 from uuid import uuid4
 
@@ -48,7 +49,8 @@ class AgentInvocationState:
     phase: AgentInvocationPhase = AgentInvocationPhase.CREATED
     round_number: int = 0
     output: str = ""
-    error: Exception | None = None
+    error: BaseException | None = None
+    usage_request: Any = None
 
 
 @dataclass(slots=True)
@@ -71,6 +73,10 @@ class AgentExecutionServices:
     interrupt_controller: BaseToolInterruptController = field(default_factory=InMemoryToolInterruptController)
     stop_checker: Callable[[], str | None] = lambda: None
     mailbox_sync: Callable[[], None] = lambda: None
+    session_id: str = ""
+    invocation_lock: Any = None
+    owns_invocation_lock: bool = False
+    context_usage: Any = None
 
 
 class BaseAgentExecutor(ABC):
@@ -263,121 +269,46 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             request_input.as_legacy_messages()
         )
 
-    def _build_request(
-        self,
-        services: AgentExecutionServices,
-        state: AgentInvocationState,
-        *,
-        temperature: float,
-        kwargs: dict[str, Any],
-    ) -> tuple[ReplayRequestInput, Any, dict[str, Any]]:
+    def _preparation_arguments(self, services, state, temperature, kwargs):
         state.phase = AgentInvocationPhase.COMPILING
-        try:
-            services.mailbox_sync()
-            services.metamessage_manager.flush()
-            prompt_context = services.prompt_context_factory(state.query)
-            blocks = services.prompt_composer.compose(prompt_context)
-            compiled = compile_prompt_blocks(blocks, cache_policy=services.config.cache_policy)
-            tools = self._tool_payload(services)
-            if services.context_manager is not None:
-                context_budget = services.context_manager.budget.max_tokens
-                estimated_tokens = services.llm.count_request_tokens(
-                    services.context_manager.counter,
-                    services.history.replay,
-                    system_prompt=compiled.system_prompt,
-                    tools=tools,
-                    reasoning=services.reasoning,
-                )
-                if estimated_tokens > context_budget:
-                    compaction_hook = services.hook_manager.before_compaction(
-                        {
-                            "canonical_history": services.history.canonical,
-                            "replay_history": services.history.replay,
-                            "max_tokens": context_budget,
-                            "estimated_tokens": estimated_tokens,
-                            "invocation_id": state.invocation_id,
-                        }
-                    )
-                    if not compaction_hook.blocked:
-                        compaction = services.context_manager.compact_persistent_history(
-                            compaction_hook.payload.get("canonical_history", services.history.canonical),
-                            compaction_hook.payload.get("replay_history", services.history.replay),
-                            provider_name=services.llm.provider_name,
-                            token_counter=services.context_manager.counter,
-                            system_prompt=compiled.system_prompt,
-                            tools=tools,
-                            reasoning=services.reasoning,
-                            max_tokens=int(compaction_hook.payload.get("max_tokens") or context_budget),
-                            tokens_before_override=estimated_tokens,
-                        )
-                        if compaction.was_compacted:
-                            services.history.replace(compaction.canonical_history)
-                            self._publish(
-                                services,
-                                RuntimeEventType.HISTORY_COMPACTED,
-                                state,
-                                {
-                                    "tokens_before": compaction.tokens_before,
-                                    "tokens_after": compaction.tokens_after,
-                                    "metadata": compaction.metadata,
-                                    "hook_audit": compaction_hook.audit,
-                                },
-                            )
-            if services.context_manager is not None:
-                request_input = services.context_manager.build_request_input(
-                    query=state.query,
-                    replay_history=services.history.replay,
-                    provider_name=services.llm.provider_name,
-                    system_prompt=compiled.system_prompt,
-                    system_prompt_blocks=compiled.system_prompt_blocks,
-                    system_reminder_blocks=compiled.system_reminder_blocks,
-                    dynamic_tail_blocks=compiled.dynamic_tail_blocks,
-                    on_demand_expansion_blocks=compiled.on_demand_expansion_blocks,
-                    cache_policy=compiled.cache_policy,
-                    include_query=False,
-                    tools=tools,
-                    reasoning=services.reasoning,
-                )
-            else:
-                request_input = ReplayRequestInput(
-                    provider_name=services.llm.provider_name,
-                    replay_history=services.history.replay,
-                    system_prompt=compiled.system_prompt,
-                    system_prompt_blocks=compiled.system_prompt_blocks,
-                    system_reminder_blocks=compiled.system_reminder_blocks,
-                    dynamic_tail_blocks=compiled.dynamic_tail_blocks,
-                    on_demand_expansion_blocks=compiled.on_demand_expansion_blocks,
-                    cache_policy=compiled.cache_policy,
-                )
-                request_input.apply_runtime_layers()
 
-            options = {
-                "temperature": temperature,
-                "reasoning": services.reasoning,
-                **kwargs,
-            }
-            hook = services.hook_manager.before_llm_request(
-                {
-                    "request_input": request_input,
-                    "tools": tools,
-                    "options": dict(options),
-                    "invocation_id": state.invocation_id,
-                    "round_number": state.round_number,
-                }
-            )
-            if hook.blocked:
-                raise HookExecutionError(
-                    hook.message or "LLM request blocked by hook",
-                    stage="before_llm_request",
-                    error_type=hook.error_type,
-                    metadata={"audit": hook.audit},
-                )
-            request_input = hook.payload.get("request_input", request_input)
-            tools = hook.payload.get("tools", tools)
-            options = dict(hook.payload.get("options", options))
-            return request_input, tools, options
-        except Exception:
-            raise
+        def committed(compaction):
+            self._publish(services, RuntimeEventType.HISTORY_COMPACTED, state, {
+                "tokens_before": compaction.tokens_before,
+                "tokens_after": compaction.tokens_after,
+                "metadata": compaction.metadata,
+            })
+
+        return dict(temperature=temperature, kwargs=kwargs,
+                    on_compaction=committed, tool_payload=lambda: self._tool_payload(services))
+
+    def _build_request(self, services, state, *, temperature, kwargs):
+        from .request_preparer import RequestPreparer
+
+        return RequestPreparer().build(
+            services, state, **self._preparation_arguments(services, state, temperature, kwargs),
+        )
+
+    async def _abuild_request(self, services, state, *, temperature, kwargs):
+        from .request_preparer import RequestPreparer
+
+        return await RequestPreparer().abuild(
+            services, state, **self._preparation_arguments(services, state, temperature, kwargs),
+        )
+
+    @staticmethod
+    def _usage_output_is_retained(services, canonical_output):
+        return bool(services.config.persist_reasoning_history) or not any(
+            block.type == "reasoning" for message in canonical_output for block in message.content
+        )
+
+    @staticmethod
+    def _observe_context_usage(services, state, usage, replay, *, use_output):
+        if services.context_usage is None:
+            return
+        from .request_preparer import RequestPreparer
+        services.context_usage.observe(RequestPreparer.context_manager(services), state.usage_request,
+                                       usage, response_replay=replay, use_output=use_output)
 
     @staticmethod
     def _tool_call_parts(tool_call: Any, fallback_id: str) -> tuple[str, dict[str, Any], str]:
@@ -657,25 +588,33 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         return tool_name, validated, tool_id, result
 
     def _start(self, services: AgentExecutionServices, query: str, *, stream: bool) -> AgentInvocationState:
+        if services.invocation_lock is not None:
+            if not services.invocation_lock.acquire(blocking=False):
+                raise RuntimeError("An Agent supports one active invocation at a time")
+            services.owns_invocation_lock = True
         state = AgentInvocationState(
             invocation_id=f"invoke_{uuid4().hex}",
             query=query,
             stream=stream,
             phase=AgentInvocationPhase.STARTED,
         )
-        self.last_state = state
-        services.history.append_query(query)
-        self._publish(
-            services,
-            RuntimeEventType.AGENT_INVOKE_STARTED,
-            state,
-            {
-                "query": query,
-                "mode": services.execution_context.execution_mode,
-                "stream": stream,
-            },
-        )
-        return state
+        try:
+            self.last_state = state
+            services.history.append_query(query)
+            self._publish(
+                services,
+                RuntimeEventType.AGENT_INVOKE_STARTED,
+                state,
+                {
+                    "query": query,
+                    "mode": services.execution_context.execution_mode,
+                    "stream": stream,
+                },
+            )
+            return state
+        except BaseException:
+            self._cleanup(services)
+            raise
 
     def _finish(
         self,
@@ -714,9 +653,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         )
         return output
 
-    def _fail(self, services: AgentExecutionServices, state: AgentInvocationState, exc: Exception) -> None:
+    def _fail(self, services: AgentExecutionServices, state: AgentInvocationState, exc: BaseException) -> None:
+        if state.phase == AgentInvocationPhase.COMPLETED:
+            # Closing a stream after its final event is normal consumption.
+            return
         state.error = exc
-        interrupted = isinstance(exc, (ToolInterruption, AgentStopRequested))
+        import asyncio
+        interrupted = isinstance(exc, (ToolInterruption, AgentStopRequested, asyncio.CancelledError, GeneratorExit, KeyboardInterrupt))
         state.phase = AgentInvocationPhase.INTERRUPTED if interrupted else AgentInvocationPhase.FAILED
         self._publish(
             services,
@@ -733,8 +676,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
 
     @staticmethod
     def _cleanup(services: AgentExecutionServices) -> None:
-        if services.tool_registry is not None:
-            services.tool_registry.clear_deferred_tool_expansions()
+        try:
+            if services.tool_registry is not None:
+                services.tool_registry.clear_deferred_tool_expansions()
+        finally:
+            if services.owns_invocation_lock:
+                services.owns_invocation_lock = False
+                services.invocation_lock.release()
 
     def invoke(
         self,
@@ -786,6 +734,12 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     )
                     raise
                 output_messages = services.llm.response_to_canonical(response, include_reasoning=True)
+                usage = services.llm.extract_usage_metrics(response)
+                response_replay = deepcopy(services.llm.response_to_replay(
+                    response, include_reasoning=bool(services.config.persist_reasoning_history),
+                ))
+                self._observe_context_usage(services, state, usage, response_replay,
+                    use_output=self._usage_output_is_retained(services, output_messages))
                 self._publish(
                     services,
                     RuntimeEventType.LLM_INVOKE_COMPLETED,
@@ -794,10 +748,15 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         "llm_invoke_id": llm_id,
                         "response": response,
                         "output": output_messages,
-                        "usage": services.llm.extract_usage_metrics(response),
+                        "usage": usage,
                     },
                 )
                 response = self._apply_after_llm_hook(services, response)
+                retained_replay = services.llm.response_to_replay(
+                    response, include_reasoning=bool(services.config.persist_reasoning_history),
+                )
+                if retained_replay != response_replay:
+                    self._observe_context_usage(services, state, usage, retained_replay, use_output=False)
                 if tools and services.llm.has_tool_calls(response):
                     services.history.append_response(
                         response,
@@ -811,6 +770,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 return self._finish(services, state, output, response=response)
             raise RuntimeError(f"Agent reached max_iter={max_iter} without a final response")
         except Exception as exc:
+            self._fail(services, state, exc)
+            raise
+        except BaseException as exc:
             self._fail(services, state, exc)
             raise
         finally:
@@ -831,7 +793,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                request_input, tools, options = self._build_request(services, state, temperature=temperature, kwargs=kwargs)
+                request_input, tools, options = await self._abuild_request(services, state, temperature=temperature, kwargs=kwargs)
                 llm_id = f"llm_{round_number}_{uuid4().hex}"
                 self._publish(
                     services,
@@ -860,6 +822,12 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     )
                     raise
                 output_messages = services.llm.response_to_canonical(response, include_reasoning=True)
+                usage = services.llm.extract_usage_metrics(response)
+                response_replay = deepcopy(services.llm.response_to_replay(
+                    response, include_reasoning=bool(services.config.persist_reasoning_history),
+                ))
+                self._observe_context_usage(services, state, usage, response_replay,
+                    use_output=self._usage_output_is_retained(services, output_messages))
                 self._publish(
                     services,
                     RuntimeEventType.LLM_INVOKE_COMPLETED,
@@ -868,10 +836,15 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         "llm_invoke_id": llm_id,
                         "response": response,
                         "output": output_messages,
-                        "usage": services.llm.extract_usage_metrics(response),
+                        "usage": usage,
                     },
                 )
                 response = self._apply_after_llm_hook(services, response)
+                retained_replay = services.llm.response_to_replay(
+                    response, include_reasoning=bool(services.config.persist_reasoning_history),
+                )
+                if retained_replay != response_replay:
+                    self._observe_context_usage(services, state, usage, retained_replay, use_output=False)
                 if tools and services.llm.has_tool_calls(response):
                     services.history.append_response(
                         response,
@@ -885,6 +858,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 return self._finish(services, state, output, response=response)
             raise RuntimeError(f"Agent reached max_iter={max_iter} without a final response")
         except Exception as exc:
+            self._fail(services, state, exc)
+            raise
+        except BaseException as exc:
             self._fail(services, state, exc)
             raise
         finally:
@@ -961,6 +937,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     tool_calls=tool_calls or None,
                     thinking=thinking or None,
                 )
+                usage = services.llm.extract_usage_metrics({"usage": terminal.get("usage")})
+                response_replay = deepcopy(services.llm.assistant_message_to_replay(
+                    content=content, tool_calls=tool_calls or None,
+                    thinking=thinking if services.config.persist_reasoning_history else None,
+                ))
+                self._observe_context_usage(services, state, usage, response_replay,
+                    use_output=self._usage_output_is_retained(services, canonical_output))
                 self._publish(
                     services,
                     RuntimeEventType.LLM_INVOKE_COMPLETED,
@@ -968,7 +951,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     {
                         "llm_invoke_id": llm_id,
                         "output": canonical_output,
-                        "usage": services.llm.extract_usage_metrics({"usage": terminal.get("usage")}),
+                        "usage": usage,
                     },
                 )
                 terminal = self._apply_after_llm_hook(services, terminal)
@@ -977,6 +960,12 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 content = str(terminal.get("content") or content)
                 thinking = str(terminal.get("thinking") or thinking)
                 tool_calls = list(terminal.get("tool_calls") or tool_calls)
+                retained_replay = services.llm.assistant_message_to_replay(
+                    content=content, tool_calls=tool_calls or None,
+                    thinking=thinking if services.config.persist_reasoning_history else None,
+                )
+                if retained_replay != response_replay:
+                    self._observe_context_usage(services, state, usage, retained_replay, use_output=False)
                 if tool_calls:
                     services.history.append_assistant(
                         content=content,
@@ -1033,6 +1022,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 },
             )
             raise
+        except BaseException as exc:
+            self._fail(services, state, exc)
+            raise
         finally:
             self._cleanup(services)
 
@@ -1052,7 +1044,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                request_input, tools, options = self._build_request(services, state, temperature=temperature, kwargs=kwargs)
+                request_input, tools, options = await self._abuild_request(services, state, temperature=temperature, kwargs=kwargs)
                 llm_id = f"llm_{round_number}_{uuid4().hex}"
                 self._publish(
                     services,
@@ -1106,6 +1098,13 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     tool_calls=tool_calls or None,
                     thinking=thinking or None,
                 )
+                usage = services.llm.extract_usage_metrics({"usage": terminal.get("usage")})
+                response_replay = deepcopy(services.llm.assistant_message_to_replay(
+                    content=content, tool_calls=tool_calls or None,
+                    thinking=thinking if services.config.persist_reasoning_history else None,
+                ))
+                self._observe_context_usage(services, state, usage, response_replay,
+                    use_output=self._usage_output_is_retained(services, canonical_output))
                 self._publish(
                     services,
                     RuntimeEventType.LLM_INVOKE_COMPLETED,
@@ -1113,7 +1112,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     {
                         "llm_invoke_id": llm_id,
                         "output": canonical_output,
-                        "usage": services.llm.extract_usage_metrics({"usage": terminal.get("usage")}),
+                        "usage": usage,
                     },
                 )
                 terminal = self._apply_after_llm_hook(services, terminal)
@@ -1122,6 +1121,12 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 content = str(terminal.get("content") or content)
                 thinking = str(terminal.get("thinking") or thinking)
                 tool_calls = list(terminal.get("tool_calls") or tool_calls)
+                retained_replay = services.llm.assistant_message_to_replay(
+                    content=content, tool_calls=tool_calls or None,
+                    thinking=thinking if services.config.persist_reasoning_history else None,
+                )
+                if retained_replay != response_replay:
+                    self._observe_context_usage(services, state, usage, retained_replay, use_output=False)
                 if tool_calls:
                     services.history.append_assistant(
                         content=content,
@@ -1177,6 +1182,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     "interrupted": isinstance(exc, (ToolInterruption, AgentStopRequested)),
                 },
             )
+            raise
+        except BaseException as exc:
+            self._fail(services, state, exc)
             raise
         finally:
             self._cleanup(services)

@@ -15,7 +15,7 @@ class ContextItem:
     """单条上下文项"""
 
     content: str
-    source: str  # "system" | "history" | "rag" | "memory" | "tool"
+    source: str  # Free-form provenance; not a registered source or budget class.
     priority: float = 0.5  # 0.0~1.0, 越高越优先保留
     token_count: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)

@@ -3,9 +3,10 @@ from __future__ import annotations
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
 from pydantic import BaseModel, Field
-from typing import TYPE_CHECKING, Literal, Optional, Dict, Any
+from typing import TYPE_CHECKING, Callable, Literal, Optional, Dict, Any
 from datetime import datetime
 import logging
+import asyncio
 
 if TYPE_CHECKING:
     from memory.V2.MemoryManage import MemoryManage
@@ -95,6 +96,11 @@ def _infer_modality(file_path: Optional[str]) -> str:
 # ==========================================
 # 1. AddMemoryTool
 # ==========================================
+class _MemoryTool(Tool):
+    async def arun(self, parameters: dict):
+        return await asyncio.to_thread(self.run, parameters)
+
+
 class AddMemoryParam(BaseModel):
     content: str = Field(description="memory content")
     memory_type: Literal["working", "episodic", "semantic", "perceptual"] = Field(description="Memory type: working for task context, episodic for past events, semantic for stable facts, perceptual for multimodal information.")
@@ -103,11 +109,12 @@ class AddMemoryParam(BaseModel):
     modality: Optional[Literal["text", "image", "audio", "video"]] = Field(description="memory modality,need to be set when memory_type is perceptual", default="text")
     file_path: Optional[str] = Field(description="memory file path,need to be set when memory_type is perceptual and modality is not text", default=None)
 
-class AddMemoryTool(Tool):
-    def __init__(self, memory_manage: MemoryManage,current_session_id:Optional[str]=None):
+class AddMemoryTool(_MemoryTool):
+    def __init__(self, memory_manage: MemoryManage,current_session_id:Optional[str]=None, *, session_id_provider=None):
         name = "add_memory_tool"
         self.memory_manage = memory_manage
         self.current_session_id = current_session_id
+        self.session_id_provider = session_id_provider
         self.conversation_count = 0
         description = f"Add memory (enabled types: {_supported_types_text(self.memory_manage)}) to preserve task context, experiences, facts, or multimodal data."
         super().__init__(
@@ -120,11 +127,10 @@ class AddMemoryTool(Tool):
             tags=["memory", "write"],
         )
     def get_current_session_id(self):
-        return self.current_session_id
+        return self.session_id_provider() if self.session_id_provider else self.current_session_id
     def run(self, parameters: dict) -> ToolResult:
         try:
-            if self.current_session_id is None:
-                self.current_session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            session_id = self.get_current_session_id()
             content = parameters.get("content","")
             memory_type = parameters.get("memory_type", "working")
             importance = parameters.get("importance", 0.5)
@@ -138,7 +144,7 @@ class AddMemoryTool(Tool):
                 metadata["modality"] = modality
             
             metadata.update({
-                "session_id": self.current_session_id,
+                "session_id": session_id,
                 "conversation_count": self.conversation_count,
                 "timestamp": datetime.now().isoformat()
             })
@@ -168,11 +174,12 @@ class SearchMemoryParam(BaseModel):
     limit: int = Field(description="Maximum number of relevant memories to return.", default=10)
     importance_threshold: float = Field(description="Minimum importance threshold; defaults to 0.0.", default=0.0)
     use_session_id:bool=Field(description="Restrict results to the current session, primarily for episodic memory. Defaults to no session filter.", default=False)
-class SearchMemoryTool(Tool):
-    def __init__(self, memory_manage: MemoryManage,current_session_id:Optional[str]=None):
+class SearchMemoryTool(_MemoryTool):
+    def __init__(self, memory_manage: MemoryManage,current_session_id:Optional[str]=None, *, session_id_provider=None):
         name = "search_memory_tool"
         self.memory_manage = memory_manage
         self.current_session_id=current_session_id
+        self.session_id_provider = session_id_provider
         description = "Search memory semantically with a text query and return relevant excerpts of past knowledge and experiences."
 
         super().__init__(
@@ -195,7 +202,9 @@ class SearchMemoryTool(Tool):
             use_session_id=parameters.get("use_session_id",False)
             session_id=None
             if use_session_id:
-                session_id=self.current_session_id
+                session_id = self.session_id_provider() if self.session_id_provider else self.current_session_id
+                if not session_id:
+                    raise ValueError("Current session scope is unavailable")
             results = self.memory_manage.search_memory(query, memory_types, limit, importance_threshold,session_id=session_id)
 
             if not results:
@@ -235,7 +244,7 @@ class SearchMemoryTool(Tool):
 class GetMemoryParam(BaseModel):
     memory_ids: list[str] = Field(description="Memory IDs whose complete details should be retrieved.")
 
-class GetMemoryTool(Tool):
+class GetMemoryTool(_MemoryTool):
     def __init__(self, memory_manage: MemoryManage):
         name = "get_memory_tool"
         self.memory_manage = memory_manage
@@ -280,7 +289,7 @@ class GetMemoryTool(Tool):
 class RemoveMemoryParam(BaseModel):
     memory_id: str = Field(description="ID of the memory to remove.")
 
-class RemoveMemoryTool(Tool):
+class RemoveMemoryTool(_MemoryTool):
     def __init__(self, memory_manage: MemoryManage):
         name = "remove_memory_tool"
         self.memory_manage = memory_manage
@@ -318,7 +327,7 @@ class UpdateMemoryParam(BaseModel):
     importance: Optional[float] = Field(description="New importance score.", default=None)
     metadata: Optional[Dict[str, Any]] = Field(description="New metadata.", default=None)
 
-class UpdateMemoryTool(Tool):
+class UpdateMemoryTool(_MemoryTool):
     def __init__(self, memory_manage: MemoryManage):
         name = "update_memory_tool"
         self.memory_manage = memory_manage
@@ -370,7 +379,7 @@ class MemoryMaintenanceParam(BaseModel):
     strategy: Optional[Literal["time", "importance", "capacity"]] = Field(description="Forgetting strategy; used with forget.", default="importance")
     max_age_days: Optional[int] = Field(description="Maximum age in days for time-based forgetting.", default=30)
     memory_type: Optional[Literal["working", "episodic", "semantic", "perceptual"]] = Field(description="Memory type to clear; omitting this with clear erases all types.", default=None)
-class MemoryMaintenanceTool(Tool):
+class MemoryMaintenanceTool(_MemoryTool):
     def __init__(self, memory_manage: MemoryManage):
         name = "memory_maintenance_tool"
         self.memory_manage = memory_manage
@@ -432,24 +441,28 @@ class MemoryMaintenanceTool(Tool):
 # ==========================================
 # 便利注册接口
 # ==========================================
+def build_memory_tools(memory_manage, *, session_id_provider: Callable[[], str] | None = None):
+    return [
+        AddMemoryTool(memory_manage, session_id_provider=session_id_provider),
+        SearchMemoryTool(memory_manage, session_id_provider=session_id_provider),
+        GetMemoryTool(memory_manage),
+        UpdateMemoryTool(memory_manage),
+        RemoveMemoryTool(memory_manage),
+        MemoryMaintenanceTool(memory_manage),
+    ]
+
+
 def register_memory_tools(
     memory_manage: MemoryManage,
     registry: ToolRegistry,
     *,
     expose_in_deferred: bool | None = True,
+    session_id_provider: Callable[[], str] | None = None,
 ):
     """
     一键向 ToolRegistry 里注册所有的 Memory 细分工具。
     """
-    session_id=f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    tools = [
-        AddMemoryTool(memory_manage,current_session_id=session_id),
-        SearchMemoryTool(memory_manage,current_session_id=session_id),
-        GetMemoryTool(memory_manage),
-        UpdateMemoryTool(memory_manage),
-        RemoveMemoryTool(memory_manage),
-        MemoryMaintenanceTool(memory_manage)
-    ]
+    tools = build_memory_tools(memory_manage, session_id_provider=session_id_provider)
     for tool in tools:
         registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     logger.info(f"成功将 {len(tools)} 个 Memory 工具注册到系统。")

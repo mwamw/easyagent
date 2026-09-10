@@ -193,18 +193,8 @@ def main() -> None:
     print(f"Saved session: {session_id}")
     print()
 
-    restored = BasicAgent.load_session(
-        session_id,
-        llm=EasyLLM(
-            provider="openai",
-            base_url="http://127.0.0.1:5124/v1",
-            api_key="122",
-            model="qwen3.5-9b",
-        ),
-        store=session_db,
-        tool_registry=build_registry(workspace),
-        hook_manager=build_hook_manager(),
-    )
+    restored = BasicAgent("restored", agent.llm, config=agent.config).with_tool(build_registry(workspace)).with_hooks(build_hook_manager())
+    restored.restore_session(session_id, store=session_db)
     print("=== Restore Report ===")
     print(restored.get_last_restore_report())
     print()

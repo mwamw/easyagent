@@ -20,6 +20,19 @@ class ConversationHistory:
         self._replay: list[Any] = []
         self._provider_name = llm.provider_name
         self._lock = RLock()
+        self._context_epoch = 0
+        self._revision = 0
+
+    @property
+    def revision(self) -> int:
+        with self._lock:
+            return self._revision
+
+    @property
+    def context_epoch(self) -> int:
+        """Invalidates API-token anchors on replacement, restore, or model change."""
+        with self._lock:
+            return self._context_epoch
 
     @property
     def provider_name(self) -> str | None:
@@ -37,6 +50,7 @@ class ConversationHistory:
 
     def _extend(self, canonical: Iterable[CanonicalMessage], replay: Iterable[Any]) -> None:
         with self._lock:
+            self._revision += 1
             self._canonical.extend(item.model_copy(deep=True) for item in canonical)
             for entry in replay:
                 self._llm.append_replay_entry(self._replay, _json_safe(entry))
@@ -103,6 +117,7 @@ class ConversationHistory:
             normalized.extend(self._llm.history_entry_to_canonical(message))
         with self._lock:
             self._canonical = [item.model_copy(deep=True) for item in normalized]
+            self._context_epoch += 1
         self.rebuild_replay()
 
     def remove_by_metadata(self, key: str, value: Any) -> bool:
@@ -124,6 +139,7 @@ class ConversationHistory:
 
     def rebuild_replay(self) -> list[Any]:
         with self._lock:
+            self._revision += 1
             self._replay = self._llm.canonical_to_replay_history(self._canonical)
             self._provider_name = self._llm.provider_name
             return [_json_safe(item) for item in self._replay]
@@ -132,10 +148,13 @@ class ConversationHistory:
         if not isinstance(llm, EasyLLM):
             raise TypeError(f"llm must be EasyLLM, got {type(llm).__name__}")
         self._llm = llm
+        self._context_epoch += 1
         self.rebuild_replay()
 
     def clear(self) -> None:
         with self._lock:
+            self._revision += 1
+            self._context_epoch += 1
             self._canonical.clear()
             self._replay.clear()
             self._provider_name = self._llm.provider_name

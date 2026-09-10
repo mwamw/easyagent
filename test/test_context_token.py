@@ -58,52 +58,22 @@ class TestTokenCounter(unittest.TestCase):
 
 
 class TestTokenBudget(unittest.TestCase):
-    """TokenBudget 测试"""
+    def test_unbounded_default(self):
+        self.assertIsNone(TokenBudget().max_tokens)
+        self.assertIsNone(TokenBudget().remaining(100000))
 
-    def test_default_allocations(self):
-        """默认分配比例"""
-        budget = TokenBudget(max_tokens=10000)
-        self.assertEqual(budget.get_budget("history"), 8000)
-        self.assertEqual(budget.get_budget("rag"), 1000)
-        self.assertEqual(budget.get_budget("memory"), 1000)
+    def test_total_remaining(self):
+        self.assertEqual(TokenBudget(10000).remaining(2500), 7500)
+        self.assertEqual(TokenBudget(10).remaining(20), 0)
 
-    def test_custom_allocation(self):
-        """自定义分配"""
-        budget = TokenBudget(max_tokens=10000)
-        budget.set_allocation("rag", 0.5)
-        self.assertEqual(budget.get_budget("rag"), 5000)
+    def test_no_source_allocations(self):
+        self.assertFalse(hasattr(TokenBudget(), "allocations"))
+        self.assertFalse(hasattr(TokenBudget(), "get_budget"))
 
-    def test_unknown_source(self):
-        """未知来源使用默认预算"""
-        budget = TokenBudget()
-        self.assertEqual(budget.get_budget("unknown"), 800)
-
-    def test_remaining(self):
-        """剩余 token 计算"""
-        budget = TokenBudget(max_tokens=10000)
-        used = {"system": 500, "history": 2000}
-        self.assertEqual(budget.remaining(used), 7500)
-
-    def test_redistribute(self):
-        """重分配逻辑"""
-        budget = TokenBudget(max_tokens=10000)
-        used = {
-            "history": 9000,  # 预算 8000，超额 1000
-            "rag": 1000,      # 刚好
-            "memory": 200,    # 预算 1000，剩余 800
-        }
-        result = budget.redistribute(used)
-        # system 只用了 200，多余的应该被重分配
-        self.assertEqual(result["memory"], 200)
-        self.assertGreaterEqual(result["history"], 8000)
-
-    def test_redistribute_no_deficit(self):
-        """无超额时不影响"""
-        budget = TokenBudget(max_tokens=10000)
-        used = {"history": 100, "rag": 100, "memory": 100}
-        result = budget.redistribute(used)
-        for source in used:
-            self.assertEqual(result[source], used[source])
+    def test_invalid_limits(self):
+        for value in (-1, True, "10"):
+            with self.assertRaises(ValueError):
+                TokenBudget(value)
 
 
 if __name__ == "__main__":

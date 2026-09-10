@@ -35,3 +35,6 @@ __all__ = [
     "TeamHandle",
     "TeamManager",
 ]
+
+from core.scope import RuntimeScope
+__all__.append("RuntimeScope")

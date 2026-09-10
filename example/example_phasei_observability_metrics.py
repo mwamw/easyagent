@@ -16,7 +16,7 @@ from easyagent import (
     EasyLLM,
     InMemoryObservabilityStore,
     ObservabilityManager,
-    SessionStore,
+    SQLiteSessionStore,
     Tool,
     ToolRegistry,
 )
@@ -101,15 +101,11 @@ def main() -> None:
 
     # 5. 保存并恢复 session，验证 observability_state 跟随会话恢复
     with tempfile.TemporaryDirectory() as tempdir:
-        store = SessionStore(os.path.join(tempdir, "observability_example.db"))
+        store = SQLiteSessionStore(os.path.join(tempdir, "observability_example.db"))
         agent.save_session("phase-i-observability", store=store)
 
-        restored = BasicAgent.load_session(
-            "phase-i-observability",
-            llm=build_llm(),
-            store=store,
-            observability_manager=ObservabilityManager(InMemoryObservabilityStore()),
-        )
+        restored = BasicAgent("restored", build_llm()).with_observability(store=InMemoryObservabilityStore())
+        restored.restore_session("phase-i-observability", store=store)
         try:
             assert restored.observability is not None
             restored_summary = restored.observability.summary()

@@ -1,10 +1,11 @@
+from memory.repositories import document_repository, vector_index
 try:
-    from .BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from .BaseMemory import BaseMemoryLayer, ForgetType, MemoryConfig, MemoryItem
     from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
     from .Store.VectorStore import *
     from .Store.DocumentStore import *
 except ImportError:
-    from BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from BaseMemory import BaseMemoryLayer, ForgetType, MemoryConfig, MemoryItem
     from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
     from Store.VectorStore import *
     from Store.DocumentStore import *
@@ -29,7 +30,7 @@ class Episode:
         
 
 
-class EpisodicMemory(BaseMemory):
+class EpisodicMemory(BaseMemoryLayer):
     def __init__(self,config:MemoryConfig,document_store:DocumentStore,vector_store:VectorStore,embedding_model:BaseEmbeddingModel,storage_backend=None) -> None:
         super().__init__(config)
 
@@ -38,8 +39,8 @@ class EpisodicMemory(BaseMemory):
         self.sessions:dict[str,list[str]]={}
         self.patterns={}
 
-        self.document_store=document_store
-        self.vector_store=vector_store
+        self.document_store = document_repository(document_store)
+        self.vector_store = vector_index(vector_store)
         self.embedding_model=embedding_model
     def add_memory(self,item:MemoryItem)->str:
         #确定id唯一
@@ -81,7 +82,7 @@ class EpisodicMemory(BaseMemory):
         # 2. 写 vector store
         vector_stored = False
         try:
-            embedding=self.embedding_model.embed([content])
+            embedding=self.embedding_model.embed_documents([content])
             self.vector_store.add_vectors(
                 vectors=embedding,
                 metadata=[{
@@ -210,7 +211,7 @@ class EpisodicMemory(BaseMemory):
         if content:
             try:
                 self.vector_store.remove_vectors([id])
-                new_embedding=self.embedding_model.embed([content])
+                new_embedding=self.embedding_model.embed_documents([content])
                 doc = self.document_store.get_memory(id)
                 payload = {
                     "memory_id":id,
@@ -314,7 +315,7 @@ class EpisodicMemory(BaseMemory):
 
         #向量检索
         try:
-            query_embedding=self.embedding_model.embed([query])[0]
+            query_embedding=self.embedding_model.embed_query(query)
 
             where={"memory_type":"episodic"}
             if user_id:
@@ -597,7 +598,7 @@ class EpisodicMemory(BaseMemory):
                 continue  # 向量已存在
             
             try:
-                embedding = self.embedding_model.embed([doc.content])
+                embedding = self.embedding_model.embed_documents([doc.content])
                 self.vector_store.add_vectors(
                     vectors=embedding,
                     metadata=[{
@@ -759,7 +760,7 @@ class EpisodicMemory(BaseMemory):
                 
                 # 获取所有 episode 的向量嵌入
                 contents = [e.content for e in episodes]
-                embeddings = self.embedding_model.embed(contents)
+                embeddings = self.embedding_model.embed_documents(contents)
                 
                 if hasattr(embeddings, 'tolist'):
                     embeddings = np.array(embeddings)
@@ -867,7 +868,7 @@ class EpisodicMemory(BaseMemory):
         # 1. 批量 embed
         contents = [item.content for item in batch]
         try:
-            embeddings = self.embedding_model.embed(contents)
+            embeddings = self.embedding_model.embed_documents(contents)
         except Exception as e:
             logger.error(f"批量 embed 失败: {e}")
             # 回退到逐条添加

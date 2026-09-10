@@ -12,7 +12,7 @@ from agent import BasicAgent
 from codeintel import CodeIntelManager, LSPCodeIntelProvider
 from core.Config import Config
 from core.llm import EasyLLM
-from db import SessionStore
+from easyagent.session import SQLiteSessionStore as SessionStore
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import register_codeintel_tools
 
@@ -181,11 +181,10 @@ class CodeIntelEnhancementTestCase(unittest.TestCase):
         finally:
             manager.close()
 
-        restored = BasicAgent.load_session(
-            "codeintel-cache-session",
-            llm=DummyLLM(),
-            store=session_store,
-        )
+        restored = BasicAgent("codeintel-cache-agent", DummyLLM(), config=Config(
+            workspace_root=self.workspace, allowed_roots=[self.workspace],
+        )).with_codeintel(provider=self._provider())
+        restored.restore_session("codeintel-cache-session", store=session_store)
         restored_manager = restored.tool_registry.get_runtime_surface("codeintel_manager", "default")
         self.assertIsNotNone(restored_manager)
         cache_status = restored.tool_registry.execute_tool_result("CodeIntelCacheStatus", {})

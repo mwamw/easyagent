@@ -193,17 +193,8 @@ def main() -> None:
     # print(f"Session saved: {session_id}")
     # print()
 
-    # restored = BasicAgent.load_session(
-    #     session_id,
-    #     llm=EasyLLM(
-    #         provider="openai",
-    #         base_url="http://127.0.0.1:5124/v1",
-    #         api_key="122",
-    #         model="qwen3.5-9b",
-    #     ),
-    #     store=env["session_db"],
-    #     task_service=agent.task_service,
-    # )
+    # restored = ...  # Explicitly assemble a fresh Agent and its modules first.
+    # restored.restore_session(session_id, store=env["session_db"])
     # print("=== Restored Runtime State ===")
     # print(f"Current task: {restored.current_task_id}")
     # print(f"Tools: {restored.tool_registry.get_tool_names()}")

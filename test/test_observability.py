@@ -18,7 +18,7 @@ if ROOT not in sys.path:
 
 from agent import BasicAgent
 from core.llm import EasyLLM
-from db import SessionStore
+from easyagent.session import SQLiteSessionStore as SessionStore
 from observability import (
     AgentInvoke,
     AgentInvokeStats,
@@ -329,11 +329,8 @@ class TestObservability(unittest.TestCase):
             invoke_id = agent.observability.latest().invoke_id
             agent.save_session("observability-session", store=session_store)
 
-            restored = BasicAgent.load_session(
-                "observability-session",
-                llm=DummyLLM(),
-                store=session_store,
-            )
+            restored = BasicAgent("session", DummyLLM()).with_observability(store=InMemoryObservabilityStore())
+            restored.restore_session("observability-session", store=session_store)
             self.assertIsNotNone(restored.observability)
             self.assertEqual(restored.observability.latest().invoke_id, invoke_id)
             self.assertEqual(

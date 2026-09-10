@@ -2,7 +2,7 @@
 
 from context import (
     BaseCompressor,
-    BaseContextSource,
+
     BaseFormatter,
     BaseHistoryCompactor,
     ContextBuilder,
@@ -10,12 +10,12 @@ from context import (
     ContextManager,
     ContextWindow,
     HistoryCompactor,
-    HistoryContextSource,
+
     LLMHistoryCompactor,
     MarkdownFormatter,
-    MemoryContextSource,
+
     PlainFormatter,
-    RAGContextSource,
+
     RuleBasedHistoryCompactor,
     SelectiveCompressor,
     SlidingWindowCompressor,
@@ -28,7 +28,7 @@ from context import (
 
 __all__ = [
     "BaseCompressor",
-    "BaseContextSource",
+
     "BaseFormatter",
     "BaseHistoryCompactor",
     "ContextBuilder",
@@ -36,12 +36,12 @@ __all__ = [
     "ContextManager",
     "ContextWindow",
     "HistoryCompactor",
-    "HistoryContextSource",
+
     "LLMHistoryCompactor",
     "MarkdownFormatter",
-    "MemoryContextSource",
+
     "PlainFormatter",
-    "RAGContextSource",
+
     "RuleBasedHistoryCompactor",
     "SelectiveCompressor",
     "SlidingWindowCompressor",
@@ -51,3 +51,6 @@ __all__ = [
     "TokenCounter",
     "XMLFormatter",
 ]
+
+from context import BaseContextManager, HistoryCompactionResult, ContextBudgetExceeded
+__all__ += ["BaseContextManager", "HistoryCompactionResult", "ContextBudgetExceeded"]

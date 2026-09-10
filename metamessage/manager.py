@@ -426,10 +426,15 @@ class MetaMessageManager(BaseMetaMessageManager):
     def restore_state(self, state: Optional[dict[str, Any]]) -> None:
         data = dict(state or {})
         with self._lock:
+            live_definitions = [message for message in self._registered.values()
+                                if callable(message.content) or message.condition is not None]
             self._registered.clear()
             self._pending.clear()
             self._injections.clear()
             self._condition_active.clear()
+            for message in live_definitions:
+                self._registered[message.message_id] = message
+                self._condition_active[message.message_id] = False
             self._seen_dedup_keys = {
                 str(item) for item in list(data.get("seenDedupKeys") or []) if item
             }
@@ -464,6 +469,9 @@ class MetaMessageManager(BaseMetaMessageManager):
                     history_handle=history_handle,
                     injected_at=float(payload.get("injectedAt") or 0.0),
                 )
+
+    def reset_session_state(self):
+        self.restore_state(None)
 
 
 __all__ = [

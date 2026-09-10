@@ -105,22 +105,8 @@ def main() -> None:
     print(f"Session saved: {session_id}")
     print()
 
-    restored = BasicAgent.load_session(
-        session_id,
-        llm=EasyLLM(
-            provider="openai",
-            base_url="http://127.0.0.1:5124/v1",
-            api_key="122",
-            model="qwen3.5-9b",
-        ),
-        store=session_db_path,
-        task_service=agent.task_service,
-        multi_agent_runtime=MultiAgentRuntime(
-            workspace_root=workspace,
-            storage_dir=os.path.join(example_dir, ".phase23-agents"),
-            max_background_tasks=4,
-        ),
-    )
+    restored, _, _ = build_manager_agent(workspace)
+    restored.restore_session(session_id, store=session_db_path)
 
     print("=== Restored Runtime State ===")
     print(f"Restored current task: {restored.current_task_id}")
@@ -129,7 +115,7 @@ def main() -> None:
     print()
     print("Next manual checks:")
     print("1. Verify the restored handle still carries the original currentTaskId.")
-    print("2. Verify mailbox messages are still present after load_session().")
+    print("2. Verify mailbox messages are still present after restore_session().")
     print("3. Verify TeamCreate/SendMessage/Agent are still registered on the restored agent.")
 
 

@@ -18,9 +18,10 @@ print(response)
 
 
 print(agent.get_history())
-print(agent._build_start_messages("你认为我是一个怎么样的人"))
+print(agent.get_context_usage())
 agent.save_session("session_1001")
 
-agent2 = BasicAgent.load_session(session_id="session_1001", llm=llm)
+agent2 = BasicAgent("session_example", llm)
+agent2.restore_session("session_1001")
 response = agent2.invoke("你还记得我的名字吗？")
 print(response)

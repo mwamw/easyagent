@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="EasyAgent 技术白皮书：面向 Harness 的模块化 Agent 开发，与主流框架和 Harness 产品的架构比较。">
+<title>$title$</title>
+<style>
+:root { --ink:#172b44; --muted:#596b80; --teal:#087e80; --line:#d8e2ea; --paper:#fff; }
+* { box-sizing:border-box; }
+body { margin:0; background:#edf1f5; color:var(--ink); font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif; font-size:16px; line-height:1.95; }
+.document { max-width:1040px; margin:36px auto; padding:0 74px 74px; background:var(--paper); box-shadow:0 12px 70px #20344d12; }
+.cover { padding:68px 0 56px; border-bottom:2px solid var(--teal); }
+.eyebrow { color:var(--teal); font-size:13px; letter-spacing:3px; font-weight:700; }
+h1 { font-size:46px; line-height:1.35; letter-spacing:-1px; max-width:720px; margin:35px 0 22px; }
+.subtitle { color:var(--muted); font-size:21px; line-height:1.8; max-width:680px; }
+.cover .promise { margin:42px 0 34px; padding:25px 28px; border-left:4px solid var(--teal); background:#edf7f5; font-size:22px; line-height:1.7; }
+.cover-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:22px; margin:42px 0; }
+.cover-grid div { border-top:1px solid var(--line); padding-top:18px; }
+.cover-grid strong { display:block; font-size:19px; }
+.cover-grid span { display:block; color:var(--muted); font-size:14px; line-height:1.8; margin-top:6px; }
+.date { color:var(--muted); font-size:13px; margin-top:55px; }
+nav { padding:40px 0 30px; border-bottom:1px solid var(--line); }
+nav h2 { margin:0 0 20px; }
+nav ul { margin:0; list-style:none; padding:0; }
+nav > ul { columns:2; column-gap:36px; }
+nav > ul > li { break-inside:avoid; margin-bottom:12px; font-weight:600; }
+nav ul ul { font-size:13px; font-weight:400; padding-left:12px; }
+nav ul ul li { margin:3px 0; }
+h2 { font-size:29px; line-height:1.5; margin:58px 0 24px; padding-bottom:13px; border-bottom:1px solid var(--line); }
+h3 { font-size:21px; line-height:1.6; margin:32px 0 15px; }
+p { margin:15px 0; text-align:justify; overflow-wrap:break-word; }
+strong { font-weight:700; }
+a { color:var(--teal); text-decoration:none; border-bottom:1px solid #b9d9d5; }
+a:hover { background:#edf7f5; }
+blockquote { background:#edf7f5; border-left:4px solid var(--teal); margin:25px 0; padding:12px 22px; }
+blockquote p { text-align:left; }
+figure, p:has(> img) { margin:32px 0 12px; }
+figure img, p > img { width:100%; height:auto; display:block; }
+figcaption { display:none; }
+figure + p, p:has(> em:only-child) { color:var(--muted); font-size:13px; line-height:1.8; }
+table { width:100%; border-collapse:collapse; font-size:13px; line-height:1.85; margin:25px 0; table-layout:fixed; }
+thead { border-top:2px solid var(--teal); border-bottom:1px solid #b9c9d5; background:#edf4f5; }
+th { text-align:left; font-weight:700; }
+th,td { padding:11px 12px; vertical-align:top; overflow-wrap:anywhere; }
+td { border-bottom:1px solid #e1e8ef; }
+tbody tr:nth-child(even) { background:#f7f9fb; }
+table th:first-child, table td:first-child { width:23%; }
+caption { caption-side:top; text-align:left; color:var(--muted); font-size:13px; padding-bottom:10px; }
+table:has(th:nth-child(4)) th:first-child,table:has(th:nth-child(4)) td:first-child { width:17%; }
+table:has(th:nth-child(4)) th:nth-child(2),table:has(th:nth-child(4)) td:nth-child(2) { background:#eaf6f4; }
+table:has(th:nth-child(4)) th:nth-child(2) { color:#066b6e; }
+code { font-family:'DejaVu Sans Mono',monospace; font-size:.85em; background:#edf1f5; border-radius:3px; padding:2px 4px; }
+pre { background:#f2f5f9; border:1px solid #dbe3ec; padding:18px; line-height:1.65; overflow:auto; font-size:12px; }
+pre code { background:none; padding:0; }
+ul,ol { padding-left:25px; }
+li { margin:6px 0; }
+.footer { margin-top:55px; padding-top:20px; border-top:2px solid var(--teal); font-size:12px; color:var(--muted); }
+@media screen and (max-width:760px) { .document{margin:0;padding:0 22px 35px;box-shadow:none} .cover{padding-top:38px} h1{font-size:34px} h2{font-size:25px} .cover-grid{grid-template-columns:1fr} nav>ul{columns:1} table{font-size:12px} th,td{padding:8px 6px} }
+@media screen and (max-width:760px) { table:has(th:nth-child(4)){display:block;overflow-x:auto;table-layout:auto} table:has(th:nth-child(4)) th,table:has(th:nth-child(4)) td{min-width:140px} }
+@page { size:A4; margin:18mm 17mm 18mm; @bottom-left {content:'EasyAgent  /  面向 Harness 编程';font-family:'Noto Sans CJK SC';font-size:8pt;color:#66778a;} @bottom-right {content:counter(page);font-family:sans-serif;font-size:8pt;color:#66778a;} }
+@page:first { @bottom-left{content:none} @bottom-right{content:none} }
+@media print {
+  body { background:white; font-size:10pt; line-height:1.85; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .document { max-width:none; margin:0; padding:0; box-shadow:none; }
+  .cover { min-height:252mm; padding:23mm 0 0; border-bottom:0; break-after:page; }
+  .eyebrow{font-size:9pt} h1{font-size:34pt;margin-top:25mm} .subtitle{font-size:15pt}
+  .cover .promise{font-size:16pt;margin-top:18mm;padding:7mm} .cover-grid{margin-top:18mm;gap:6mm}
+  .cover-grid strong{font-size:13pt} .cover-grid span{font-size:9pt} .date{font-size:9pt;margin-top:18mm}
+  nav{padding:0;border:0;break-after:page;font-size:9pt;line-height:1.6} nav>ul{columns:1} nav>ul>li{margin-bottom:5pt} nav ul ul{font-size:8.3pt;columns:2;column-gap:5mm}
+  h2{break-before:auto;font-size:20pt;margin:9mm 0 6mm;padding-bottom:3mm} nav h2,main>h2:first-child{margin-top:0}
+  main>h2:last-of-type{break-before:page;margin-top:0}
+  h3{font-size:13pt;margin:7mm 0 3mm} h2,h3{break-after:avoid}
+  p{margin:3mm 0;orphans:3;widows:3} li{margin:1mm 0}
+  table{font-size:8.5pt;line-height:1.75;margin:5mm 0;break-inside:avoid} th,td{padding:2.5mm 2mm} thead{display:table-header-group} tr{break-inside:avoid}
+  table:has(th:nth-child(4)){font-size:8.1pt;line-height:1.65} table:has(th:nth-child(4)) th,table:has(th:nth-child(4)) td{padding:2mm 1.8mm}
+  caption{font-size:9pt;padding-bottom:3mm} p:has(+table){break-after:avoid}
+  figure,p:has(> img){break-inside:avoid;margin:6mm 0 3mm;break-after:avoid} figure+p,p:has(> img)+p{break-before:avoid}
+  pre{font-size:7.7pt;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;break-inside:avoid;padding:4mm}
+  blockquote{break-inside:avoid;padding:2mm 5mm;margin:5mm 0}
+  figure+p,p:has(> em:only-child){font-size:8.5pt} a{border-bottom:0}
+  main>ol:last-of-type{font-size:9pt;line-height:1.6} main>ol:last-of-type li{margin:0.5mm 0}
+  .footer{font-size:8pt;break-inside:avoid;margin-top:6mm;padding-top:3mm}
+}
+</style>
+</head>
+<body><div class="document">
+<header class="cover">
+<div class="eyebrow">EASYAGENT / TECHNICAL WHITE PAPER</div>
+<h1>$title$</h1>
+<div class="subtitle">$subtitle$</div>
+<div class="promise">默认实现帮助开发者开始，<br>模块契约支持开发者走出默认实现。</div>
+<div class="cover-grid">
+<div><strong>面向运行机制</strong><span>直接表达执行、上下文、记忆与会话，而非先转换成编排概念。</span></div>
+<div><strong>局部实现差异</strong><span>通过对应模块契约定制，不必先掌握整个 Harness 的内部实现。</span></div>
+<div><strong>保留产品主导权</strong><span>框架提供能力，产品决定装配和策略，界面共同消费产品 Core。</span></div>
+</div>
+<div class="date">$date$<br>架构与产品定位初稿 · 不含量化实验结论</div>
+</header>
+$if(toc)$<nav aria-label="目录"><h2>阅读导航</h2>$toc$</nav>$endif$
+<main>$body$</main>
+<footer class="footer">EasyAgent · 技术白皮书 $edition$ · 资料核对：2026-09-07<br>正文与插图可编辑；对比反映查阅时的公开接口，不是性能或成熟度排名。</footer>
+</div></body></html>

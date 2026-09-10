@@ -1,397 +1,454 @@
 # EasyAgent 🚀
 
-**一个轻量、透明、为真实工程和长程任务而生的 AI Agent 运行时框架。**
+**Build your Agent, not our Agent.**
 
-### 💡 为什么我们需要 EasyAgent？
+EasyAgent 是一个面向 **Agent Harness 开发**的 Python Runtime Framework。
 
-在市面上已经有 LangChain、LlamaIndex 等优秀框架的今天，为什么还要重造轮子？
+它将执行、上下文、记忆、工具、权限、会话与协作组织为可组合的运行能力：提供可直接使用的默认实现，也为关键机制提供可替换的公共契约。你定义领域能力和产品策略，EasyAgent 负责它们如何安装、何时参与默认执行管线，以及如何通过约定协作。
 
-因为当我们真正尝试在本地构建类似 Devin 的高阶 Code Agent（如 [S4Code](https://github.com/mwamw/S4Code)）时，我们发现现有的工具链存在严重的**“过度封装”**与**“状态脆弱性”**。当 Agent 需要在你的真实代码仓库中执行长达数十步的阅读、修改、测试和提交操作时，你最需要的不再是一个快速搭建 Demo 的黑盒玩具，而是一个**极致可控的底层 Runtime**。
+> Framework defines contracts.
+>
+> Components define capabilities.
+>
+> Developers define the harness.
+>
+> Agent is the center.
 
-EasyAgent 放弃了臃肿的抽象层，回归工程本质，为你提供以下核心能力：
+[快速开始](#quick-start) · [自定义模块](#custom-components) · [架构与能力](#runtime-capabilities) · [框架对比](#comparison) · [文档导航](#documentation) · [技术白皮书](docs/whitepaper/README.md)
 
-* **🔍 拒绝黑盒，极致的透明度：** 将 Tool Loop、Output Parser 与 Hooks 彻底解耦。内置 Trace Recorder 让你能精准追踪每一轮 Reasoning 和 Tool Result。Agent 为什么死循环？哪一步参数传错了？一目了然。
-* **💾 原生状态管理与断点续跑：** 复杂的长程任务最怕在第 49 步因为网络波动或 Token 超载而崩溃。EasyAgent 独创 `ExecutionContext` 与会话快照，记录完整的工具调用链路。崩溃了？直接从错误点秒级重建上下文继续跑，告别 Token 浪费。
-* **🛡️ “人在回路”的安全权限引擎：** 大模型绝不能在没有授权的情况下裸奔。内置首创的 `PermissionContext`，在涉及文件覆写、Shell 执行、Git 修改等高危动作前，原生支持 **Ask / Allow / Deny** 拦截策略，兼顾自动化与绝对安全。
-* **🔌 干净的抽象与前沿协议支持：** 抹平 OpenAI、Anthropic、Google 御三家在 Tool Calling 和结构化输出上的底座差异，并且**原生支持 MCP (Model Context Protocol)** 接入，以最轻的姿态拥抱最新的工具链生态。
+## Why EasyAgent?
 
-**简而言之：如果你只是想花 5 分钟写一个聊天的 Demo，请使用 LangChain；如果你想构建一个在真实文件系统里跑满 10 分钟不出错、高度可控且安全的工业级 Agent 工具，欢迎使用 EasyAgent。**
-EasyAgent 是一个面向通用 Agent、Code Agent 和多 Agent 协作场景的 Python 框架。
-它关注的不是“怎么调用一次模型”，而是“怎么把模型、工具、权限、会话、上下文、运行时和可观测性组装成可持续维护的 Agent 产品”。
+专业 Agent 的差异，不只在提示词和工具列表中。
 
-这份 README 不是简介，而是整个框架文档体系的总入口。
-如果你只读一个文件，请先读它；如果你要做真正的产品化集成，请顺着这里的主题索引继续读 `docs/` 下的专题手册。
+当你构建 Coding、Research、DevOps 或其他长期工具型 Agent 时，可能需要改变：模型每轮看到什么、记忆怎样检索、工具如何执行、什么时候等待审批、会话怎样恢复，以及子 Agent 如何协作。
 
-## 1. 你可以用 EasyAgent 做什么
+这些问题属于 **Harness 本身**。EasyAgent 希望让开发者不必在“配置现成 Harness”和“从零实现全部运行设施”之间二选一：
 
-EasyAgent 适合构建：
+- **直接使用默认能力。** 不必先理解每个模块的内部算法和执行器接线。
+- **只实现领域差异。** 用对应模块的接口表达需求，而不是先把所有需求翻译成节点、边或角色任务。
+- **由框架承接集成。** 注册、服务绑定和默认执行管线中的调用由公开安装入口衔接。
+- **需要时接管运行策略。** 替换执行器，继续复用适用的模型、工具、上下文和状态能力。
 
-- 单智能体对话助手
-- 带工具调用的自动化助手
-- 本地或远程运行的 Code Agent
-- 带 Ask / Allow / Deny 权限模型的命令执行代理
-- 带 Skill、MCP、CodeIntel、RAG、Memory 的工程助手
-- 支持 Team / Task / Mailbox / background agent 的多 Agent 系统
+EasyAgent 不以另一套工作流 DSL 作为必经入口，也不排斥编排：外层业务流程可以管理任务顺序，内部 Agent 通过 Harness 完成模型驱动的行动。
 
-## 2. 快速安装
+## Core Philosophy
 
-核心安装：
+### Agent is the center
+
+Agent 是能力装配与调用的中心，不意味着所有逻辑都放进一个巨型 Agent 类。工具、记忆、上下文和会话各自承担职责，通过公共接口进入运行过程。
+
+### Framework defines contracts — and provides implementations
+
+框架既不能只有默认实现，也不能只留下一堆需要用户填满的抽象类。
+
+`BasicAgent`、`DefaultAgentExecutor`、`SystemPromptComposer`、`ContextManager`、`LayeredMemory` 和已有存储实现提供起点。自定义模块则使用各职责自己的契约，例如：
+
+`BaseAgentExecutor` · `BaseContextManager` · `BaseHistoryCompactor` · `BaseMemory` · `BaseSystemPromptComposer` · `BaseSessionStore` · `BaseObservabilityManager` · `BaseMultiAgentRuntime`
+
+不同能力不必强行继承同一个万能 `AgentModule`。
+
+### Replaceable, not only configurable
+
+配置改变“现有实现怎样工作”；机制替换允许改变“这项能力本身怎样实现”。
+
+例如，换一个向量库和改成模型主动搜索的文件记忆，是两个层次的需求。EasyAgent 将记忆机制与底层存储分开，让两类变化各有位置，而不要求修改默认 Agent Loop。
+
+### Framework-managed integration
+
+**模块作者实现行为，框架承接行为如何进入默认 Agent 运行。**
+
+| 你负责实现 | 框架承接的集成工作 |
+| --- | --- |
+| Tool 的参数、动作与结果 | 描述导出、参数校验、受控执行、结果与事件 |
+| Prompt Composer 的产品规则 | 请求时构建、模块说明合并与请求编译 |
+| Memory 的说明、工具与可选 Hook | 服务绑定、工具/Hook 注册及对应生命周期调用 |
+| 压缩器的领域保留策略 | 预算预检、调用压缩器、重组候选历史与最终检查 |
+| Session Store 的数据操作 | 收集约定状态，保存并恢复到已装配的 Agent |
+
+用户无需理解无关模块的内部实现，也无需分别给同步、异步和流式循环添加同一段业务逻辑。但仍须遵守公开契约：副作用、异步 I/O、资源所有权、状态格式和一致性不是框架能够替用户猜测的内容。
+
+![EasyAgent 的默认实现、模块契约和框架管理的接入](docs/whitepaper/assets/04-framework-architecture.svg)
+
+*功能按需安装，不是全部默认启用。图示说明当前主要职责边界，不表示每个子系统都已具备任意细粒度替换接口。*
+
+## Quick Start
+
+要求 **Python >= 3.10**。从源码安装：
 
 ```bash
-pip install -e .
+git clone https://github.com/mwamw/easyagent.git
+cd easyagent
+python -m pip install -e .
 ```
 
-可选扩展：
+按需要安装可选依赖：
 
 ```bash
-pip install -e ".[mcp]"
-pip install -e ".[rag]"
-pip install -e ".[memory]"
-pip install -e ".[dev]"
+python -m pip install -e ".[mcp]"     # MCP 集成
+python -m pip install -e ".[rag]"     # 检索与文档处理
+python -m pip install -e ".[memory]"  # 内置记忆方案的可选依赖
+python -m pip install -e ".[dev]"     # 开发与测试
 ```
 
-推荐：
+使用 `BaseMemory` 编写自己的模块，不等于必须安装所有内置记忆依赖。
 
-- 只做工具型 Agent：核心安装即可
-- 要接 MCP：加 `.[mcp]`
-- 要接知识库或检索：加 `.[rag]`
-- 要长期记忆：加 `.[memory]`
-- 要跑完整测试：加 `.[dev]`
+### 创建第一个 Agent
 
-## 3. 30 秒最小 Agent
+先设置你实际使用的服务地址、模型和密钥：
 
+```bash
+export EASYAGENT_BASE_URL="http://127.0.0.1:5124/v1"
+export EASYAGENT_MODEL="your-model"
+# 在本地环境中设置 EASYAGENT_API_KEY；不要将真实密钥写入源码。
+```
+
+下面是 OpenAI-compatible 协议示例，服务需自行启动或换成可访问的远端地址。这三个环境变量由示例显式读取，不是框架自动识别的统一配置约定。
+
+<!-- readme-example: quick-start -->
 ```python
+import os
 from easyagent import BasicAgent, EasyLLM
 
 llm = EasyLLM(
     provider="openai",
-    base_url="http://127.0.0.1:5124/v1",
-    api_key="test",
-    model="qwen3.5-9b",
+    base_url=os.environ["EASYAGENT_BASE_URL"],
+    api_key=os.environ["EASYAGENT_API_KEY"],
+    model=os.environ["EASYAGENT_MODEL"],
 )
-
 agent = BasicAgent(name="assistant", llm=llm)
-print(agent.invoke("用一句话说明 EasyAgent 是什么。"))
+try:
+    print(agent.invoke("用一句话解释什么是 Agent Harness。"))
+finally:
+    agent.close()
 ```
 
-## 4. 20 行最小 Code Agent
+最小 `BasicAgent` 不会自动安装 Memory、MCP、MultiAgent、CodeIntel、Worktree 或创建 Observability 数据库。框架已有轻量的历史、提示词、权限、事件与执行设施，其他能力按需装配。
 
+### 显式装配产品能力
+
+下面定义装配函数，接收调用方已经创建的 `llm`，不会在导入时调用模型：
+
+<!-- readme-example: product-assembly -->
 ```python
-from easyagent import BasicAgent, Config, EasyLLM
-from easyagent.tools import ToolRegistry, register_filesystem_tools, register_shell_tools
+from pathlib import Path
+from easyagent import BasicAgent, Config
+from easyagent.context import ContextManager, LLMHistoryCompactor
+from easyagent.tools import ToolRegistry, register_filesystem_tools
 
-llm = EasyLLM(
-    provider="anthropic_native",
-    api_key="test",
-    base_url="http://127.0.0.1:5124",
-    model="deepseek-v4-flash:zenmux:claude",
+def build_product_agent(llm, workspace="."):
+    root = Path(workspace).resolve()
+    registry = ToolRegistry()
+    register_filesystem_tools(registry, workspace_root=str(root))
+
+    context = ContextManager(max_tokens=16_000)
+    context.set_history_compactor(
+        LLMHistoryCompactor(llm=llm, language="en", recent_turns=4)
+    )
+
+    return (
+        BasicAgent("product-agent", llm, config=Config(workspace_root=str(root)))
+        .with_tool(registry)
+        .with_context(context)
+        .with_observability(path=str(root / ".easyagent" / "observability.sqlite3"))
+    )
+```
+
+工具可能读写真实文件；请先配置适合产品的权限和执行环境。LLM 压缩器会在需要时产生额外模型请求。仅设置 `ContextManager(max_tokens=...)` 并不等于安装了摘要算法。
+
+## One Agent, Consistent Invocation APIs
+
+相同 Agent 使用四种调用方式；以下函数接收已装配实例：
+
+<!-- readme-example: invocation -->
+```python
+def run_sync(agent, query):
+    return agent.invoke(query)
+
+async def run_async(agent, query):
+    return await agent.ainvoke(query)
+
+def print_stream(agent, query):
+    for event in agent.stream(query):
+        print(event.to_dict())
+
+async def print_async_stream(agent, query):
+    async for event in agent.astream(query):
+        print(event.to_dict())
+```
+
+是否能调用工具、使用记忆或启动子 Agent，取决于安装的能力；你不需要为每种组合切换另一套 invocation API。流应消费到底，或显式关闭。关闭异步资源时使用 `await agent.aclose()`；共享的模型和存储需要明确所有权，详见 [Agent Guide](docs/agent_guide.md)。
+
+## Custom Components
+
+### 用自己的记忆机制，不改 Agent Loop
+
+`BaseMemory` 表示完整记忆机制，不强制向量检索、固定分类或统一 CRUD。下面的 `tools` 由应用提供，可以是文件搜索、证据读取和保存工具：
+
+<!-- readme-example: custom-memory -->
+```python
+from easyagent.memory import BaseMemory
+from easyagent.prompting import PromptBlock
+
+class ResearchMemory(BaseMemory):
+    def __init__(self, tools):
+        self.tools = list(tools)
+
+    def get_prompt_blocks(self, context):
+        return [PromptBlock(
+            "memory.research",
+            "Use the memory tools to search prior findings when relevant. "
+            "Save reusable conclusions with their evidence references.",
+        )]
+
+    def get_tools(self):
+        return self.tools
+
+def install_research_memory(agent, memory_tools):
+    return agent.with_memory(ResearchMemory(memory_tools))
+```
+
+安装时，框架绑定服务并注册模块提供的工具和 Hook；请求准备时，正常的 Prompt Composer 合并记忆说明。模型调用记忆工具时，执行和结果走普通工具路径。
+
+不需要自动检索，就不提供检索 Hook；需要自动检索，可以由 Memory 自己提供公开 `before_context` / `abefore_context` Hook，再通过 MetaMessage 注入。**Context 不替 Memory 决定检索机制。**
+
+内置 `LayeredMemory` 是另一种实现。Working、Episodic、Semantic、Perceptual 等分类属于该分层方案，不是 `BaseMemory` 对所有自定义系统的要求。
+
+### 自定义提示词，不重写请求编译
+
+通常只需实现 `build()`。基类的 `compose()` 在启用模块说明时继续合并 Memory 的 Prompt Blocks：
+
+<!-- readme-example: custom-prompt -->
+```python
+from easyagent.prompting import BaseSystemPromptComposer, PromptBlock
+
+class ResearchPrompt(BaseSystemPromptComposer):
+    def build(self, context):
+        return [PromptBlock(
+            "identity",
+            "You are a research assistant. Separate evidence from hypotheses.",
+        )]
+
+def install_research_prompt(agent):
+    return agent.with_prompt(ResearchPrompt())
+```
+
+也可以直接配置 `SystemPromptComposer(..., include_defaults=False)`，关闭框架默认规则。模块说明是否合并是另一个选项，不应因改变产品身份而意外丢失。
+
+### 关键扩展入口
+
+| 需要改变的能力 | 公共契约 / 对象 | 安装方式 |
+| --- | --- | --- |
+| Agent Loop | `BaseAgentExecutor` | `with_executor(executor)` |
+| 上下文组装 | `BaseContextManager` | `with_context(manager)` |
+| 历史压缩 | `BaseHistoryCompactor` | `context.set_history_compactor(compactor)` |
+| 记忆机制 | `BaseMemory` | `with_memory(memory)` |
+| 产品提示词 | `BaseSystemPromptComposer` | `with_prompt(composer)` |
+| 工具 | `Tool` / `ToolRegistry` | `add_tool(tool)` / `with_tool(registry)` |
+| 权限策略 | `PermissionEngine` / `PermissionContext` | `with_permissions(engine, context)` |
+| 会话存储 | `BaseSessionStore` | `with_session(store)` |
+| 可观测性 | `BaseObservabilityManager` / `BaseObservabilityStore` | `with_observability(manager=...)` 或 `store=...` |
+| 子 Agent 运行时 | `BaseMultiAgentRuntime` | `with_multi_agent(runtime)` |
+
+`with_skill`、`with_mcp`、`with_plan`、`with_task_service`、`with_hooks`、`with_callbacks`、`with_codeintel`、`with_worktree`、`with_interruptions` 提供其他能力入口。
+
+整体替换执行器意味着接管请求、工具、权限、事件和状态之间的协调责任；框架提供可复用对象，但不会自动推断你的新循环。局部需求优先使用局部接口，不必复制整个 Executor。
+
+更多可验证示例见 [模块边界示例](example/example_module_boundaries.py) 与 [白皮书第 3、4 章](docs/whitepaper/easyagent-whitepaper.zh-CN.md)。
+
+## Runtime Capabilities
+
+### History、Context、Memory、Compaction 各有职责
+
+| 概念 | 回答的问题 | 当前边界 |
+| --- | --- | --- |
+| History | 当前保留了哪些对话与动作信息？ | 内存中维护 canonical 与 provider replay；不是永不丢失的原始日志 |
+| Context | 这一轮模型看到什么？ | 组装准备好的内容，控制总预算，不主动检索 Memory / RAG |
+| Memory | 怎样保存并使用可复用知识？ | 通过说明、工具和可选 Hook 参与运行，机制由实现决定 |
+| Compaction | 输入过长时怎样缩减历史？ | 规则式、LLM 或自定义压缩器；压缩可能替换当前历史 |
+| MetaMessage | 动态信息怎样注入与回收？ | 处理消息与生命周期，不理解来源的业务含义 |
+
+Canonical History 与 Provider Replay 分离，使产品不必把持久化状态直接绑定到某一种 provider 消息格式。跨模型恢复仍可能存在能力差异，需要查看恢复报告。
+
+框架预算判断优先采用**有效 API usage 基线 + 本地增量估算**；首轮或基线失效时回退完整本地估算。压缩预检、最终请求检查和 `get_context_usage()` 遵循同一规则，不依赖启用 Observability。
+
+### Tool：不仅是一个函数
+
+`Tool`、`ToolSpec`、`ToolResult` 与 `ToolRegistry` 一起表达参数 Schema、读写语义、副作用、权限、可见性、按需展开和执行结果。普通工具、内置工具与 MCP 工具沿相关运行路径参与 Agent。
+
+Deferred 模式使用 `tool_schema_tool` 按需展开完整 Schema，减少初始请求携带的完整工具定义。注意当前字段语义：**`expose_in_deferred=True` 表示在 deferred 模式下直接暴露**；设为 `False` 的工具需按需展开。工具 Schema 标记不等同于所有执行器都会并行调度工具。
+
+### Permission、Hook 与 Callback 分离
+
+- **Permission**：对动作作 Allow / Ask / Deny 决策。
+- **Hook**：在公开生命周期位置检查、修改或阻断。
+- **Callback / Observability**：观察执行事实，生成展示、日志或记录。
+
+当前默认工具路径先运行 `before_tool_use`，再校验修改后的工具调用并授权，之后执行工具、处理结果与发布相应事件。因此 Hook 改写参数后仍需经过权限判断。
+
+**Permission、路径限制、Worktree 都不等于 OS Sandbox。** 文件、Shell、网络和进程操作应结合合适的容器或操作系统隔离。审批等待需要产品提供用户交互入口，不能只靠提示词保证安全。
+
+### Skill、MCP 与动态能力
+
+目录式 Skill 使用 `SKILL.md`。安装时索引可用技能，模型按需加载正文；框架处理 listing、激活与临时信息回收。它不要求用户实现额外的 Python 模块接线。
+
+MCP 将外部工具和资源接入本地工具体系，并处理相应连接、Schema、认证与策略边界。远程 prompt 与本地 Skill 不会被无条件合并，产品需明确决定如何使用远端内容。
+
+详见 [Skill](docs/skill_system_guide.md)、[MCP](docs/mcp_guide.md)、[Deferred Tools](docs/deferred_tools_guide.md)。
+
+### Subagent、Team、Task 与 Mailbox
+
+可选 `MultiAgentRuntime` 提供 Agent Handle、后台运行、查询/等待/停止、Team、Mailbox 和 Completion Record。子 Agent 不只是另一个函数调用，还具有可管理的运行生命周期。
+
+Mailbox 投递与模型读取分开：框架在后续请求准备时同步消息，通过 MetaMessage 接入上下文并去重；读取和确认仍有独立操作。持久化 Handle 不意味着外部进程会随会话自动复活。
+
+### Environment 与 Code Agent 能力
+
+EasyAgent 提供文件、Shell、CodeIntel、Worktree 等能力，供产品构建操作真实环境的 Agent。它不是只面向 Coding Agent；Browser、Computer-use 或远端计算等场景，还需要相应工具和环境实现，不能理解为已经内置所有专用 Harness。
+
+在前面的装配方式上，Coding Agent 可以这样组织工具：
+
+<!-- readme-example: code-agent -->
+```python
+from pathlib import Path
+from easyagent import BasicAgent, Config
+from easyagent.tools import (
+    ToolRegistry, register_filesystem_tools, register_shell_tools,
 )
 
-config = Config(tool_schema_mode="deferred")
-registry = ToolRegistry()
-register_filesystem_tools(registry, workspace_root=".")
-register_shell_tools(registry, workspace_root=".", expose_in_deferred=False)
-
-agent = BasicAgent(
-    name="code-agent",
-    llm=llm,
-    config=config,
-).with_tool(registry)
+def build_code_agent(llm, workspace="."):
+    root = Path(workspace).resolve()
+    registry = ToolRegistry()
+    register_filesystem_tools(registry, workspace_root=str(root))
+    register_shell_tools(registry, workspace_root=str(root), expose_in_deferred=False)
+    return BasicAgent(
+        "code-agent", llm,
+        config=Config(workspace_root=str(root), tool_schema_mode="deferred"),
+    ).with_tool(registry)
 ```
 
-更完整的产品装配示例见：
+上面仅装配能力，不执行命令。多个 Agent 修改同一仓库时，可用独立 Worktree 分开工作副本；Git 分支合并、外部资源和执行隔离仍需产品管理。
 
-- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
+## Session & Recovery
 
-## 5. 公共 SDK 导入方式
+会话持久化保存**当前可恢复状态**，不根据实现类名猜测产品装配。先创建所需模型、工具和模块，再恢复数据：
 
-新项目建议统一从 `easyagent` 或 `easyagent.*` 导入，而不是直接依赖内部目录。
-
-常见导入：
-
+<!-- readme-example: session -->
 ```python
-from easyagent import BasicAgent, EasyLLM, Config
-from easyagent.tools import ToolRegistry, register_filesystem_tools, register_shell_tools
-from easyagent.permissions import PermissionContext, PermissionEngine, PermissionRule
-from easyagent.callbacks import CallbackManager, StreamingCallback
-from easyagent.prompting import PromptBlock, SystemPromptComposer
+from easyagent import BasicAgent
+from easyagent.session import InMemorySessionStore
+
+def demonstrate_session(llm):
+    store = InMemorySessionStore()  # 仅本进程；跨进程保存可换 SQLiteSessionStore
+    original = BasicAgent("assistant", llm).with_session(store)
+    restored = BasicAgent("assistant", llm).with_session(store)
+    try:
+        original.add_user_message("Remember the current research objective.")
+        session_id = original.save_session()
+        restored.restore_session(session_id)
+        branch_id = restored.fork_session()
+        return session_id, branch_id, restored.get_last_restore_report()
+    finally:
+        original.close(close_llm=False)
+        restored.close(close_llm=False)
 ```
 
-完整公共 API 索引见：
+共享 `llm` 由调用方关闭。真实产品应通过自己的装配函数创建恢复实例；自定义模块状态通过约定的导出/恢复接口与状态参与者机制保存。
 
-- [Framework API](./docs/framework_api.md)
-- [Modular Agent Architecture](./docs/modular_agent_architecture.md)
+恢复可能遇到 provider 变化、缺失工具或缺失模块。`SessionRestoreReport`、`ComponentRestoreReport` 和 `RestoreIssue` 让产品看清可恢复内容与差异；必需组件缺失或状态无效时会报错，而不是继续假装恢复成功。
 
-## 6. 文档导航
+**保存/恢复不自动回滚文件、重新连接所有外部资源或恢复执行中的进程。** 当前快照也不是完整 transcript archive。旧数据库应显式迁移，详见 [Session Guide](docs/session_restore_persistence_guide.md) 和 [Storage Guide](docs/storage_guide.md)。
 
-### 6.1 入门与公共 API
+## Events, Observability & Training
 
-- [Framework API](./docs/framework_api.md)
-- [Config Reference](./docs/config_reference.md)
-- [Agent Guide](./docs/agent_guide.md)
-- [Modular Agent Architecture](./docs/modular_agent_architecture.md)
-- [LLM Provider Guide](./docs/llm_provider_guide.md)
-- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
+`RuntimeEventBus` 提供统一执行事实，如 `agent.invoke.started`、`llm.invoke.completed`、`tool.invoke.completed`、`history.compacted`。流接口使用 `text_delta`、`reasoning_delta`、`tool_call`、`tool_result`、`final`、`error` 等结构化事件。
 
-### 6.2 Tool 系统
+Observability 按需订阅事件，记录 `AgentInvoke`、`LLMInvoke`、工具调用、usage、耗时、异常和输入输出，支持内存、SQLite 及自定义 Store。TrainingExporter 消费这些记录，不要求 Executor 理解训练格式：
 
-- [Tool System Guide](./docs/tool_system_guide.md)
-- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
-- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
-- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
+```text
+Agent / Tools → Runtime Events → Observability → Training Exporter
+                        └──────→ Callback / UI / Logs
+```
 
-### 6.3 Prompt、Skill
+当前事件总线是同步进程内分发。观察者不应执行耗时阻塞工作；“观察与执行分离”不是“所有回调天然非阻塞”。观测记录可能含提示词、工具结果及敏感数据，落库和导出前应控制访问并按需脱敏。
 
-- [Prompt System Guide](./docs/prompt_system_guide.md)
-- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
-- [Skill System Guide](./docs/skill_system_guide.md)
+## Provider-neutral, Not Provider-blind
 
-### 6.4 Context、Memory、Session
+`EasyLLM` 提供统一模型入口，支持 `openai`、`openai_responses`、`anthropic_native`、`google_native` 等协议路径。
 
-- [Memory System Guide](./docs/memory_system_guide.md)
-- [Context And Compaction Guide](./docs/context_and_compaction_guide.md)
-- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
+统一请求、历史转换、工具调用和 usage，不意味着所有 provider 的 reasoning、缓存或消息语义完全相同。产品可以使用受支持的特定能力，也需要核对模型与 provider 的限制。框架内部的 provider 实现不应变成每个产品都要维护一套的 EasyAgent 适配层。
 
-### 6.5 Runtime、Task、Permission、Hook、Callback
+## Comparison
 
-- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
-- [Tasks Guide](./docs/tasks_guide.md)
-- [Permissions Guide](./docs/permissions_guide.md)
-- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
-- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
+不同项目的抽象可以重叠。下表比较主要公开入口，不作性能或成熟度排名；项目链接指向官方说明，核对日期为 2026-09-10。
 
-### 6.6 扩展能力
+| 框架 / 路线 | 主要抽象与能力 | 更直接服务的需求 |
+| --- | --- | --- |
+| [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) | State / Node / Edge；持久执行、流式与人工介入 | 组织有状态流程，可混合确定性与模型驱动步骤 |
+| [CrewAI](https://docs.crewai.com/en/introduction) | Agent / Role / Task / Crew / Flow | 角色协作与业务执行流程 |
+| [Microsoft Agent Framework](https://learn.microsoft.com/en-us/agent-framework/overview/)（AutoGen / Semantic Kernel 后续方向） | Agent、工作流、会话、中间件与遥测 | 多 Agent 应用和企业集成 |
+| [OpenAI Agents SDK](https://developers.openai.com/api/docs/guides/agents) | Agent / Runner / Tool / Handoff，以及运行状态等能力 | 以代码定义、运行和集成 Agent 应用 |
+| [Deep Agents](https://docs.langchain.com/oss/python/deepagents/customization) | 已装配的 Harness、中间件与可接入后端 | 使用并定制完整 Harness，包括替换默认中间件 |
+| [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/) | Capability 组合与可拆解的 Agent 能力 | 通过组合能力构建和定制 Harness |
+| [OpenHands SDK](https://docs.openhands.dev/sdk/arch/sdk) | Agent / Conversation / Workspace / Tools / Condenser | 软件 Agent 及可复用的运行与环境设施 |
+| **EasyAgent** | **Agent Harness 的职责契约与可组合实现** | **直接定制执行、记忆、上下文与会话等领域机制** |
 
-- [MCP Guide](./docs/mcp_guide.md)
-- [CodeIntel Guide](./docs/codeintel_guide.md)
-- [Observability And Cache Guide](./docs/observability_and_cache_guide.md)
-- [RAG Guide](./docs/rag_guide.md)
-- [Worktree Guide](./docs/worktree_guide.md)
+EasyAgent 的取向是 **Use our framework to build your harness**：将关键运行职责作为公共接口，提供默认实现，并将产品策略与框架接入机制分开。模块化不是 EasyAgent 独有；真正应比较的是某个需求能通过什么接口完成、需要理解哪些概念，以及替换后由谁承担协作责任。
 
-## 7. 核心概念总览
+更完整的 17 组项目对照、十二个维度和扩展示例见 [技术白皮书](docs/whitepaper/README.md)（其资料核对日期单独标注）。
 
-### Agent
+## Grow Without Rebuilding Everything
 
-`BaseAgent` 是运行时基座，`BasicAgent` 是默认可用的通用实现。
-Agent 负责把 LLM、Tool、Skill、History、Callback、Hook、Permission、Runtime 组装起来。
+从最小 Agent 到领域产品，能力可以逐步增加：
 
-详见：
+1. 使用默认 Agent 和模型入口验证需求。
+2. 加入 Tools、Context、权限与所需的状态管理。
+3. 接入 Memory、Skill、MCP、Task 或 Subagent。
+4. 按领域需要替换提示词、记忆、压缩器和会话存储。
+5. 循环策略真正不同时，再提供自定义 Executor。
 
-- [Agent Guide](./docs/agent_guide.md)
+这条路线旨在减少因局部需求而 fork 整个框架的必要性，而不是承诺永远无需修改框架。当前固定的历史组件、执行环境和工具调度等仍有边界；例如，完全无消息历史的事件溯源 Agent、任意环境后端无缝替换，不应宣传成现成能力。
 
-### EasyLLM / Provider
+## When to Use EasyAgent
 
-`EasyLLM` 是统一的模型访问层。
-框架通过 provider 适配不同协议，例如 `openai`、`openai_responses`、`google_native`、`anthropic_native`。
+适合希望掌握 Agent 运行机制的团队：构建领域工具型产品，尝试不同记忆架构、上下文策略、Agent Loop 或协作方式，并让 CLI、TUI、服务与产品 SDK 共享自己的 Core。[S4Code](https://github.com/mwamw/S4Code) 是一个基于 EasyAgent 的产品案例，不是框架限定的产品形态。
 
-详见：
+如果只是一次模型调用或简单检索，模型 SDK 或现成数据工具可能更直接；如果核心需求是确定性业务流程和持久工作流，工作流运行时可能更合适；如果完整 Harness 已满足要求，直接用其 SDK 也很合理。
 
-- [LLM Provider Guide](./docs/llm_provider_guide.md)
+## Documentation
 
-### Tool
+| 主题 | 指南 |
+| --- | --- |
+| 入门与架构 | [Framework API](docs/framework_api.md) · [Agent Guide](docs/agent_guide.md) · [模块化架构](docs/modular_agent_architecture.md) · [Config](docs/config_reference.md) · [Provider](docs/llm_provider_guide.md) |
+| Harness 设计 | [技术白皮书及 PDF](docs/whitepaper/README.md) · [可执行装配示例](example/example_module_boundaries.py) · [Code Agent Quickstart](docs/code_agent_product_quickstart.md) |
+| 上下文与记忆 | [Context & Compaction](docs/context_and_compaction_guide.md) · [Memory](docs/memory_system_guide.md) · [Storage](docs/storage_guide.md) · [RAG](docs/rag_guide.md) |
+| 提示词与技能 | [Prompt System](docs/prompt_system_guide.md) · [Prompt Composer](docs/prompt_composer_guide.md) · [Skill](docs/skill_system_guide.md) |
+| 工具与安全 | [Tool System](docs/tool_system_guide.md) · [Tool Authoring](docs/tool_authoring_guide.md) · [Builtin Tools](docs/builtin_tools_catalog.md) · [Deferred Tools](docs/deferred_tools_guide.md) · [Permission](docs/permissions_guide.md) · [Hooks](docs/hooks_and_guardrails_guide.md) |
+| 状态与协作 | [Session](docs/session_restore_persistence_guide.md) · [Runtime / Mailbox / Subagent](docs/runtime_collaboration_guide.md) · [Tasks](docs/tasks_guide.md) |
+| 扩展与观测 | [MCP](docs/mcp_guide.md) · [CodeIntel](docs/codeintel_guide.md) · [Worktree](docs/worktree_guide.md) · [Callbacks / Streaming](docs/callbacks_and_streaming_guide.md) · [Observability / Training](docs/observability_and_cache_guide.md) |
 
-Tool 是 Agent 的执行能力。
-EasyAgent 提供 Tool 基类、ToolRegistry、权限判定、确认中断、deferred schema、runtime/turn 可见性，以及大量 builtin tools。
+新项目从 `easyagent` 或 `easyagent.*` 导入。内部的 `agent/`、`core/`、`Tool/`、`runtime/` 等目录不是产品侧稳定导入入口。
 
-详见：
+## Development & Project Status
 
-- [Tool System Guide](./docs/tool_system_guide.md)
-- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
-- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
+在已配置的 Python 环境中运行：
 
-### System Prompt
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest test -q
+```
 
-EasyAgent 使用统一的 `PromptBlock`，由 `placement="system"` 或 `placement="system_reminder"` 决定两种系统提示词的位置。On-demand expansion 和 dynamic tail 继续承载临时能力与业务上下文。
+默认测试不要求付费模型调用；集成与外部服务测试需要显式启用，并自行准备依赖及凭据。
 
-详见：
+当前版本为 **0.8.0**，仍在持续演进。项目重点是打磨执行、上下文、记忆、工具、权限、会话和协作的边界，而不是无限增加功能。生产集成请锁定已验证的版本，关注接口变更、迁移和所使用模块的能力范围。版本声明和本地可安装不等同于已发布到包仓库。
 
-- [Prompt System Guide](./docs/prompt_system_guide.md)
-- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
+## Vision
 
-### Skill
+EasyAgent 希望封装的，不只是重复代码，还有模块如何参与 Agent 运行的系统知识。
 
-Skill 是“能力包”，可以同时提供：
+**让使用默认能力的人不必成为 Harness 专家，让需要改变机制的人不必重建整个 Harness。**
 
-- prompt 片段
-- tool
-- context source
-- 按需激活逻辑
+Build your Agent, not our Agent.
 
-详见：
+## License
 
-- [Skill System Guide](./docs/skill_system_guide.md)
-
-### Context / Memory / History Compaction
-
-Context 模块负责“请求时附加上下文”，Memory 模块负责“长期或工作记忆”，Compaction 负责“当上下文过长时如何压缩历史”。
-
-详见：
-
-- [Memory System Guide](./docs/memory_system_guide.md)
-- [Context And Compaction Guide](./docs/context_and_compaction_guide.md)
-
-### Session
-
-Session 模块负责持久化 agent 快照和消息历史，并提供恢复报告。
-
-详见：
-
-- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
-
-### Runtime / Team / Task / Mailbox
-
-Runtime 负责 subagent、background task、team 协作、mailbox 广播和执行上下文管理。
-
-详见：
-
-- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
-- [Tasks Guide](./docs/tasks_guide.md)
-
-### Permission / Hook / Callback
-
-- Permission：决定某个工具调用是 Ask、Allow 还是 Deny
-- Hook：在关键执行点阻塞、修改、放行 payload
-- Callback：做非阻塞观测、UI 更新、日志采集
-
-详见：
-
-- [Permissions Guide](./docs/permissions_guide.md)
-- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
-- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
-
-### MCP / CodeIntel / RAG / Worktree
-
-这些是更偏产品增强的扩展层：
-
-- MCP：远程工具与资源接入
-- CodeIntel：定义、引用、诊断、符号
-- RAG：知识库与检索增强
-- Worktree：隔离执行环境
-
-详见：
-
-- [MCP Guide](./docs/mcp_guide.md)
-- [CodeIntel Guide](./docs/codeintel_guide.md)
-- [RAG Guide](./docs/rag_guide.md)
-- [Worktree Guide](./docs/worktree_guide.md)
-
-## 8. 模块集成顺序建议
-
-如果你要从零做一个产品，推荐按这个顺序接模块：
-
-1. `EasyLLM`
-2. `BasicAgent`
-3. `Config`
-4. `ToolRegistry` + builtin tools
-5. `PermissionContext` / `PermissionEngine`
-6. `CallbackManager`
-7. `PromptBlock` / `SystemPromptComposer`
-8. `SkillManager`
-9. `SessionStore` / `ConversationStore`
-10. `ObservabilityRecorder`
-11. 视场景继续接 `Runtime` / `MCP` / `CodeIntel` / `Memory` / `RAG`
-
-## 9. 最常见的三条产品路径
-
-### 9.1 通用 Agent
-
-适合问答、工具调用和基本会话。
-
-重点阅读：
-
-- [Agent Guide](./docs/agent_guide.md)
-- [Tool System Guide](./docs/tool_system_guide.md)
-- [Prompt System Guide](./docs/prompt_system_guide.md)
-
-### 9.2 Code Agent
-
-适合本地仓库分析、读写文件、shell、子 agent、worktree。
-
-重点阅读：
-
-- [Code Agent Product Quickstart](./docs/code_agent_product_quickstart.md)
-- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
-- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
-- [Permissions Guide](./docs/permissions_guide.md)
-- [Worktree Guide](./docs/worktree_guide.md)
-- [CodeIntel Guide](./docs/codeintel_guide.md)
-
-### 9.3 Multi-Agent 协作系统
-
-适合 manager + worker、广播、后台子任务、结构化任务推进。
-
-重点阅读：
-
-- [Runtime Collaboration Guide](./docs/runtime_collaboration_guide.md)
-- [Tasks Guide](./docs/tasks_guide.md)
-- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
-
-## 10. 你最可能先问的几个问题
-
-### 怎么自定义系统提示词
-
-看：
-
-- [Prompt System Guide](./docs/prompt_system_guide.md)
-- [Prompt Composer Guide](./docs/prompt_composer_guide.md)
-
-### 怎么自定义工具
-
-看：
-
-- [Tool Authoring Guide](./docs/tool_authoring_guide.md)
-- [Tool System Guide](./docs/tool_system_guide.md)
-
-### deferred tool 到底怎么工作
-
-看：
-
-- [Deferred Tools Guide](./docs/deferred_tools_guide.md)
-
-### 怎么把 memory / session / callback / hook 接到 agent
-
-看：
-
-- [Memory System Guide](./docs/memory_system_guide.md)
-- [Session Restore Persistence Guide](./docs/session_restore_persistence_guide.md)
-- [Callbacks And Streaming Guide](./docs/callbacks_and_streaming_guide.md)
-- [Hooks And Guardrails Guide](./docs/hooks_and_guardrails_guide.md)
-
-### 内置工具都有哪些
-
-看：
-
-- [Builtin Tools Catalog](./docs/builtin_tools_catalog.md)
-
-## 11. FAQ
-
-### 文档为什么拆成这么多文件
-
-因为 EasyAgent 不是单一功能库。
-Agent、Tool、Prompt、Permission、Runtime、Session、MCP、Memory、Cache 都是独立主题；把所有细节都塞进一个 README 会不可维护。
-
-### README 和 `docs/` 的关系是什么
-
-README 是总入口，负责：
-
-- 快速开始
-- 核心概念
-- 阅读路径
-- 各主题索引
-
-`docs/` 负责：
-
-- 参数逐项解释
-- 内部机制说明
-- 模块集成细节
-- 自定义与扩展方式
-
-### 我应该先看哪几份
-
-通常推荐：
-
-1. `README.md`
-2. [Framework API](./docs/framework_api.md)
-3. [Agent Guide](./docs/agent_guide.md)
-4. [Config Reference](./docs/config_reference.md)
-5. 按你的场景继续看 Tool / Prompt / Runtime / Memory / Session
+MIT.

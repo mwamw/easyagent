@@ -1,10 +1,6 @@
-"""
-上下文管理器
+"""Assemble supplied context, control total input budget, and compact history.
 
-当前职责只保留：
-1. 管理外部 context source 的收集与压缩
-2. 构建本次请求使用的额外上下文消息
-3. 暴露 token budget / history compactor 配置
+Retrieval, dynamic injection, and persistence belong to their own modules.
 """
 
 from __future__ import annotations
@@ -16,7 +12,7 @@ from context.builder import ContextBuilder
 from context.compressor.base import BaseCompressor
 from context.compressor.history import BaseHistoryCompactor
 from context.formatter.base import BaseFormatter
-from context.source.base import BaseContextSource
+from context.base import BaseContextManager
 from context.token.budget import TokenBudget
 from context.token.counter import TokenCounter
 from core.request_input import ReplayRequestInput
@@ -49,7 +45,7 @@ def _group_turns(history: list[Any]) -> list[list[Any]]:
     for message in history:
         canonical = coerce_canonical_message(message)
         role = canonical.role if canonical is not None else None
-        if role == "user" and current:
+        if role == "user" and not canonical.metadata.get("is_meta") and current:
             turns.append(current)
             current = [message]
         else:
@@ -67,7 +63,18 @@ def _split_turn_tail(history: list[Any], preserve_tail_turns: int) -> tuple[list
     tail_turns = turns[-preserve_tail_turns:]
     prefix = [_copy_entry(message) for turn in prefix_turns for message in turn]
     tail = [_copy_entry(message) for turn in tail_turns for message in turn]
-    return prefix, tail
+    # Temporary injections must survive until their own lifecycle ends, but must
+    # not be absorbed into a persistent summary where removal cannot reach them.
+    temporary = []
+    persistent = []
+    for message in prefix:
+        canonical = coerce_canonical_message(message)
+        metadata = canonical.metadata if canonical is not None else {}
+        if metadata.get("is_meta") and metadata.get("metaMessageLifecycle") != "permanent":
+            temporary.append(message)
+        else:
+            persistent.append(message)
+    return persistent, [*temporary, *tail]
 def _compactor_recent_turns(history_compactor: Any) -> int:
     return max(1, int(getattr(history_compactor, "recent_turns", 1) or 1))
 
@@ -95,7 +102,7 @@ def _result(
     )
 
 
-class ContextManager:
+class ContextManager(BaseContextManager):
     def _history_compactor_metadata(self) -> dict[str, Any]:
         info = {}
         if hasattr(self.history_compactor, "get_last_run_info"):
@@ -119,11 +126,9 @@ class ContextManager:
     def __init__(
         self,
         builder: Optional[ContextBuilder] = None,
-        max_tokens: int = 8000,
+        max_tokens: int | None = None,
         formatter: Optional[BaseFormatter] = None,
         budget: Optional[TokenBudget] = None,
-        auto_history: bool = False,
-        history_max_turns: int = 50,
     ):
         if budget is None:
             budget = TokenBudget(max_tokens=max_tokens)
@@ -135,15 +140,6 @@ class ContextManager:
 
         if formatter:
             self._builder.set_formatter(formatter)
-
-    def add_source(
-        self,
-        source: BaseContextSource,
-        weight: float = 1.0,
-        compressor: Optional[BaseCompressor] = None,
-    ) -> "ContextManager":
-        self._builder.add_source(source, weight=weight, compressor=compressor)
-        return self
 
     def set_compressor(self, compressor: BaseCompressor) -> "ContextManager":
         self._builder.set_compressor(compressor)

@@ -7,10 +7,10 @@ from typing import Optional,Any
 from abc import abstractmethod
 import numpy as np
 try:
-    from .BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
+    from .BaseMemory import BaseMemoryLayer,MemoryConfig,MemoryItem,ForgetType
     from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 except ImportError:
-    from BaseMemory import BaseMemory,MemoryConfig,MemoryItem,ForgetType
+    from BaseMemory import BaseMemoryLayer,MemoryConfig,MemoryItem,ForgetType
     from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 logger = logging.getLogger(__name__)
 """
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
     - 可以提供总结功能，需提供EasyLLM
     - 提供多类别的清理机制，自动清理机制
 """
-class WorkingMemory(BaseMemory):
+class WorkingMemory(BaseMemoryLayer):
     def __init__(self, config: MemoryConfig,embedding_model:Optional[BaseEmbeddingModel]=None):
         super().__init__(config)
 
@@ -207,8 +207,8 @@ class WorkingMemory(BaseMemory):
             memories_text=[memory.content for memory in active_memories]
             if self.embedding_model:
 
-                query_embedding=self.embedding_model.embed([query])[0]
-                memories_embedding=self.embedding_model.embed(memories_text)
+                query_embedding=self.embedding_model.embed_query(query)
+                memories_embedding=self.embedding_model.embed_documents(memories_text)
                 vector_similarities=self.cosine_similarity(query_embedding,memories_embedding)
             else:
                 from sklearn.feature_extraction.text import TfidfVectorizer

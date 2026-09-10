@@ -225,6 +225,12 @@ class RuntimeEventBus:
             self._sequence_by_invocation.clear()
             self._subscriber_errors.clear()
 
+    def export_state(self):
+        return {"events": [event.to_dict() for event in self.history()]}
+
+    def restore_state(self, state):
+        self.restore_history((state or {}).get("events", []))
+
     def restore_history(self, events: Iterable[RuntimeEvent | dict[str, Any]]) -> None:
         """Replace trace history without notifying live subscribers."""
         restored = [

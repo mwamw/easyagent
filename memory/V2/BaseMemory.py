@@ -37,7 +37,7 @@ class MemoryConfig(BaseModel):
     #批量操作配置
     batch_size:int=50  # 批量 embedding 的大小
 
-class BaseMemory(ABC):
+class BaseMemoryLayer(ABC):
     """记忆基类
     需要提供以下功能:
     - 添加记忆 (单条/批量/异步)

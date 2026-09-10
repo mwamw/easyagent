@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from easyagent import BasicAgent, EasyLLM, SessionStore, ToolRegistry
+from easyagent import BasicAgent, EasyLLM, SQLiteSessionStore, ToolRegistry
 from codeintel import LSPCodeIntelProvider
 from core.Config import Config
 
@@ -36,7 +36,7 @@ def build_llm() -> EasyLLM:
 def main() -> None:
     llm = build_llm()
     registry = ToolRegistry()
-    store = SessionStore(SESSION_DB)
+    store = SQLiteSessionStore(SESSION_DB)
 
     agent = BasicAgent(
         name="phaseh-codeintel-cache",
@@ -85,11 +85,8 @@ def main() -> None:
 
     agent.save_session("phaseh-codeintel-cache", store=store)
 
-    restored = BasicAgent.load_session(
-        "phaseh-codeintel-cache",
-        llm=build_llm(),
-        store=store,
-    )
+    restored = BasicAgent("restored", build_llm(), config=agent.config).with_codeintel(provider=LSPCodeIntelProvider())
+    restored.restore_session("phaseh-codeintel-cache", store=store)
 
     restored_manager = restored.tool_registry.get_runtime_surface("codeintel_manager", "default")
     print("=== Restore Report ===")

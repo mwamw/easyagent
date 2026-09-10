@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 
 from easyagent import BasicAgent, EasyLLM, PermissionBehavior, PermissionContext, PermissionRule, ToolRegistry
-from easyagent.session import SessionStore
+from easyagent.session import SQLiteSessionStore
 from easyagent.tools import register_task_tools
 from easyagent.tasks import InMemoryTaskStore, TaskService
 
@@ -68,11 +68,8 @@ def main() -> None:
 
     # 3. 保存并恢复 session，观察 restore report。
     agent.save_session(session_id, store=store_path)
-    restored = BasicAgent.load_session(
-        session_id,
-        llm=build_llm(),
-        store=SessionStore(store_path),
-    )
+    restored = build_agent(workspace_root)
+    restored.restore_session(session_id, store=SQLiteSessionStore(store_path))
     print("=== Restore Report ===")
     print(restored.get_last_restore_report())
 

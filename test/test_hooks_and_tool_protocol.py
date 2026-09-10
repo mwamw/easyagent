@@ -288,12 +288,8 @@ class HookAndProtocolTests(unittest.TestCase):
             )
             agent.save_session("sess-phasee", store=store_path)
 
-            restored = BasicAgent.load_session(
-                "sess-phasee",
-                llm=DummyLLM(PlainProvider()),
-                store=store_path,
-                hook_manager=HookManager([RestoreReportHook()]),
-            )
+            restored = BasicAgent("restore-agent", DummyLLM(PlainProvider())).with_hooks(HookManager([RestoreReportHook()]))
+            restored.restore_session("sess-phasee", store=store_path)
 
         report = restored.get_last_restore_report()
         self.assertIsNotNone(report)
@@ -302,7 +298,7 @@ class HookAndProtocolTests(unittest.TestCase):
         self.assertTrue(any(item["code"] == "restore_hook_applied" for item in issues))
 
     def test_before_compaction_hook_can_block_compaction(self):
-        context_manager = ContextManager()
+        context_manager = ContextManager(max_tokens=8000)
         hook = CompactionBlockHook()
         agent = BasicAgent(
             name="compaction-agent",
@@ -311,9 +307,9 @@ class HookAndProtocolTests(unittest.TestCase):
         agent.add_user_message("hello" * 5000)
         agent.add_assistant_message("world" * 5000)
 
-        result = agent.invoke("continue")
-
-        self.assertEqual(result, "plain-response")
+        from core.Exception import HookExecutionError
+        with self.assertRaises(HookExecutionError):
+            agent.invoke("continue")
         self.assertEqual(hook.calls, 1)
         self.assertNotIn("history.compacted", [item["type"] for item in agent.get_trace_history()])
 

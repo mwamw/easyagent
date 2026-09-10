@@ -84,13 +84,19 @@ LLM stats 保留统一字段：
 ```python
 {
     "estimatedRequestTokens": 1234,
+    "localEstimatedRequestTokens": 1300,
+    "request_estimate_source": "provider_usage_plus_delta_estimate",
     "canonicalMessages": 8,
     "replayMessages": 8,
     "provider": "openai",
 }
 ```
 
-Provider 返回的实际 usage 进入 LLMInvoke；当前请求估算不伪装成 provider usage。
+Provider 返回的实际 usage 进入 LLMInvoke；Agent 同时独立记录本次主模型调用的
+usage 基线，即使没有安装 Observability 也会生效。当前占用优先使用 API 基线
+加本地增量，无有效基线时才回退完整本地估算；压缩预检和最终预算检查使用
+同一规则。当前请求估算不伪装成 provider 实测 usage，也不累计历史调用量。
+详见 [Context 与压缩](context_and_compaction_guide.md#token-计数优先级)。
 
 ## 6. 训练数据导出
 
@@ -142,4 +148,4 @@ report = exporter.export(
 
 ## 8. Session 行为
 
-Observability 模块的状态可以进入 session snapshot。恢复标准 manager 时会恢复已完成记录；自定义 manager 需要显式传给 `load_session`。未启用 Observability 时，Agent 不创建 trace 数据库，TrainingExporter 会明确报错。
+Observability 模块的状态可以进入 session snapshot。先安装标准或自定义 manager，再调用 `restore_session` 恢复记录；持久化层不创建 manager。未启用 Observability 时，Agent 不创建 trace 数据库，TrainingExporter 会明确报错。

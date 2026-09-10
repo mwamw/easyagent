@@ -38,6 +38,8 @@ class BasicAgent(BaseAgent):
         self.interrupt_controller = InMemoryToolInterruptController()
 
     def _services(self) -> AgentExecutionServices:
+        if self._sessions.busy:
+            raise RuntimeError("Cannot invoke while a session operation is in progress")
         if self._closed:
             raise RuntimeError("Agent is closed and cannot accept new invocations")
         executor = self.executor
@@ -68,6 +70,9 @@ class BasicAgent(BaseAgent):
             interrupt_controller=self.interrupt_controller,
             stop_checker=self.stop_reason_if_requested,
             mailbox_sync=mailbox_sync,
+            session_id=self.session_id,
+            invocation_lock=self._invocation_lock,
+            context_usage=self._context_usage,
         )
 
     def invoke(

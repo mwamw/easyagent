@@ -16,7 +16,7 @@ import context
 from dotenv import load_dotenv
 load_dotenv()
 
-from memory.V2.MemoryManage import MemoryManage
+from easyagent.memory import LayeredMemory as MemoryManage
 from memory.V2.BaseMemory import MemoryConfig
 from memory.V2.WorkingMemory import WorkingMemory
 from memory.V2.EpisodicMemory import EpisodicMemory
@@ -102,9 +102,8 @@ class TestAgentMemoryIntegration:
         
         assert any(t["function"]["name"] == "add_memory_tool" for t in tools), "Tool registry failed to auto-register memory tools!"
         
-        from context.source.memory_source import MemoryContextSource
         from context.manager import ContextManager
-        context_manager = ContextManager(max_tokens=50000, auto_history=True)
+        context_manager = ContextManager(max_tokens=50000)
         self.agent.with_context(context_manager)
         print("测试环境初始化完成！")
 

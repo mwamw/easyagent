@@ -1,3 +1,5 @@
+from memory.repositories import document_repository, vector_index
+from memory.graph_repository import graph_repository
 import logging
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -8,7 +10,7 @@ import numpy as np
 try:
     from .Store.VectorStore import VectorStore
     from .BaseMemory import MemoryType,MemoryItem
-    from .BaseMemory import MemoryConfig,BaseMemory,ForgetType
+    from .BaseMemory import MemoryConfig,BaseMemoryLayer,ForgetType
     from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
     from .Store.GraphStore import GraphStore
     from .Store.GraphStore import Entity,Relation
@@ -16,13 +18,13 @@ try:
 except ImportError:
     from Store.VectorStore import VectorStore
     from BaseMemory import MemoryType,MemoryItem
-    from BaseMemory import MemoryConfig,BaseMemory,ForgetType
+    from BaseMemory import MemoryConfig,BaseMemoryLayer,ForgetType
     from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
     from Store.GraphStore import GraphStore
     from Store.GraphStore import Entity,Relation
     from Extractor.Extractor import Extractor
 
-class SemanticMemory(BaseMemory):
+class SemanticMemory(BaseMemoryLayer):
     def __init__(self,memory_config:MemoryConfig,
         vector_store:VectorStore,
         graph_store:GraphStore,
@@ -30,8 +32,8 @@ class SemanticMemory(BaseMemory):
         embedding_model:BaseEmbeddingModel):
         
         super().__init__(memory_config)
-        self.vector_store = vector_store
-        self.graph_store = graph_store
+        self.vector_store = vector_index(vector_store)
+        self.graph_store = graph_repository(graph_store)
         self.extractor = extractor
         self.embedding_model = embedding_model
     
@@ -53,7 +55,7 @@ class SemanticMemory(BaseMemory):
         try:
             # 向量生成
             memory_content = memory.content
-            embedding = self.embedding_model.embed([memory_content])
+            embedding = self.embedding_model.embed_documents([memory_content])
 
             # 实体、关系提取（使用 extract_for_graph 返回 Entity/Relation 对象）
             extracted_data = self.extractor.extract_for_graph(memory_content)
@@ -233,7 +235,7 @@ class SemanticMemory(BaseMemory):
             user_id =user_id if user_id else "default"
 
             # 1. 向量搜索
-            query_embedding=self.embedding_model.embed([query])[0]
+            query_embedding=self.embedding_model.embed_query(query)
             where={"user_id":user_id,"memory_type":"semantic"}
             vector_results = self.vector_store.search_similar(
                 query_embedding=query_embedding,
@@ -802,7 +804,7 @@ class SemanticMemory(BaseMemory):
         for memory_id in missing_in_vector:
             memory = self.id_to_memory[memory_id]
             try:
-                embedding = self.embedding_model.embed([memory.content])
+                embedding = self.embedding_model.embed_documents([memory.content])
                 metadata = {
                     "memory_id": memory.id,
                     "user_id": memory.user_id,

@@ -6,6 +6,12 @@ import pytest
 
 
 INTEGRATION_FILES = {
+    # Real embedding/LLM suites; deterministic storage/RAG tests run separately.
+    "test_rag_vectorstore.py",
+    "test_rag_pipeline.py",
+    "test_rag_retriever.py",
+    "test_rag_query_transform.py",
+    "test_rag_chunker.py",
     "test_Extractor.py",
     "test_MemoryManage.py",
     "test_Neo4jStore.py",
@@ -73,10 +79,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         item.add_marker(pytest.mark.unit)
 
 
-def pytest_ignore_collect(collection_path, config: pytest.Config) -> bool:
+def pytest_ignore_collect(collection_path, config: pytest.Config) -> bool | None:
     filename = Path(str(collection_path)).name
     if filename in EXTERNAL_FILES:
         return not config.getoption("--run-external")
     if filename in INTEGRATION_FILES:
         return not config.getoption("--run-integration")
-    return False
+    return None

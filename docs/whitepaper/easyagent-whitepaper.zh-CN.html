@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="EasyAgent 技术白皮书：面向 Harness 的模块化 Agent 开发，与主流框架和 Harness 产品的架构比较。">
+<title>EasyAgent：面向 Harness 编程</title>
+<style>
+:root { --ink:#172b44; --muted:#596b80; --teal:#087e80; --line:#d8e2ea; --paper:#fff; }
+* { box-sizing:border-box; }
+body { margin:0; background:#edf1f5; color:var(--ink); font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif; font-size:16px; line-height:1.95; }
+.document { max-width:1040px; margin:36px auto; padding:0 74px 74px; background:var(--paper); box-shadow:0 12px 70px #20344d12; }
+.cover { padding:68px 0 56px; border-bottom:2px solid var(--teal); }
+.eyebrow { color:var(--teal); font-size:13px; letter-spacing:3px; font-weight:700; }
+h1 { font-size:46px; line-height:1.35; letter-spacing:-1px; max-width:720px; margin:35px 0 22px; }
+.subtitle { color:var(--muted); font-size:21px; line-height:1.8; max-width:680px; }
+.cover .promise { margin:42px 0 34px; padding:25px 28px; border-left:4px solid var(--teal); background:#edf7f5; font-size:22px; line-height:1.7; }
+.cover-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:22px; margin:42px 0; }
+.cover-grid div { border-top:1px solid var(--line); padding-top:18px; }
+.cover-grid strong { display:block; font-size:19px; }
+.cover-grid span { display:block; color:var(--muted); font-size:14px; line-height:1.8; margin-top:6px; }
+.date { color:var(--muted); font-size:13px; margin-top:55px; }
+nav { padding:40px 0 30px; border-bottom:1px solid var(--line); }
+nav h2 { margin:0 0 20px; }
+nav ul { margin:0; list-style:none; padding:0; }
+nav > ul { columns:2; column-gap:36px; }
+nav > ul > li { break-inside:avoid; margin-bottom:12px; font-weight:600; }
+nav ul ul { font-size:13px; font-weight:400; padding-left:12px; }
+nav ul ul li { margin:3px 0; }
+h2 { font-size:29px; line-height:1.5; margin:58px 0 24px; padding-bottom:13px; border-bottom:1px solid var(--line); }
+h3 { font-size:21px; line-height:1.6; margin:32px 0 15px; }
+p { margin:15px 0; text-align:justify; overflow-wrap:break-word; }
+strong { font-weight:700; }
+a { color:var(--teal); text-decoration:none; border-bottom:1px solid #b9d9d5; }
+a:hover { background:#edf7f5; }
+blockquote { background:#edf7f5; border-left:4px solid var(--teal); margin:25px 0; padding:12px 22px; }
+blockquote p { text-align:left; }
+figure, p:has(> img) { margin:32px 0 12px; }
+figure img, p > img { width:100%; height:auto; display:block; }
+figcaption { display:none; }
+figure + p, p:has(> em:only-child) { color:var(--muted); font-size:13px; line-height:1.8; }
+table { width:100%; border-collapse:collapse; font-size:13px; line-height:1.85; margin:25px 0; table-layout:fixed; }
+thead { border-top:2px solid var(--teal); border-bottom:1px solid #b9c9d5; background:#edf4f5; }
+th { text-align:left; font-weight:700; }
+th,td { padding:11px 12px; vertical-align:top; overflow-wrap:anywhere; }
+td { border-bottom:1px solid #e1e8ef; }
+tbody tr:nth-child(even) { background:#f7f9fb; }
+table th:first-child, table td:first-child { width:23%; }
+caption { caption-side:top; text-align:left; color:var(--muted); font-size:13px; padding-bottom:10px; }
+table:has(th:nth-child(4)) th:first-child,table:has(th:nth-child(4)) td:first-child { width:17%; }
+table:has(th:nth-child(4)) th:nth-child(2),table:has(th:nth-child(4)) td:nth-child(2) { background:#eaf6f4; }
+table:has(th:nth-child(4)) th:nth-child(2) { color:#066b6e; }
+code { font-family:'DejaVu Sans Mono',monospace; font-size:.85em; background:#edf1f5; border-radius:3px; padding:2px 4px; }
+pre { background:#f2f5f9; border:1px solid #dbe3ec; padding:18px; line-height:1.65; overflow:auto; font-size:12px; }
+pre code { background:none; padding:0; }
+ul,ol { padding-left:25px; }
+li { margin:6px 0; }
+.footer { margin-top:55px; padding-top:20px; border-top:2px solid var(--teal); font-size:12px; color:var(--muted); }
+@media screen and (max-width:760px) { .document{margin:0;padding:0 22px 35px;box-shadow:none} .cover{padding-top:38px} h1{font-size:34px} h2{font-size:25px} .cover-grid{grid-template-columns:1fr} nav>ul{columns:1} table{font-size:12px} th,td{padding:8px 6px} }
+@media screen and (max-width:760px) { table:has(th:nth-child(4)){display:block;overflow-x:auto;table-layout:auto} table:has(th:nth-child(4)) th,table:has(th:nth-child(4)) td{min-width:140px} }
+@page { size:A4; margin:18mm 17mm 18mm; @bottom-left {content:'EasyAgent  /  面向 Harness 编程';font-family:'Noto Sans CJK SC';font-size:8pt;color:#66778a;} @bottom-right {content:counter(page);font-family:sans-serif;font-size:8pt;color:#66778a;} }
+@page:first { @bottom-left{content:none} @bottom-right{content:none} }
+@media print {
+  body { background:white; font-size:10pt; line-height:1.85; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .document { max-width:none; margin:0; padding:0; box-shadow:none; }
+  .cover { min-height:252mm; padding:23mm 0 0; border-bottom:0; break-after:page; }
+  .eyebrow{font-size:9pt} h1{font-size:34pt;margin-top:25mm} .subtitle{font-size:15pt}
+  .cover .promise{font-size:16pt;margin-top:18mm;padding:7mm} .cover-grid{margin-top:18mm;gap:6mm}
+  .cover-grid strong{font-size:13pt} .cover-grid span{font-size:9pt} .date{font-size:9pt;margin-top:18mm}
+  nav{padding:0;border:0;break-after:page;font-size:9pt;line-height:1.6} nav>ul{columns:1} nav>ul>li{margin-bottom:5pt} nav ul ul{font-size:8.3pt;columns:2;column-gap:5mm}
+  h2{break-before:auto;font-size:20pt;margin:9mm 0 6mm;padding-bottom:3mm} nav h2,main>h2:first-child{margin-top:0}
+  main>h2:last-of-type{break-before:page;margin-top:0}
+  h3{font-size:13pt;margin:7mm 0 3mm} h2,h3{break-after:avoid}
+  p{margin:3mm 0;orphans:3;widows:3} li{margin:1mm 0}
+  table{font-size:8.5pt;line-height:1.75;margin:5mm 0;break-inside:avoid} th,td{padding:2.5mm 2mm} thead{display:table-header-group} tr{break-inside:avoid}
+  table:has(th:nth-child(4)){font-size:8.1pt;line-height:1.65} table:has(th:nth-child(4)) th,table:has(th:nth-child(4)) td{padding:2mm 1.8mm}
+  caption{font-size:9pt;padding-bottom:3mm} p:has(+table){break-after:avoid}
+  figure,p:has(> img){break-inside:avoid;margin:6mm 0 3mm;break-after:avoid} figure+p,p:has(> img)+p{break-before:avoid}
+  pre{font-size:7.7pt;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;break-inside:avoid;padding:4mm}
+  blockquote{break-inside:avoid;padding:2mm 5mm;margin:5mm 0}
+  figure+p,p:has(> em:only-child){font-size:8.5pt} a{border-bottom:0}
+  main>ol:last-of-type{font-size:9pt;line-height:1.6} main>ol:last-of-type li{margin:0.5mm 0}
+  .footer{font-size:8pt;break-inside:avoid;margin-top:6mm;padding-top:3mm}
+}
+</style>
+</head>
+<body><div class="document">
+<header class="cover">
+<div class="eyebrow">EASYAGENT / TECHNICAL WHITE PAPER</div>
+<h1>EasyAgent：面向 Harness 编程</h1>
+<div class="subtitle">让领域 Agent 开发者复用运行机制，而不必重建整个运行系统</div>
+<div class="promise">默认实现帮助开发者开始，<br>模块契约支持开发者走出默认实现。</div>
+<div class="cover-grid">
+<div><strong>面向运行机制</strong><span>直接表达执行、上下文、记忆与会话，而非先转换成编排概念。</span></div>
+<div><strong>局部实现差异</strong><span>通过对应模块契约定制，不必先掌握整个 Harness 的内部实现。</span></div>
+<div><strong>保留产品主导权</strong><span>框架提供能力，产品决定装配和策略，界面共同消费产品 Core。</span></div>
+</div>
+<div class="date">2026-09-07 · 技术白皮书 v0.3 · 框架机制与扩展实践版<br>架构与产品定位初稿 · 不含量化实验结论</div>
+</header>
+<nav aria-label="目录"><h2>阅读导航</h2><ul>
+<li><a href="#section-01">摘要</a></li>
+<li><a href="#section-02">1. 从“使用 Agent”到“构建自己的 Harness”</a>
+<ul>
+<li><a href="#section-03">1.1 领域化的深度，决定开发方式</a></li>
+<li><a href="#section-04">1.2 本文所说的 Harness</a></li>
+</ul></li>
+<li><a href="#section-05">2. 两条常见路线留下的工程成本</a>
+<ul>
+<li><a href="#section-06">2.1 使用应用框架：自由之外，谁负责运行语义？</a></li>
+<li><a href="#section-07">2.2 二次开发完整 Harness：开箱即用之后，如何改变机制？</a></li>
+<li><a href="#section-08">2.3 需要填补的是抽象缺口，而不是制造对立</a></li>
+</ul></li>
+<li><a href="#section-09">3. EasyAgent 的核心思想：面向 Harness 编程</a>
+<ul>
+<li><a href="#section-10">3.1 功能模块化：既提供实现，也提供替换位置</a></li>
+<li><a href="#section-11">3.2 同一职责契约，允许不同实现机制</a></li>
+<li><a href="#section-12">3.3 框架接管接入过程：实现功能，不手工连接循环</a></li>
+<li><a href="#section-13">3.4 封装系统知识，不隐藏必要责任</a></li>
+<li><a href="#section-14">3.5 从默认能力到深度定制，逐层增加控制</a></li>
+</ul></li>
+<li><a href="#section-15">4. 从理念到实现：通过模块接口构建领域 Harness</a>
+<ul>
+<li><a href="#section-16">4.1 统一的扩展路径，不是统一的万能接口</a></li>
+<li><a href="#section-17">4.2 自定义工具：不用编写模型—工具循环</a></li>
+<li><a href="#section-18">4.3 自定义提示词：只写产品规则，不写请求编译</a></li>
+<li><a href="#section-19">4.4 自定义记忆：实现机制，不实现它与循环的连接</a></li>
+<li><a href="#section-20">4.5 自定义压缩器：只定义领域保留策略</a></li>
+<li><a href="#section-21">4.6 自定义会话存储：保存记录，不重建 Agent</a></li>
+<li><a href="#section-22">4.7 将模块装配成产品，而不是再次编写 Harness</a></li>
+</ul></li>
+<li><a href="#section-23">5. 与主流 Agent 框架对比</a>
+<ul>
+<li><a href="#section-24">5.1 十二个维度：比较的是编程边界</a></li>
+<li><a href="#section-25">5.2 应用、编排与通用 Agent 开发框架</a></li>
+<li><a href="#section-26">5.3 记忆、上下文和持久化：具体接口横向对照</a></li>
+<li><a href="#section-27">5.4 面对这些框架，EasyAgent 补什么</a></li>
+</ul></li>
+<li><a href="#section-28">6. 与完整 Harness 产品对比</a>
+<ul>
+<li><a href="#section-29">6.1 从“驱动已有 Agent”到“构建自己的机制”</a></li>
+<li><a href="#section-30">6.2 S4Code：框架与产品分离的具体落点</a></li>
+<li><a href="#section-31">6.3 对照成熟产品：运行接口与构建接口</a></li>
+</ul></li>
+<li><a href="#section-32">7. 与模块化 Harness SDK 的正面对照</a>
+<ul>
+<li><a href="#section-33">7.1 最接近的比较对象</a></li>
+<li><a href="#section-34">7.2 与 Deep Agents、Pydantic AI Harness 对照</a></li>
+<li><a href="#section-35">7.3 与 OpenHands SDK、Cline SDK 对照</a></li>
+</ul></li>
+<li><a href="#section-36">8. 优势如何落到领域需求上</a>
+<ul>
+<li><a href="#section-37">8.1 从分层记忆换到证据型记忆</a></li>
+<li><a href="#section-38">8.2 从聊天摘要换到领域保留策略</a></li>
+<li><a href="#section-39">8.3 从本地对话扩展到自己的产品服务</a></li>
+<li><a href="#section-40">8.4 知识门槛降低，来自稳定的责任边界</a></li>
+<li><a href="#section-41">8.5 相同定制需求，比较实际修改入口</a></li>
+</ul></li>
+<li><a href="#section-42">9. 当前能力、设计边界与选型</a>
+<ul>
+<li><a href="#section-43">9.1 不把设计图当作完成清单</a></li>
+<li><a href="#section-44">9.2 什么时候选择 EasyAgent</a></li>
+</ul></li>
+<li><a href="#section-45">10. 结语：把构建 Harness 变成可掌握的开发工作</a></li>
+<li><a href="#section-46">参考资料</a></li>
+</ul></nav>
+<main><!-- role: opening / executive summary -->
+<h2 id="section-01">摘要</h2>
+<p>构建一个领域 Agent，起点往往只是模型、提示词和工具；构建一个能够持续演进的 Agent 产品，则需要处理上下文、工具生命周期、权限、动态信息、记忆、会话和交互。开发者既可以使用通用 Agent 框架组织应用，也可以基于完整 Harness 二次开发。然而，当领域需求涉及运行机制本身时，前者可能留下大量底层协作工作，后者可能要求开发者理解并调整既有产品的内部假设。</p>
+<p>EasyAgent 选择面向 Harness 编程：将 Agent 执行、上下文、记忆、工具、权限和会话等运行机制直接作为开发者接口的组织中心。框架提供默认实现，也允许通过对应契约替换关键模块。开发者不需要先掌握整个 Harness 的实现细节，就能使用现成能力；需要定制时，则聚焦自己负责的模块及其行为约定。</p>
+<p>本文说明这一设计的动机、框架结构和模块接入机制，以工具、提示词、记忆、压缩和会话存储的扩展示例，展示用户负责什么、框架接管什么，并对照主流应用框架、完整 Harness 产品及模块化 Harness SDK。EasyAgent 的价值主张不是功能数量最多，而是让领域差异尽可能停留在相关模块中，让通用运行机制可以被重复使用。</p>
+<blockquote>
+<p><strong>核心主张：默认实现帮助开发者开始，模块契约支持开发者走出默认实现。</strong></p>
+</blockquote>
+<p>本版本是一份架构与产品定位白皮书，不包含性能实验、开发效率测量或任务成功率排名。EasyAgent 的实现说明以当前 0.8.0 开发工作树为依据；第三方项目以 2026-09-07 查阅的官方资料为依据。文中的选型判断是架构分析，不是对所有版本和场景的绝对结论。</p>
+<p><strong>快速阅读：</strong> 看框架怎样工作，读第 3 章；看自己需要写哪些代码，读第 4 章。比较选型时，先读第 5.1 节的十二维总览，再读第 5.3、6.3、7.2、7.3 节的接口对照和第 8.5 节的修改入口。</p>
+<h2 id="section-02">1. 从“使用 Agent”到“构建自己的 Harness”</h2>
+<!-- role: opening / problem definition -->
+<h3 id="section-03">1.1 领域化的深度，决定开发方式</h3>
+<p>若领域化只需修改提示词、添加知识库和注册工具，直接采用已有框架或成熟 Agent 产品通常是合理的选择。EasyAgent 更关注另一类需求：领域差异已经进入 Agent 的运行机制，并将随产品发展持续变化。</p>
+<p>例如，一个科研 Agent 不仅需要“懂科研”的提示词。它可能需要按实验组织记忆，让模型主动查找旧结果；长时间等待外部计算任务；在压缩上下文时保留实验条件和证据引用；在恢复会话时识别任务的实际状态。这些需求分别触及记忆、执行、上下文和会话，而不是同一个“提示词配置项”。</p>
+<p>运维 Agent 面临不同的约束：诊断操作和变更操作有不同权限，操作目标可能是远端环境，审批记录需要与执行状态关联。数据分析 Agent 则可能需要管理大型结果文件、数据集引用和计算资源。共享的并不是同一套产品流程，而是围绕模型运行的一组机制。</p>
+<h3 id="section-04">1.2 本文所说的 Harness</h3>
+<p>本文将 Harness 定义为模型周围的执行与状态管理系统：它将用户输入和已有状态组织成模型请求，将模型动作转换为受控工具执行，再把结果送回后续推理，同时处理取消、权限、上下文变化和会话生命周期。</p>
+<p>Agent Loop 是其中的协调过程，但 Harness 不止一个循环。一个简短的模型—工具循环可以演示能力，真正的产品还需要明确：工具执行失败是否进入模型上下文，等待审批是否结束当前运行，取消后哪些操作仍可能完成，以及会话恢复能恢复什么、不能恢复什么。</p>
+<p>“框架”“SDK”“Harness”并非互斥标签。框架可以内置 Harness，产品可以提供 SDK，SDK 也可以公开可替换的运行模块。本文比较的是开发者实际获得的抽象与扩展边界，而不是项目名称。</p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDQwIDc4MCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsbGVkYnk9InRpdGxlIGRlc2MiPgogIDx0aXRsZSBpZD0idGl0bGUiPuS4ieenjeW8gOWPkeWFpeWPozwvdGl0bGU+CiAgPGRlc2MgaWQ9ImRlc2MiPuW6lOeUqOe8luaOkuOAgUhhcm5lc3Mg5p6E5bu65LiO5a6M5pW0IEFnZW50IOmbhuaIkOaYr+S4jeWQjOWFpeWPo++8jOS4jeaYr+iDveWKm+mrmOS9juaOkuW6j+OAgkVhc3lBZ2VudCDku6Xov5DooYzmnLrliLbnmoTnu4TlkIjlkozmm7/mjaLkvZzkuLrlhaXlj6PjgII8L2Rlc2M+CiAgPGRlZnM+CiAgICA8bWFya2VyIGlkPSJhcnJvdyIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI4IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+PHBhdGggZD0iTTAgMCAxMCA1IDAgMTBaIiBmaWxsPSIjNjI3MTg4Ii8+PC9tYXJrZXI+CiAgICA8c3R5bGU+dGV4dHtmb250LWZhbWlseTonTm90byBTYW5zIENKSyBTQycsJ01pY3Jvc29mdCBZYUhlaScsc2Fucy1zZXJpZjtmaWxsOiMxNzJiNDR9IC5oe2ZvbnQtc2l6ZTozMHB4O2ZvbnQtd2VpZ2h0OjcwMH0uYntmb250LXNpemU6MjJweH0uc3tmb250LXNpemU6MThweDtmaWxsOiM1MjY0N2J9Lmt7Zm9udC1zaXplOjE2cHg7bGV0dGVyLXNwYWNpbmc6MnB4O2ZvbnQtd2VpZ2h0OjcwMH0ubGluZXtzdHJva2U6IzYyNzE4ODtzdHJva2Utd2lkdGg6MjtmaWxsOm5vbmU7bWFya2VyLWVuZDp1cmwoI2Fycm93KX08L3N0eWxlPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iMTQ0MCIgaGVpZ2h0PSI3ODAiIHJ4PSIyNCIgZmlsbD0iI2Y1ZjdmYSIvPgogIDx0ZXh0IHg9IjUyIiB5PSI1OCIgY2xhc3M9ImsiIGZpbGw9IiMwODdlODAiPkVBU1lBR0VOVCAvIERFU0lHTiBQRVJTUEVDVElWRTwvdGV4dD4KICA8dGV4dCB4PSI1MiIgeT0iMTA3IiBmb250LXNpemU9IjM2IiBmb250LXdlaWdodD0iNzAwIj7lkIzmoLfmnoTlu7ogQWdlbnTvvIzlvIDlj5HogIXpnaLlr7nnmoTlhaXlj6PkuI3lkIw8L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9IjE0NiIgY2xhc3M9InMiPuavlOi+g+eahOaYr+e8lueoi+WFs+azqOeCue+8jOiAjOS4jeaYr+WKn+iDveWujOWkh+W6puaIlui/kOihjOaAp+iDveOAgjwvdGV4dD4KICA8cmVjdCB4PSI1MiIgeT0iMTkwIiB3aWR0aD0iNDI0IiBoZWlnaHQ9IjUwNCIgcng9IjE4IiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjZDVkZWVhIi8+CiAgPHJlY3QgeD0iNTA4IiB5PSIxOTAiIHdpZHRoPSI0MjQiIGhlaWdodD0iNTA0IiByeD0iMTgiIGZpbGw9IiNlYWY2ZjQiIHN0cm9rZT0iIzE2ODg4MyIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgPHJlY3QgeD0iOTY0IiB5PSIxOTAiIHdpZHRoPSI0MjQiIGhlaWdodD0iNTA0IiByeD0iMTgiIGZpbGw9IndoaXRlIiBzdHJva2U9IiNkNWRlZWEiLz4KICA8dGV4dCB4PSI4MiIgeT0iMjM2IiBjbGFzcz0iayI+MDEgLyBBUFBMSUNBVElPTjwvdGV4dD4KICA8dGV4dCB4PSI4MiIgeT0iMjg1IiBjbGFzcz0iaCI+57uE57uH5bqU55So5omn6KGMPC90ZXh0PgogIDx0ZXh0IHg9IjgyIiB5PSIzMjIiIGNsYXNzPSJzIj7nlKjnirbmgIHjgIHmraXpqqTlkozlhbPns7vmj4/ov7Dlt6XkvZw8L3RleHQ+CiAgPHJlY3QgeD0iODgiIHk9IjM2MCIgd2lkdGg9IjE0OCIgaGVpZ2h0PSI1OCIgcng9IjkiIGZpbGw9IiNlZGYyZmEiLz4KICA8cmVjdCB4PSIyOTIiIHk9IjM2MCIgd2lkdGg9IjE0OCIgaGVpZ2h0PSI1OCIgcng9IjkiIGZpbGw9IiNlZGYyZmEiLz4KICA8dGV4dCB4PSIxNjIiIHk9IjM5NyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPuS7u+WKoSBBPC90ZXh0PgogIDx0ZXh0IHg9IjM2NiIgeT0iMzk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5Lu75YqhIEI8L3RleHQ+CiAgPHBhdGggZD0iTTI0MCAzODlIMjgwIiBjbGFzcz0ibGluZSIvPgogIDxwYXRoIGQ9Ik0zNjYgNDI0VjQ1MEgyNjRWNDcyIiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjE2NiIgeT0iNDg0IiB3aWR0aD0iMTk2IiBoZWlnaHQ9IjU4IiByeD0iOSIgZmlsbD0iI2VkZjJmYSIvPgogIDx0ZXh0IHg9IjI2NCIgeT0iNTIxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+QWdlbnQg5bel5L2c5Y2V5YWDPC90ZXh0PgogIDx0ZXh0IHg9IjgyIiB5PSI1OTciIGNsYXNzPSJiIj7kuLvopoHpl67popg8L3RleHQ+CiAgPHRleHQgeD0iODIiIHk9IjYzMSIgY2xhc3M9InMiPuS4i+S4gOatpeWBmuS7gOS5iO+8jOeKtuaAgeWmguS9lea1gei9rO+8nzwvdGV4dD4KICA8dGV4dCB4PSI4MiIgeT0iNjYyIiBjbGFzcz0icyI+6YCC5ZCI5rWB56iL5LiO5Y2P5L2c55qE57uE57uHPC90ZXh0PgogIDx0ZXh0IHg9IjUzOCIgeT0iMjM2IiBjbGFzcz0iayI+MDIgLyBIQVJORVNTPC90ZXh0PgogIDx0ZXh0IHg9IjUzOCIgeT0iMjg1IiBjbGFzcz0iaCI+5p6E5bu66L+Q6KGM5py65Yi2PC90ZXh0PgogIDx0ZXh0IHg9IjUzOCIgeT0iMzIyIiBjbGFzcz0icyI+RWFzeUFnZW50IOeahOS4u+imgee8lueoi+WFpeWPozwvdGV4dD4KICA8ZyBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjOWRjZmM4Ij4KICAgIDxyZWN0IHg9IjU0NCIgeT0iMzYwIiB3aWR0aD0iMTY0IiBoZWlnaHQ9IjU4IiByeD0iOSIvPjxyZWN0IHg9IjczMiIgeT0iMzYwIiB3aWR0aD0iMTY0IiBoZWlnaHQ9IjU4IiByeD0iOSIvPgogICAgPHJlY3QgeD0iNTQ0IiB5PSI0MzQiIHdpZHRoPSIxNjQiIGhlaWdodD0iNTgiIHJ4PSI5Ii8+PHJlY3QgeD0iNzMyIiB5PSI0MzQiIHdpZHRoPSIxNjQiIGhlaWdodD0iNTgiIHJ4PSI5Ii8+CiAgPC9nPgogIDx0ZXh0IHg9IjYyNiIgeT0iMzk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5omn6KGMIC8g5bel5YW3PC90ZXh0Pjx0ZXh0IHg9IjgxNCIgeT0iMzk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5LiK5LiL5paHPC90ZXh0PgogIDx0ZXh0IHg9IjYyNiIgeT0iNDcxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+6K6w5b+GPC90ZXh0Pjx0ZXh0IHg9IjgxNCIgeT0iNDcxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5Lya6K+dIC8g5p2D6ZmQPC90ZXh0PgogIDx0ZXh0IHg9IjcyMCIgeT0iNTM1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+6buY6K6k5a6e546wICsg5a+55bqU5qih5Z2X5aWR57qmPC90ZXh0PgogIDx0ZXh0IHg9IjUzOCIgeT0iNTk3IiBjbGFzcz0iYiI+5Li76KaB6Zeu6aKYPC90ZXh0PgogIDx0ZXh0IHg9IjUzOCIgeT0iNjMxIiBjbGFzcz0icyI+6L+Z5LiqIEFnZW50IOaAjuagt+i/kOihjOWSjOaJqeWxle+8nzwvdGV4dD4KICA8dGV4dCB4PSI1MzgiIHk9IjY2MiIgY2xhc3M9InMiPuabv+aNoumihuWfn+W3ruW8gu+8jOWkjeeUqOWFseWQjOacuuWItjwvdGV4dD4KICA8dGV4dCB4PSI5OTQiIHk9IjIzNiIgY2xhc3M9ImsiPjAzIC8gUFJPRFVDVDwvdGV4dD4KICA8dGV4dCB4PSI5OTQiIHk9IjI4NSIgY2xhc3M9ImgiPumbhuaIkOWujOaVtCBBZ2VudDwvdGV4dD4KICA8dGV4dCB4PSI5OTQiIHk9IjMyMiIgY2xhc3M9InMiPumFjee9ruOAgeiwg+eUqOW5tuaJqeWxleeOsOaIkOi/kOihjOaXtjwvdGV4dD4KICA8cmVjdCB4PSIxMDAwIiB5PSIzNjAiIHdpZHRoPSIzNTIiIGhlaWdodD0iODQiIHJ4PSIxMCIgZmlsbD0iI2YwZWRmOCIvPgogIDx0ZXh0IHg9IjExNzYiIHk9IjM5NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPuW3suijhemFjeeahCBIYXJuZXNzPC90ZXh0PgogIDx0ZXh0IHg9IjExNzYiIHk9IjQyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuW3peWFtyDCtyDkuIrkuIvmlocgwrcg5Lya6K+dPC90ZXh0PgogIDxwYXRoIGQ9Ik0xMTc2IDQ1MVY0NzQiIGNsYXNzPSJsaW5lIi8+CiAgPHJlY3QgeD0iMTA1OCIgeT0iNDg2IiB3aWR0aD0iMjM2IiBoZWlnaHQ9IjU4IiByeD0iOSIgZmlsbD0iI2YwZWRmOCIvPgogIDx0ZXh0IHg9IjExNzYiIHk9IjUyMyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPlNESyAvIOacjeWKoSAvIOeVjOmdojwvdGV4dD4KICA8dGV4dCB4PSI5OTQiIHk9IjU5NyIgY2xhc3M9ImIiPuS4u+imgemXrumimDwvdGV4dD4KICA8dGV4dCB4PSI5OTQiIHk9IjYzMSIgY2xhc3M9InMiPuaAjuagt+Wwhui/meWllyBBZ2VudCDnlKjliLDkuqflk4HkuK3vvJ88L3RleHQ+CiAgPHRleHQgeD0iOTk0IiB5PSI2NjIiIGNsYXNzPSJzIj7pgILlkIjnm7TmjqXlpI3nlKjlt7LmnInkuqflk4Hog73lips8L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9Ijc0MSIgY2xhc3M9InMiPuS4gOS4qumhueebruWPr+S7peimhuebluWkmuS4quWFpeWPo+OAguaooeWdl+WMliBIYXJuZXNzIFNESyDlt7LlpITkuo7kuK3pl7TkvY3nva7vvIzlupTkvZzkuLogRWFzeUFnZW50IOeahOebtOaOpeavlOi+g+WvueixoeOAgjwvdGV4dD4KPC9zdmc+Cg==" alt="三种开发入口：组织应用、构建运行机制、集成完整 Agent" /></p>
+<p><em>图 1：三种开发入口解决不同问题。图中没有性能排序；各类项目可以跨越多个入口。EasyAgent 将“构建和替换运行机制”作为主要编程入口。</em></p>
+<h2 id="section-05">2. 两条常见路线留下的工程成本</h2>
+<!-- role: challenge / orchestration-first route -->
+<h3 id="section-06">2.1 使用应用框架：自由之外，谁负责运行语义？</h3>
+<p>以编排为中心的框架擅长描述状态、执行步骤和控制关系。LangGraph 官方定位是面向长期运行、有状态 Agent 的低层编排运行时，允许确定性步骤与模型驱动步骤混合；CrewAI 以 Crews 和 Flows 组织自主协作与执行流程。因此，不能把它们描述为“只能执行预先写死的工作流”。<a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph 官方概览</a>、<a href="https://docs.crewai.com/en/introduction">CrewAI 官方介绍</a></p>
+<p>问题出现在抽象与需求不直接对应时。开发者想替换记忆机制，却先要确定该机制怎样更新全局状态；想改变工具结果处理，却同时要考虑节点转移、结果合并和中断恢复。这样的映射本身并非错误，但可能成为额外维护层。</p>
+<p>另一项成本来自能力之间的连接。模型、工具、存储和事件即使都已有接口，开发者仍可能要决定它们在失败、取消、审批和恢复时怎样共同工作。组件可复用，不等于组件之间的运行语义已经被复用。某个工具有结果、会话却未保存，和会话保存了“已执行”、外部操作却未完成，是不同的故障。</p>
+<p>EasyAgent 的回应是把这些问题直接落到 Harness 的模块边界：执行器协调请求与动作，Context 接受准备好的信息并控制预算，Memory 表达记忆机制，Session 保存和恢复显式状态。产品无需为了这些需求再设计一套与工作流状态相互映射的内部 Harness。</p>
+<h3 id="section-07">2.2 二次开发完整 Harness：开箱即用之后，如何改变机制？</h3>
+<p>成熟 Harness 的优势是已经装配好了完整运行能力。开发者能够直接使用工具、上下文管理和交互机制，通常比从零建设更快进入业务开发。困难并不是“没有功能”，而是领域需求超出既有扩展点时，修改需要深入到哪里。</p>
+<p>配置记忆目录，不一定等同于替换记忆机制；修改压缩提示词，不一定等同于替换压缩算法；在工具前后运行 Hook，不一定等同于接管调度方式。产品 SDK、插件和 Hook 可以覆盖大量实际需求，但“扩展现有行为”和“替换行为机制”仍是不同层次的控制权。</p>
+<p>当扩展点不能覆盖需求，开源提供了修改源码的机会，却不自动提供低成本的修改路径。领域团队可能需要理解多个内部组件、维护自己的分支，并在上游更新时重新检查兼容性。这个成本取决于具体产品的模块边界，不能由“是否开源”一项判断。</p>
+<p>EasyAgent 的回应是将关键运行机制作为正式契约提供。默认 Agent 是这些能力的使用者和装配入口，而不是所有扩展都必须迁就的唯一产品实现。支持主流方案的意义，也不是让产品继承一切默认策略，而是给用户可用的起点和清晰的替换位置。</p>
+<h3 id="section-08">2.3 需要填补的是抽象缺口，而不是制造对立</h3>
+<p>应用编排和 Harness 定制可以共存。企业流程负责接单、准备环境、调用领域 Agent、验收及发布；领域 Agent 内部则由模型选择行动，并由 Harness 执行约束。EasyAgent 可以服务于后者，不必同时取代前者。</p>
+<p>同样，调用完整 Agent 的程序接口与构建自己的 Agent，都是合理需求。若现成产品已经满足要求，继续复用它通常比重建更合适。EasyAgent 更适合那些把运行机制本身视为产品能力、并希望长期掌握其演进方向的团队。</p>
+<h2 id="section-09">3. EasyAgent 的核心思想：面向 Harness 编程</h2>
+<!-- role: method / central idea -->
+<h3 id="section-10">3.1 功能模块化：既提供实现，也提供替换位置</h3>
+<p>EasyAgent 将模型访问、提示词、工具、上下文、记忆、权限和会话等职责组织成模块，并提供默认的工程实现。开发者可以使用默认执行器、提示词组装器、上下文管理器和已有存储，也可以只替换有领域差异的部分。按需安装功能，不意味着要从空白的抽象类集合开始建设整个系统。</p>
+<p>默认实现承担了请求准备、工具协议转换、结果处理、事件发布和状态管理等共同工作；模块契约则限定用户自定义实现需要交付什么。框架“提供某项实现”与 Agent “默认启用所有功能”并不相同，例如 Memory、工具和压缩策略仍由应用按需安装。<a href="../framework_api.md">公开 API 指南</a></p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDQwIDEwNjAiIHJvbGU9ImltZyIgYXJpYS1sYWJlbGxlZGJ5PSJ0aXRsZSBkZXNjIj4KICA8dGl0bGUgaWQ9InRpdGxlIj5FYXN5QWdlbnQg5qGG5p6277ya6buY6K6k5a6e546w44CB6Ieq5a6a5LmJ5a6e546w5LiO6IGM6LSj5aWR57qmPC90aXRsZT4KICA8ZGVzYyBpZD0iZGVzYyI+6buY6K6k5a6e546w5ZKM55So5oi35a6e546w6YG15b6q5ZCE5qih5Z2X6Ieq5bex55qE5aWR57qm77yM57uPIEJhc2ljQWdlbnQg55qE5YWs5byA5a6J6KOF5YWl5Y+j57uR5a6a44CC6buY6K6k5omn6KGM566h57q/5Y2P6LCD6K+35rGC44CB5qih5Z6L44CB5bel5YW344CB5LqL5Lu25LiO5Y6G5Y+y77yb5Lya6K+d5pON5L2c5pi+5byP5Y+R6LW377yM5omp5bGV6IO95Yqb5oyJ6ZyA5a6J6KOF44CCPC9kZXNjPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYSIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI4IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wIDAgMTAgNSAwIDEwWiIgZmlsbD0iIzYyNzg4YSIvPjwvbWFya2VyPgogICAgPHN0eWxlPnRleHR7Zm9udC1mYW1pbHk6J05vdG8gU2FucyBDSksgU0MnLCdNaWNyb3NvZnQgWWFIZWknLHNhbnMtc2VyaWY7ZmlsbDojMTcyYjQ0fS5oe2ZvbnQtc2l6ZToyN3B4O2ZvbnQtd2VpZ2h0OjcwMH0uYntmb250LXNpemU6MjNweH0uc3tmb250LXNpemU6MjBweDtmaWxsOiM1MzY3N2V9Lmt7Zm9udC1zaXplOjE2cHg7Zm9udC13ZWlnaHQ6NzAwO2xldHRlci1zcGFjaW5nOjJweH0ubGluZXtmaWxsOm5vbmU7c3Ryb2tlOiM2Mjc4OGE7c3Ryb2tlLXdpZHRoOjI7bWFya2VyLWVuZDp1cmwoI2EpfTwvc3R5bGU+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSIxNDQwIiBoZWlnaHQ9IjEwNjAiIHJ4PSIyNCIgZmlsbD0iI2Y1ZjdmYSIvPgogIDx0ZXh0IHg9IjUyIiB5PSI1OCIgY2xhc3M9ImsiPkVBU1lBR0VOVCAvIEZSQU1FV09SSyBBUkNISVRFQ1RVUkU8L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9IjEwOCIgZm9udC1zaXplPSIzNiIgZm9udC13ZWlnaHQ9IjcwMCI+6buY6K6k5a6e546w5Y+v55u05o6l55So77yM6Ieq5a6a5LmJ5a6e546w5rK/5ZCM5LiA5aWR57qm5o6l5YWlPC90ZXh0PgogIDxyZWN0IHg9IjUyIiB5PSIxNTQiIHdpZHRoPSI2NDUiIGhlaWdodD0iMTM2IiByeD0iMTYiIGZpbGw9IndoaXRlIiBzdHJva2U9IiNjYmQ4ZTQiLz4KICA8dGV4dCB4PSI4MCIgeT0iMTk4IiBjbGFzcz0iaCI+5qGG5p625o+Q5L6b55qE6buY6K6k5a6e546wPC90ZXh0PgogIDx0ZXh0IHg9IjgwIiB5PSIyMzciIGNsYXNzPSJzIj5TeXN0ZW1Qcm9tcHRDb21wb3NlciDCtyBDb250ZXh0TWFuYWdlcjwvdGV4dD4KICA8dGV4dCB4PSI4MCIgeT0iMjY4IiBjbGFzcz0icyI+5YaF572u5bel5YW3IMK3IExheWVyZWRNZW1vcnkgwrcgU1FMaXRlU2Vzc2lvblN0b3JlPC90ZXh0PgogIDxyZWN0IHg9Ijc0MyIgeT0iMTU0IiB3aWR0aD0iNjQ1IiBoZWlnaHQ9IjEzNiIgcng9IjE2IiBmaWxsPSIjZWFmNmY0IiBzdHJva2U9IiMxNjg4ODMiLz4KICA8dGV4dCB4PSI3NzEiIHk9IjE5OCIgY2xhc3M9ImgiPueUqOaIt+aPkOS+m+eahOmihuWfn+WunueOsDwvdGV4dD4KICA8dGV4dCB4PSI3NzEiIHk9IjIzNyIgY2xhc3M9InMiPuS6p+WTgeinhOWImSDCtyDpoobln5/lt6Xlhbcgwrcg6K+B5o2u5Z6L6K6w5b+GPC90ZXh0PgogIDx0ZXh0IHg9Ijc3MSIgeT0iMjY4IiBjbGFzcz0icyI+6aKG5Z+f5Y6L57yp562W55WlIMK3IOiHquW3seeahOS8muivneaVsOaNruW6kzwvdGV4dD4KICA8cGF0aCBkPSJNMzc0IDI5OFYzMjVINzIwVjM0NiIgY2xhc3M9ImxpbmUiLz4KICA8cGF0aCBkPSJNMTA2NiAyOThWMzI1SDcyMFYzNDYiIGNsYXNzPSJsaW5lIi8+CiAgPHRleHQgeD0iNTIiIHk9IjMzOCIgY2xhc3M9InMiPuWQhOiBjOi0o+iHquW3seeahOWFrOW8gOWlkee6pjwvdGV4dD4KICA8cGF0aCBkPSJNMTc2IDM1MkgxMjY0IiBmaWxsPSJub25lIiBzdHJva2U9IiM2Mjc4OGEiIHN0cm9rZS13aWR0aD0iMiIvPgogIDxwYXRoIGQ9Ik0xNzYgMzUyVjM2NSIgY2xhc3M9ImxpbmUiLz48cGF0aCBkPSJNNDQ4IDM1MlYzNjUiIGNsYXNzPSJsaW5lIi8+CiAgPHBhdGggZD0iTTcyMCAzNDZWMzY1IiBjbGFzcz0ibGluZSIvPjxwYXRoIGQ9Ik05OTIgMzUyVjM2NSIgY2xhc3M9ImxpbmUiLz4KICA8cGF0aCBkPSJNMTI2NCAzNTJWMzY1IiBjbGFzcz0ibGluZSIvPgogIDxnIGZpbGw9IndoaXRlIiBzdHJva2U9IiNhNWNmYzkiPgogICAgPHJlY3QgeD0iNTIiIHk9IjM2OSIgd2lkdGg9IjI0OCIgaGVpZ2h0PSI5NSIgcng9IjEyIi8+CiAgICA8cmVjdCB4PSIzMjQiIHk9IjM2OSIgd2lkdGg9IjI0OCIgaGVpZ2h0PSI5NSIgcng9IjEyIi8+CiAgICA8cmVjdCB4PSI1OTYiIHk9IjM2OSIgd2lkdGg9IjI0OCIgaGVpZ2h0PSI5NSIgcng9IjEyIi8+CiAgICA8cmVjdCB4PSI4NjgiIHk9IjM2OSIgd2lkdGg9IjI0OCIgaGVpZ2h0PSI5NSIgcng9IjEyIi8+CiAgICA8cmVjdCB4PSIxMTQwIiB5PSIzNjkiIHdpZHRoPSIyNDgiIGhlaWdodD0iOTUiIHJ4PSIxMiIvPgogIDwvZz4KICA8dGV4dCB4PSIxNzYiIHk9IjQwNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPlByb21wdCBDb21wb3NlcjwvdGV4dD48dGV4dCB4PSIxNzYiIHk9IjQzOSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPmJ1aWxkKGNvbnRleHQpPC90ZXh0PgogIDx0ZXh0IHg9IjQ0OCIgeT0iNDA3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+VG9vbDwvdGV4dD48dGV4dCB4PSI0NDgiIHk9IjQzOSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPnJ1bigpIC8gYXJ1bigpPC90ZXh0PgogIDx0ZXh0IHg9IjcyMCIgeT0iNDA3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+QmFzZU1lbW9yeTwvdGV4dD48dGV4dCB4PSI3MjAiIHk9IjQzOSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuivtOaYjiAvIOW3peWFtyAvIEhvb2s8L3RleHQ+CiAgPHRleHQgeD0iOTkyIiB5PSI0MDciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJiIj5Db250ZXh0IC8gQ29tcGFjdG9yPC90ZXh0Pjx0ZXh0IHg9Ijk5MiIgeT0iNDM5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+57uE6KOFIC8g6aKE566XIC8g5Y6L57ypPC90ZXh0PgogIDx0ZXh0IHg9IjEyNjQiIHk9IjQwNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPkJhc2VTZXNzaW9uU3RvcmU8L3RleHQ+PHRleHQgeD0iMTI2NCIgeT0iNDM5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+54q25oCB6K6w5b2V6K+75YaZPC90ZXh0PgogIDxwYXRoIGQ9Ik0xNzYgNDcxVjQ5NiIgY2xhc3M9ImxpbmUiLz48cGF0aCBkPSJNNDQ4IDQ3MVY0OTYiIGNsYXNzPSJsaW5lIi8+CiAgPHBhdGggZD0iTTcyMCA0NzFWNDk2IiBjbGFzcz0ibGluZSIvPjxwYXRoIGQ9Ik05OTIgNDcxVjQ5NiIgY2xhc3M9ImxpbmUiLz4KICA8cGF0aCBkPSJNMTI2NCA0NzFWNDk2IiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjUyIiB5PSI1MDkiIHdpZHRoPSIxMzM2IiBoZWlnaHQ9IjExMiIgcng9IjE2IiBmaWxsPSIjMTcyYjQ0Ii8+CiAgPHRleHQgeD0iODAiIHk9IjU1MyIgZm9udC1zaXplPSIyOCIgZm9udC13ZWlnaHQ9IjcwMCIgc3R5bGU9ImZpbGw6d2hpdGUiPkJhc2ljQWdlbnTvvJrlhazlvIDoo4XphY3lhaXlj6M8L3RleHQ+CiAgPHRleHQgeD0iODAiIHk9IjU5MiIgZm9udC1zaXplPSIyMiIgc3R5bGU9ImZpbGw6I2NmZGVlOSI+d2l0aF9wcm9tcHQgwrcgYWRkX3Rvb2wgLyB3aXRoX3Rvb2wgwrcgd2l0aF9tZW1vcnkgwrcgd2l0aF9jb250ZXh0IMK3IHdpdGhfc2Vzc2lvbjwvdGV4dD4KICA8cGF0aCBkPSJNNzIwIDYyOVY2NjIiIGNsYXNzPSJsaW5lIi8+CiAgPHJlY3QgeD0iNTIiIHk9IjY3NSIgd2lkdGg9IjEzMzYiIGhlaWdodD0iMTU0IiByeD0iMTYiIGZpbGw9IiNlYWY2ZjQiIHN0cm9rZT0iIzE2ODg4MyIgc3Ryb2tlLXdpZHRoPSIyIi8+CiAgPHRleHQgeD0iODAiIHk9IjcxOCIgY2xhc3M9ImgiPuahhuaetuaJv+aOpeWuieijheS4juWNj+iwgzwvdGV4dD4KICA8dGV4dCB4PSI4MCIgeT0iNzU4IiBjbGFzcz0iYiI+5rOo5YaM5LiO5pyN5Yqh57uR5a6aIMK3IOivt+axguWHhuWkhyDCtyDmqKHlnovkuI7lt6XlhbfosIPnlKggwrcg57uT5p6cIC8g5Y6G5Y+yIC8g5LqL5Lu2PC90ZXh0PgogIDx0ZXh0IHg9IjgwIiB5PSI3OTgiIGNsYXNzPSJzIj5EZWZhdWx0QWdlbnRFeGVjdXRvciDotJ/otKPpu5jorqTov5DooYzvvJvmlbTkvZPmm7/mjaLmiafooYzlmajml7bvvIznlKjmiLfmjqXnrqHnm7jlupTljY/osIPotKPku7vjgII8L3RleHQ+CiAgPHJlY3QgeD0iNTIiIHk9Ijg1OCIgd2lkdGg9IjY0NSIgaGVpZ2h0PSIxMTYiIHJ4PSIxNCIgZmlsbD0id2hpdGUiIHN0cm9rZT0iI2NiZDhlNCIvPgogIDx0ZXh0IHg9IjgwIiB5PSI5MDAiIGNsYXNzPSJiIj7lhbHlkIzorr7mlr08L3RleHQ+CiAgPHRleHQgeD0iODAiIHk9IjkzMyIgY2xhc3M9InMiPkVhc3lMTE0gwrcgSGlzdG9yeSDCtyBNZXRhTWVzc2FnZSDCtyBIb29rcyAvIEV2ZW50czwvdGV4dD4KICA8dGV4dCB4PSI4MCIgeT0iOTYzIiBjbGFzcz0icyI+UGVybWlzc2lvbiDCtyDlvZPliY3ov5DooYzkuI7kvJror53kvZznlKjln588L3RleHQ+CiAgPHJlY3QgeD0iNzQzIiB5PSI4NTgiIHdpZHRoPSI2NDUiIGhlaWdodD0iMTE2IiByeD0iMTQiIGZpbGw9IndoaXRlIiBzdHJva2U9IiNjYmQ4ZTQiIHN0cm9rZS1kYXNoYXJyYXk9IjcgNSIvPgogIDx0ZXh0IHg9Ijc3MSIgeT0iOTAwIiBjbGFzcz0iYiI+5oyJ6ZyA5omp5bGV6IO95YqbPC90ZXh0PgogIDx0ZXh0IHg9Ijc3MSIgeT0iOTMzIiBjbGFzcz0icyI+U2tpbGwgwrcgTUNQIMK3IOWtkCBBZ2VudCDCtyBUYXNrIMK3IENvZGVJbnRlbCAvIFdvcmt0cmVlPC90ZXh0PgogIDx0ZXh0IHg9Ijc3MSIgeT0iOTYzIiBjbGFzcz0icyI+6YCa6L+H5bel5YW344CB5raI5oGv5LiO55u45YWz6L+Q6KGM5o6l5Y+j5Y2P5L2cPC90ZXh0PgogIDx0ZXh0IHg9IjUyIiB5PSIxMDI1IiBjbGFzcz0icyI+5Zu+56S65Li66IGM6LSj5YWz57O777yM5LiN5piv5q+P6L2u6LCD55So5riF5Y2V44CC5Yqf6IO95oyJ6ZyA5a6J6KOF77yb5L+d5a2YL+aBouWkjeaYvuW8j+WPkei1t++8m09TIOe6p+malOemu+mcgOWklumDqOiuvuaWveOAgjwvdGV4dD4KPC9zdmc+Cg==" alt="EasyAgent 框架内部的模块、契约、实现与执行协调" /></p>
+<p><em>图 2：EasyAgent 框架图。默认实现与自定义实现遵循各职责的公开契约；BasicAgent 负责显式装配，默认执行管线在相应位置使用已安装能力。图中的辅助能力复用相关模块，不表示所有模块使用同一个万能接口，也不表示全部默认启用。</em></p>
+<h3 id="section-11">3.2 同一职责契约，允许不同实现机制</h3>
+<p>功能模块化的关键不是把代码分到几个目录，而是让默认实现和用户实现具有明确的替代关系。产品要改变记忆参与方式，就实现 Memory 契约；要改变历史保留策略，就替换压缩器；要改变会话存储，就实现 Session Store。需求与代码责任直接对应，不必先转译成另一套流程节点。</p>
+<p>不同职责不应被强行统一为同一种内部模型。记忆可以通过工具让模型主动搜索，也可以选择用 Hook 注入信息；上下文负责组装准备好的内容，不替各个来源决定检索方式；会话存储保存框架提供的状态记录，不决定如何构造产品 Agent。各模块按自身职责设计接口，而不是都继承一个规定所有行为的 <code>BaseModule</code>。</p>
+<p>这使机制替换与后端替换成为不同操作。替换向量数据库，不等于改变记忆如何参与推理；实现一个不同的记忆机制，也不应该迫使用户重写模型调用和上下文管线。</p>
+<h3 id="section-12">3.3 框架接管接入过程：实现功能，不手工连接循环</h3>
+<p>模块作者提供契约要求的行为，应用通过公开入口安装模块，框架负责将其接入相应能力。以 <code>with_memory()</code> 为例：安装时绑定模块可使用的服务，读取并注册该模块提供的工具和 Hook，检查冲突；运行时，提示词组装器按需取得模块说明，工具执行路径处理其工具，Hook 在公开生命周期位置被调用。用户不需要在执行器内部增加一个“如果是我的记忆系统”的分支。<a href="../memory_system_guide.md">记忆模块指南</a></p>
+<p>并非所有模块都在同一时机被调用。提示词在请求准备时构建，工具在模型提出相应动作后执行，压缩器在配置的上下文管线需要压缩时参与；会话保存和恢复由产品显式发起，不意味着框架每轮自动保存。公开契约把这些时机说清楚，用户无需掌握实现这些时机的内部调用链。</p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDQwIDEwMjAiIHJvbGU9ImltZyIgYXJpYS1sYWJlbGxlZGJ5PSJ0aXRsZSBkZXNjIj4KICA8dGl0bGUgaWQ9InRpdGxlIj7mqKHlnZflpoLkvZXmjqXlhaXpu5jorqQgQWdlbnQg5omn6KGM566h57q/PC90aXRsZT4KICA8ZGVzYyBpZD0iZGVzYyI+5byA5Y+R6ICF5a6e546w5aWR57qm5bm25a6J6KOF5qih5Z2X77yb5qGG5p625Zyo5a6J6KOF5pe25rOo5YaM57uR5a6a77yM5Zyo6K+35rGC5pe25L6d5qyh5aSE55CG5Y+v6YCJIEhvb2vjgIHmj5DnpLror43jgIHkuIrkuIvmlofjgIHmqKHlnovkuI7lt6XlhbfjgILlt6Xlhbfnu5Pmnpzlm57liLDljoblj7LjgILkvJror53kv53lrZjmgaLlpI3nlLHkuqflk4HmmL7lvI/osIPnlKjvvIzkuI3mmK/mr4/ova7oh6rliqjkv53lrZjjgII8L2Rlc2M+CiAgPGRlZnM+CiAgICA8bWFya2VyIGlkPSJhIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjgiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0byI+PHBhdGggZD0iTTAgMCAxMCA1IDAgMTBaIiBmaWxsPSIjNjI3ODhhIi8+PC9tYXJrZXI+CiAgICA8c3R5bGU+dGV4dHtmb250LWZhbWlseTonTm90byBTYW5zIENKSyBTQycsJ01pY3Jvc29mdCBZYUhlaScsc2Fucy1zZXJpZjtmaWxsOiMxNzJiNDR9Lmh7Zm9udC1zaXplOjI3cHg7Zm9udC13ZWlnaHQ6NzAwfS5ie2ZvbnQtc2l6ZToyM3B4fS5ze2ZvbnQtc2l6ZToyMHB4O2ZpbGw6IzUzNjc3ZX0ua3tmb250LXNpemU6MTZweDtmb250LXdlaWdodDo3MDA7bGV0dGVyLXNwYWNpbmc6MnB4fS5saW5le2ZpbGw6bm9uZTtzdHJva2U6IzYyNzg4YTtzdHJva2Utd2lkdGg6MjttYXJrZXItZW5kOnVybCgjYSl9PC9zdHlsZT4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9IjE0NDAiIGhlaWdodD0iMTAyMCIgcng9IjI0IiBmaWxsPSIjZjVmN2ZhIi8+CiAgPHRleHQgeD0iNTIiIHk9IjU4IiBjbGFzcz0iayI+RUFTWUFHRU5UIC8gSU5TVEFMTEFUSU9OIEFORCBFWEVDVVRJT048L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9IjEwNyIgZm9udC1zaXplPSIzNiIgZm9udC13ZWlnaHQ9IjcwMCI+55So5oi35Lqk5LuY5qih5Z2X6KGM5Li677yM5qGG5p625a6J5o6S5a6D5oCO5qC35Y+C5LiO6L+Q6KGMPC90ZXh0PgogIDx0ZXh0IHg9IjUyIiB5PSIxNTkiIGNsYXNzPSJoIj7lronoo4Xml7Y8L3RleHQ+CiAgPHJlY3QgeD0iNTIiIHk9IjE4NCIgd2lkdGg9IjM3OCIgaGVpZ2h0PSIxMjMiIHJ4PSIxNCIgZmlsbD0id2hpdGUiIHN0cm9rZT0iI2NiZDhlNCIvPgogIDx0ZXh0IHg9Ijc5IiB5PSIyMjQiIGNsYXNzPSJiIj7nlKjmiLflrp7njrDlhazlvIDlpZHnuqY8L3RleHQ+CiAgPHRleHQgeD0iNzkiIHk9IjI2MiIgY2xhc3M9InMiPuWmgiBNZW1vcnnvvJror7TmmI7jgIHlt6XlhbfjgIFIb29rPC90ZXh0PgogIDx0ZXh0IHg9Ijc5IiB5PSIyODkiIGNsYXNzPSJzIj7lj6rmj5Dkvpvor6XmnLrliLbpnIDopoHnmoTpg6jliIY8L3RleHQ+CiAgPHBhdGggZD0iTTQzNyAyNDRINDc5IiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjQ5MiIgeT0iMTg0IiB3aWR0aD0iMzcwIiBoZWlnaHQ9IjEyMyIgcng9IjE0IiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjY2JkOGU0Ii8+CiAgPHRleHQgeD0iNTE5IiB5PSIyMjQiIGNsYXNzPSJiIj7lupTnlKjmmL7lvI/lronoo4U8L3RleHQ+CiAgPHRleHQgeD0iNTE5IiB5PSIyNjIiIGNsYXNzPSJzIj5hZ2VudC53aXRoX21lbW9yeShtZW1vcnkpPC90ZXh0PgogIDx0ZXh0IHg9IjUxOSIgeT0iMjg5IiBjbGFzcz0icyI+5YW25LuW5qih5Z2X5L2/55So5ZCE6Ieq5a6J6KOF5YWl5Y+jPC90ZXh0PgogIDxwYXRoIGQ9Ik04NjkgMjQ0SDkxMSIgY2xhc3M9ImxpbmUiLz4KICA8cmVjdCB4PSI5MjQiIHk9IjE4NCIgd2lkdGg9IjQ2NCIgaGVpZ2h0PSIxMjMiIHJ4PSIxNCIgZmlsbD0iI2VhZjZmNCIgc3Ryb2tlPSIjMTY4ODgzIi8+CiAgPHRleHQgeD0iOTUxIiB5PSIyMjQiIGNsYXNzPSJiIj7moYbmnrbnu5HlrprkuI7ms6jlhow8L3RleHQ+CiAgPHRleHQgeD0iOTUxIiB5PSIyNjIiIGNsYXNzPSJzIj7nu5HlrprmnI3liqEgwrcg5qOA5p+l5Yay56qBIMK3IOazqOWGjOW3peWFtyAvIEhvb2s8L3RleHQ+CiAgPHRleHQgeD0iOTUxIiB5PSIyODkiIGNsYXNzPSJzIj7ml6DpnIDlvoDmiafooYzlmajlhoXpg6jmt7vliqDkuJPnlKjliIbmlK88L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9IjM3MSIgY2xhc3M9ImgiPui/kOihjOaXtu+8muavj+asoeaooeWei+ivt+axguWHhuWkh+S4juWTjeW6lOWkhOeQhjwvdGV4dD4KICA8dGV4dCB4PSI1MiIgeT0iNDA4IiBjbGFzcz0icyI+6L6T5YWl5LiO5bey5pyJ5Y6G5Y+y55Sx5qGG5p6257uE57uH77yb5Lul5LiL5piv6buY6K6k566h57q/55qE6IGM6LSj56S65oSP77yM6ICM6Z2e6KaB5rGC55So5oi357yW5YaZ55qE5bel5L2c5rWB44CCPC90ZXh0PgogIDxnIHN0cm9rZT0iI2E4YzljNyIgZmlsbD0id2hpdGUiPgogICAgPHJlY3QgeD0iNTIiIHk9IjQ2MCIgd2lkdGg9IjIzNiIgaGVpZ2h0PSIxNTEiIHJ4PSIxMyIgc3Ryb2tlLWRhc2hhcnJheT0iNyA1Ii8+CiAgICA8cmVjdCB4PSIzMjgiIHk9IjQ2MCIgd2lkdGg9IjIzNiIgaGVpZ2h0PSIxNTEiIHJ4PSIxMyIvPgogICAgPHJlY3QgeD0iNjA0IiB5PSI0NjAiIHdpZHRoPSIyMzYiIGhlaWdodD0iMTUxIiByeD0iMTMiLz4KICAgIDxyZWN0IHg9Ijg4MCIgeT0iNDYwIiB3aWR0aD0iMjM2IiBoZWlnaHQ9IjE1MSIgcng9IjEzIi8+CiAgICA8cmVjdCB4PSIxMTU2IiB5PSI0NjAiIHdpZHRoPSIyMzIiIGhlaWdodD0iMTUxIiByeD0iMTMiLz4KICA8L2c+CiAgPHRleHQgeD0iMTcwIiB5PSI1MDIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJiIj7lj6/pgIkgSG9vazwvdGV4dD48dGV4dCB4PSIxNzAiIHk9IjU0NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuWFrOW8gOeUn+WRveWRqOacnzwvdGV4dD48dGV4dCB4PSIxNzAiIHk9IjU3NyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPk1ldGFNZXNzYWdlIOazqOWFpTwvdGV4dD4KICA8dGV4dCB4PSI0NDYiIHk9IjUwMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPlByb21wdDwvdGV4dD48dGV4dCB4PSI0NDYiIHk9IjU0NSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuS6p+WTgeinhOWImTwvdGV4dD48dGV4dCB4PSI0NDYiIHk9IjU3NyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuWQiOW5tuaooeWdl+ivtOaYjjwvdGV4dD4KICA8dGV4dCB4PSI3MjIiIHk9IjUwMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPkNvbnRleHQ8L3RleHQ+PHRleHQgeD0iNzIyIiB5PSI1NDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJzIj7nu4Too4Ugwrcg5oC76aKE566XPC90ZXh0Pjx0ZXh0IHg9IjcyMiIgeT0iNTc3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+6ZyA6KaB5pe26LCD55So5Y6L57yp5ZmoPC90ZXh0PgogIDx0ZXh0IHg9Ijk5OCIgeT0iNTAyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+TW9kZWw8L3RleHQ+PHRleHQgeD0iOTk4IiB5PSI1NDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJzIj7mqKHlnovosIPnlKg8L3RleHQ+PHRleHQgeD0iOTk4IiB5PSI1NzciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJzIj7lk43lupTkuI7liqjkvZw8L3RleHQ+CiAgPHRleHQgeD0iMTI3MiIgeT0iNTAyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+VG9vbDwvdGV4dD48dGV4dCB4PSIxMjcyIiB5PSI1NDUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJzIj7pgJrov4fmo4Dmn6XlkI7miafooYw8L3RleHQ+PHRleHQgeD0iMTI3MiIgeT0iNTc3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+6L+U5Zue57uT5p6cPC90ZXh0PgogIDxwYXRoIGQ9Ik0yOTYgNTMzSDMxNiIgY2xhc3M9ImxpbmUiLz48cGF0aCBkPSJNNTcyIDUzM0g1OTIiIGNsYXNzPSJsaW5lIi8+PHBhdGggZD0iTTg0OCA1MzNIODY4IiBjbGFzcz0ibGluZSIvPgogIDxwYXRoIGQ9Ik0xMTI0IDUzM0gxMTQ0IiBjbGFzcz0ibGluZSIvPgogIDx0ZXh0IHg9IjExMzgiIHk9IjQ0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9InMiPuacieW3peWFt+WKqOS9nOaXtjwvdGV4dD4KICA8cGF0aCBkPSJNMTI3MiA2MTlWNjc1SDE3MFY2MjMiIGNsYXNzPSJsaW5lIi8+CiAgPHJlY3QgeD0iMzk4IiB5PSI2NTAiIHdpZHRoPSI1NTAiIGhlaWdodD0iNDgiIHJ4PSIxMCIgZmlsbD0iI2Y1ZjdmYSIvPgogIDx0ZXh0IHg9IjY3MyIgeT0iNjgxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0icyI+5bel5YW357uT5p6cIOKGkiDlvZPliY3ljoblj7Ig4oaSIOS4i+S4gOasoeivt+axgjwvdGV4dD4KICA8dGV4dCB4PSI1MiIgeT0iNzQwIiBjbGFzcz0icyI+5peg6ZyA5bel5YW35pe257uT5p2f55u45bqU5ZON5bqU77yb5aSx6LSl44CB562J5b6F5a6h5om55ZKM5Y+W5raI5L6d5pei5pyJ5omn6KGM5LiO5Lqk5LqS6KeE5YiZ5aSE55CG44CCPC90ZXh0PgogIDxyZWN0IHg9IjUyIiB5PSI3OTIiIHdpZHRoPSIxMzM2IiBoZWlnaHQ9IjE1MCIgcng9IjE2IiBmaWxsPSIjZThlZWY5IiBzdHJva2U9IiNiZGNkZTAiLz4KICA8dGV4dCB4PSI4MCIgeT0iODM2IiBjbGFzcz0iaCI+54us56uL55qE5pi+5byP6L6555WM77ya5Lya6K+d5L+d5a2Y5LiO5oGi5aSNPC90ZXh0PgogIDx0ZXh0IHg9IjgwIiB5PSI4NzkiIGNsYXNzPSJiIj7kuqflk4HosIPnlKggc2F2ZV9zZXNzaW9uIC8gcmVzdG9yZV9zZXNzaW9uIOKGkiBTZXNzaW9uUGVyc2lzdGVuY2Ug4oaSIFNlc3Npb24gU3RvcmU8L3RleHQ+CiAgPHRleHQgeD0iODAiIHk9IjkxNyIgY2xhc3M9InMiPuS/neWtmOW3suWjsOaYjueahOeKtuaAge+8jOaBouWkjeWIsOW3suijhemFjeWunuS+i++8m+S4jeS7o+ihqOavj+i9ruiHquWKqOS/neWtmO+8jOS5n+S4jeiHquWKqOaBouWkjeWklumDqOi/m+eoi+OAgjwvdGV4dD4KICA8dGV4dCB4PSI1MiIgeT0iOTg2IiBjbGFzcz0icyI+5pmu6YCa5bel5YW36L+U5Zue5LiN6YeN5aSN5rOo5YWl44CC5byC5q2lIEhvb2sg5ZKM5byC5q2lIEkvTyDpnIDkvb/nlKjnm7jlupTlvILmraXlpZHnuqbvvJvmoYbmnrbkuI3njJzmtYvpoobln5/lrp7njrDnmoTooYzkuLrjgII8L3RleHQ+Cjwvc3ZnPgo=" alt="模块从安装到参与 Agent 请求与工具执行的公共路径" /></p>
+<p><em>图 3：安装与运行分开。虚线表示可选能力；正常工具结果进入历史并供后续请求使用，不需要重复注入。会话操作处于显式的产品生命周期边界。图示为默认执行管线的职责流程，不是工作流图 API，也不是用户需要手写的调用链。</em></p>
+<h3 id="section-13">3.4 封装系统知识，不隐藏必要责任</h3>
+<p>使用默认实现的人主要理解配置和装配；实现某个模块的人主要理解该模块的输入、输出和生命周期；确实要改变整个执行策略的人，才需要接管更广的协调责任。<strong>用户不必理解其他模块怎样实现，也不必亲自把自己的实现连接到每一种 Agent 调用方式。</strong></p>
+<p>抽象并不替用户决定领域逻辑。工具作者仍要说明副作用，自定义存储仍要处理数据一致性，异步 I/O 仍需相应异步方法。知道 <code>abefore_context</code> 是公开调用时机，与研究同步、异步、流式执行器如何实现这套时序，是不同的知识负担。框架隐藏无关细节，但不能隐瞒这些行为约定。</p>
+<h3 id="section-14">3.5 从默认能力到深度定制，逐层增加控制</h3>
+<p>第一层是直接使用：安装 <code>LayeredMemory</code>、配置 <code>ContextManager</code> 或选择已有 Session Store。第二层是替换局部实现：提供自己的 Prompt Composer、Tool、Memory、压缩器或存储后端。第三层是替换执行器：只有循环策略本身发生变化时，才承担请求、工具、事件和状态之间的协调。</p>
+<p>EasyAgent 因而既不是要求每个人从零编写 Harness，也不是只允许围绕一个固定 Agent 调整参数。它的结构优势是机制可选、变化有局部落点、基础设施可共享、产品装配可自主控制。当前尚未覆盖的统一执行环境、细粒度调度等边界仍以第 9 章为准，不将架构图视为所有功能已经完成的清单。</p>
+<h2 id="section-15">4. 从理念到实现：通过模块接口构建领域 Harness</h2>
+<!-- role: method / developer contract -->
+<h3 id="section-16">4.1 统一的扩展路径，不是统一的万能接口</h3>
+<p>一次常见扩展可以概括为：明确领域差异，找到对应公开契约，实现需要的方法，再通过 Agent 的公开入口安装。之后仍使用普通的 <code>invoke</code>、<code>ainvoke</code> 或流式入口，默认执行管线负责在正确位置调用已安装模块。用户不需要为每个模块复制一套工具循环。</p>
+<p>接口分工表：用户实现的是模块行为，框架负责的是该行为在默认运行方式中的接入。</p>
+<table>
+<thead>
+<tr class="header">
+<th>模块</th>
+<th>用户实现或提供</th>
+<th>框架承接的共同工作</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Tool</td>
+<td>参数模型、动作逻辑和结果</td>
+<td>工具描述导出、校验、执行路径、结果与事件</td>
+</tr>
+<tr class="even">
+<td>Prompt Composer</td>
+<td>产品规则和 Prompt Blocks</td>
+<td>请求时调用、模块说明合并和请求编译</td>
+</tr>
+<tr class="odd">
+<td>Memory</td>
+<td>机制说明、工具、可选 Hook</td>
+<td>服务绑定、工具/Hook 注册及运行时调用</td>
+</tr>
+<tr class="even">
+<td>History Compactor</td>
+<td>对给定历史片段的压缩策略</td>
+<td>预算预检、调用压缩器、组装候选历史与最终检查</td>
+</tr>
+<tr class="odd">
+<td>Session Store</td>
+<td>状态记录的保存与读取等操作</td>
+<td>收集约定状态、维护会话操作、恢复到已装配实例</td>
+</tr>
+</tbody>
+</table>
+<p>以下示例围绕“证据型研究 Agent”展开，重点展示扩展契约，不是完整科研产品。仓库、摘要函数和数据库由应用提供，代码不伪造这些领域实现。示例可按顺序组合；安装方式以公开 API 表达，不调用框架私有方法。</p>
+<h3 id="section-17">4.2 自定义工具：不用编写模型—工具循环</h3>
+<p><strong>需求与接口。</strong> 用户希望模型按证据 ID 查阅记录，只需定义参数并实现 <code>Tool.run()</code>。下面假定 <code>repository.lookup(id)</code> 返回含 <code>text</code> 等字段的字典，或在记录不存在时返回 <code>None</code>。</p>
+<pre class="python"><code>from pydantic import BaseModel, Field
+from easyagent.tools import Tool, ToolResult
+
+class EvidenceQuery(BaseModel):
+    evidence_id: str = Field(min_length=1, description=&quot;Stable evidence ID&quot;)
+
+class LookupEvidence(Tool):
+    def __init__(self, repository):
+        self.repository = repository
+        super().__init__(
+            name=&quot;lookup_evidence&quot;, description=&quot;Read a known evidence record.&quot;,
+            parameters=EvidenceQuery, read_only=True,
+        )
+
+    def run(self, parameters):
+        record = self.repository.lookup(parameters[&quot;evidence_id&quot;])
+        if record is None:
+            return ToolResult.error(&quot;Evidence not found&quot;, error_type=&quot;not_found&quot;)
+        return ToolResult.success(record[&quot;text&quot;], structured_data=record)
+
+# 安装：agent.add_tool(LookupEvidence(repository))</code></pre>
+<p><strong>用户写什么。</strong> 参数含义、仓库查询、结果内容和错误语义属于工具作者。已有文件、Shell 或 MCP 工具可以直接使用；只在领域动作不同的时候编写自己的 Tool。</p>
+<p><strong>框架接管什么。</strong> 沿正常 Agent 执行路径，框架提供工具描述、参数校验，经过权限和 Hook 等检查后执行动作，并处理结果、历史与事件。用户不必解析模型的原始工具调用，也不必手动把结果送回下一轮请求。直接调用 <code>tool.run()</code> 是低层调用，不会自动经过完整 Agent 管线。</p>
+<p><strong>仍需遵守什么。</strong> 此例是轻量同步读取；若访问远端服务，应提供适当的 <code>arun()</code>，而不是假定同步 I/O 自动变成非阻塞操作。只读和副作用声明必须与真实行为一致。<a href="../tool_authoring_guide.md">工具编写指南</a></p>
+<h3 id="section-18">4.3 自定义提示词：只写产品规则，不写请求编译</h3>
+<p><strong>需求与接口。</strong> 用户希望研究 Agent 遵守证据引用规则，并在每次请求看到当前工作区。通常只需实现 <code>BaseSystemPromptComposer.build()</code>，返回 Prompt Blocks，而不是重写完整的 <code>compose()</code>。</p>
+<pre class="python"><code>from easyagent.prompting import BaseSystemPromptComposer, PromptBlock
+
+class ResearchPrompt(BaseSystemPromptComposer):
+    def build(self, context):
+        return [
+            PromptBlock(&quot;identity&quot;, &quot;You are an evidence-based research assistant.&quot;),
+            PromptBlock(&quot;evidence-rule&quot;, &quot;Distinguish verified evidence from hypotheses.&quot;),
+            PromptBlock(
+                &quot;workspace&quot;, f&quot;Workspace: {context.execution_context.workspace_root}&quot;,
+                placement=&quot;system_reminder&quot;,
+            ),
+        ]
+
+# 安装：agent.with_prompt(ResearchPrompt())</code></pre>
+<p><strong>用户写什么。</strong> 内容、placement 与对公开 <code>PromptBuildContext</code> 的使用。只需要固定内容时，也可以直接配置默认 <code>SystemPromptComposer</code>，无需创建子类。</p>
+<p><strong>框架接管什么。</strong> 每次准备请求时调用组装器；基类的 <code>compose()</code> 会在启用模块说明时合并 Memory 的 Prompt Blocks，再由请求编译路径处理 system 与 system reminder。用户无需研究各 provider 的消息格式，也不必在自定义身份提示词后再手工拼接记忆说明。</p>
+<p><strong>仍需遵守什么。</strong> 本例没有开启默认通用提示词规则，但保留基类的模块说明合并。如果用户覆盖 <code>compose()</code> 或主动关闭模块说明，就要对相应变化负责。“重写产品提示词”与“丢弃所有模块说明”不是同一个操作。<a href="../prompt_composer_guide.md">提示词接口说明</a></p>
+<h3 id="section-19">4.4 自定义记忆：实现机制，不实现它与循环的连接</h3>
+<p><strong>需求与接口。</strong> 研究 Agent 需要主动查找和保存证据，而不是每轮自动召回。<code>BaseMemory</code> 允许模块提供说明和工具，不要求统一 CRUD、记忆分类或向量后端。下面的工具列表由应用提供，可以含搜索、读取和保存工具。</p>
+<pre class="python"><code>from easyagent.memory import BaseMemory
+from easyagent.prompting import PromptBlock
+
+class EvidenceMemory(BaseMemory):
+    def __init__(self, tools):
+        self.tools = list(tools)
+
+    def get_prompt_blocks(self, context):
+        return [PromptBlock(
+            &quot;memory.evidence&quot;,
+            &quot;Use the evidence tools when prior findings are relevant. &quot;
+            &quot;Save reusable findings with their source references.&quot;,
+        )]
+
+    def get_tools(self):
+        return self.tools
+
+# 安装：agent.with_memory(EvidenceMemory(memory_tools))</code></pre>
+<p><strong>用户写什么。</strong> 记忆机制怎样向模型说明、暴露哪些工具，以及这些工具如何读写自己的数据。若既有分层方案适用，可以直接安装 <code>LayeredMemory</code>，无需理解或重写其内部层次。</p>
+<p><strong>框架接管什么。</strong> <code>with_memory()</code> 绑定 MemoryServices，检查并注册工具，将 <code>get_hooks()</code> 返回的 Hook 接入管理器。后续提示词组装取得记忆说明，模型提出工具动作时沿普通工具路径执行。因此，Memory 作者不必改执行器，不必修改 Context 的来源列表，也不必分别连接同步和异步调用。</p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDQwIDc4MCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsbGVkYnk9InRpdGxlIGRlc2MiPgogIDx0aXRsZSBpZD0idGl0bGUiPuiusOW/huacuuWItueahOabv+aNouS4juaOpeWFpTwvdGl0bGU+CiAgPGRlc2MgaWQ9ImRlc2MiPuWGhee9ruWIhuWxguiusOW/huOAgeaWh+S7tuiusOW/huaJqeWxleekuuS+i+S4juWklumDqOacjeWKoeaJqeWxleekuuS+i+Wdh+WPr+WunueOsCBCYXNlTWVtb3J577yM6YCa6L+H5o+Q56S66K+N44CB5bel5YW35ZKM5Y+v6YCJIEhvb2sg5Y+C5LiOIEFnZW5044CCTWV0YU1lc3NhZ2Ug5Y+q6LSf6LSj5Yqo5oCB5rOo5YWl77yMQ29udGV4dCDlj6rnu4Too4Xlh4blpIflpb3nmoTlhoXlrrnjgII8L2Rlc2M+CiAgPGRlZnM+CiAgICA8bWFya2VyIGlkPSJhIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjgiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI3IiBtYXJrZXJIZWlnaHQ9IjciIG9yaWVudD0iYXV0byI+PHBhdGggZD0iTTAgMCAxMCA1IDAgMTBaIiBmaWxsPSIjNjI3ODhhIi8+PC9tYXJrZXI+CiAgICA8c3R5bGU+dGV4dHtmb250LWZhbWlseTonTm90byBTYW5zIENKSyBTQycsJ01pY3Jvc29mdCBZYUhlaScsc2Fucy1zZXJpZjtmaWxsOiMxNzJiNDR9Lmh7Zm9udC1zaXplOjI3cHg7Zm9udC13ZWlnaHQ6NzAwfS5ie2ZvbnQtc2l6ZToyMnB4fS5ze2ZvbnQtc2l6ZToxOHB4O2ZpbGw6IzUzNjc3ZX0ua3tmb250LXNpemU6MTZweDtmb250LXdlaWdodDo3MDA7bGV0dGVyLXNwYWNpbmc6MnB4fS5saW5le2ZpbGw6bm9uZTtzdHJva2U6IzYyNzg4YTtzdHJva2Utd2lkdGg6MjttYXJrZXItZW5kOnVybCgjYSl9PC9zdHlsZT4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9IjE0NDAiIGhlaWdodD0iNzgwIiByeD0iMjQiIGZpbGw9IiNmNWY3ZmEiLz4KICA8dGV4dCB4PSI1MiIgeT0iNTgiIGNsYXNzPSJrIj5FQVNZQUdFTlQgLyBNRUNIQU5JU00tTEVWRUwgRVhURU5TSU9OPC90ZXh0PgogIDx0ZXh0IHg9IjUyIiB5PSIxMDYiIGZvbnQtc2l6ZT0iMzYiIGZvbnQtd2VpZ2h0PSI3MDAiPuabv+aNouiusOW/huacuuWItu+8jOS4jemcgOimgeaUueWGmeaVtOS4qiBIYXJuZXNzPC90ZXh0PgogIDx0ZXh0IHg9IjUyIiB5PSIxNDUiIGNsYXNzPSJzIj7lm7rlrprmjqXlhaXmlrnlvI/vvIzkuI3lm7rlrprorrDlv4bliIbnsbvjgIHmo4DntKLnrpfms5XmiJblrZjlgqjlkI7nq6/jgII8L3RleHQ+CiAgPHJlY3QgeD0iNTIiIHk9IjIwMiIgd2lkdGg9IjMwMCIgaGVpZ2h0PSIxMDMiIHJ4PSIxNCIgZmlsbD0iI2VhZjZmNCIgc3Ryb2tlPSIjMTY4ODgzIi8+CiAgPHRleHQgeD0iODIiIHk9IjI0NSIgY2xhc3M9ImgiPkxheWVyZWRNZW1vcnk8L3RleHQ+PHRleHQgeD0iODIiIHk9IjI3OCIgY2xhc3M9InMiPuW3suacieWGhee9ruWunueOsDwvdGV4dD4KICA8cmVjdCB4PSI1MiIgeT0iMzM5IiB3aWR0aD0iMzAwIiBoZWlnaHQ9IjEwMyIgcng9IjE0IiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjOWRhZWMwIiBzdHJva2UtZGFzaGFycmF5PSI2IDUiLz4KICA8dGV4dCB4PSI4MiIgeT0iMzgyIiBjbGFzcz0iaCI+5paH5Lu26K6w5b+GPC90ZXh0Pjx0ZXh0IHg9IjgyIiB5PSI0MTUiIGNsYXNzPSJzIj7mianlsZXnpLrkvosgwrcg5qih5Z6L5Li75Yqo5pCc57SiPC90ZXh0PgogIDxyZWN0IHg9IjUyIiB5PSI0NzYiIHdpZHRoPSIzMDAiIGhlaWdodD0iMTAzIiByeD0iMTQiIGZpbGw9IndoaXRlIiBzdHJva2U9IiM5ZGFlYzAiIHN0cm9rZS1kYXNoYXJyYXk9IjYgNSIvPgogIDx0ZXh0IHg9IjgyIiB5PSI1MTkiIGNsYXNzPSJoIj7lpJbpg6jorrDlv4bmnI3liqE8L3RleHQ+PHRleHQgeD0iODIiIHk9IjU1MiIgY2xhc3M9InMiPuaJqeWxleekuuS+iyDCtyDoh6rlrprkuYnmjqXlhaU8L3RleHQ+CiAgPHBhdGggZD0iTTM2MCAyNTNIMzkwVjM2NUg0MzAiIGNsYXNzPSJsaW5lIi8+PHBhdGggZD0iTTM2MCAzOTFINDMwIiBjbGFzcz0ibGluZSIvPgogIDxwYXRoIGQ9Ik0zNjAgNTI3SDM5MFY0MTdINDMwIiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjQ0NCIgeT0iMjI5IiB3aWR0aD0iMjk0IiBoZWlnaHQ9IjMyMiIgcng9IjE4IiBmaWxsPSIjMTcyYjQ0Ii8+CiAgPHRleHQgeD0iNTkxIiB5PSIyNzkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMjkiIGZvbnQtd2VpZ2h0PSI3MDAiIHN0eWxlPSJmaWxsOndoaXRlIj5CYXNlTWVtb3J5PC90ZXh0PgogIDx0ZXh0IHg9IjU5MSIgeT0iMzIyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE5IiBzdHlsZT0iZmlsbDojYmNkN2RmIj7lrozmlbTmnLrliLbnmoTmjqXlhaXlpZHnuqY8L3RleHQ+CiAgPHRleHQgeD0iNDc5IiB5PSIzNzkiIGZvbnQtc2l6ZT0iMjEiIHN0eWxlPSJmaWxsOndoaXRlIj5Qcm9tcHQgQmxvY2tzPC90ZXh0PgogIDx0ZXh0IHg9IjQ3OSIgeT0iNDMyIiBmb250LXNpemU9IjIxIiBzdHlsZT0iZmlsbDp3aGl0ZSI+VG9vbHM8L3RleHQ+CiAgPHRleHQgeD0iNDc5IiB5PSI0ODUiIGZvbnQtc2l6ZT0iMjEiIHN0eWxlPSJmaWxsOndoaXRlIj5Ib29rc++8iOWPr+mAie+8iTwvdGV4dD4KICA8cGF0aCBkPSJNNzQ3IDM3MUg4MDBWMjQ5SDg0MCIgY2xhc3M9ImxpbmUiLz48cGF0aCBkPSJNNzQ3IDQyNEg4NDAiIGNsYXNzPSJsaW5lIi8+CiAgPHBhdGggZD0iTTc0NyA0NzhIODAwVjU2M0g4NDAiIGNsYXNzPSJsaW5lIi8+CiAgPHJlY3QgeD0iODU0IiB5PSIyMDIiIHdpZHRoPSI1MzQiIGhlaWdodD0iMTA0IiByeD0iMTQiIGZpbGw9IndoaXRlIiBzdHJva2U9IiNjY2Q4ZTQiLz4KICA8dGV4dCB4PSI4ODQiIHk9IjI0NCIgY2xhc3M9ImgiPuivtOaYjuWmguS9leS9v+eUqOiusOW/hjwvdGV4dD48dGV4dCB4PSI4ODQiIHk9IjI3OSIgY2xhc3M9InMiPlByb21wdCBDb21wb3NlciDihpIg5qih5Z6L5Y+v6KeB55qE5py65Yi26K+05piOPC90ZXh0PgogIDxyZWN0IHg9Ijg1NCIgeT0iMzcxIiB3aWR0aD0iNTM0IiBoZWlnaHQ9IjEwNCIgcng9IjE0IiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjY2NkOGU0Ii8+CiAgPHRleHQgeD0iODg0IiB5PSI0MTMiIGNsYXNzPSJoIj7mj5DkvpvmkJzntKLkuI7kv53lrZjooYzkuLo8L3RleHQ+PHRleHQgeD0iODg0IiB5PSI0NDgiIGNsYXNzPSJzIj5Ub29sIOKGkiDmiafooYzkuI7nu5Pmnpwg4oaSIOWQjue7reaooeWei+S4iuS4i+aWhzwvdGV4dD4KICA8cmVjdCB4PSI4NTQiIHk9IjUxOCIgd2lkdGg9IjUzNCIgaGVpZ2h0PSIxMDQiIHJ4PSIxNCIgZmlsbD0id2hpdGUiIHN0cm9rZT0iI2NjZDhlNCIvPgogIDx0ZXh0IHg9Ijg4NCIgeT0iNTYwIiBjbGFzcz0iaCI+5oyJ6ZyA5Yqo5oCB5rOo5YWlPC90ZXh0Pjx0ZXh0IHg9Ijg4NCIgeT0iNTk1IiBjbGFzcz0icyI+SG9vayDihpIgTWV0YU1lc3NhZ2Ug4oaSIOW+hee7hOijheS4iuS4i+aWhzwvdGV4dD4KICA8cmVjdCB4PSI1MiIgeT0iNjY3IiB3aWR0aD0iMTMzNiIgaGVpZ2h0PSI2NSIgcng9IjEyIiBmaWxsPSIjZTVlY2YzIi8+CiAgPHRleHQgeD0iNzIwIiB5PSI3MDgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJiIj5NZW1vcnkg5Yaz5a6a5YaF5a655LiO5pe25py644CAwrfjgIBNZXRhTWVzc2FnZSDnrqHnkIbms6jlhaXjgIDCt+OAgENvbnRleHQg57uE6KOF5bey5pyJ5YaF5a65PC90ZXh0PgogIDx0ZXh0IHg9IjUyIiB5PSI3NTkiIGNsYXNzPSJzIj7omZrnur/moYbooajnpLrlj6/lrp7njrDnmoTmlrnmoYjvvIzlubbpnZ7lt7Lpmo/ljIXmj5DkvpvjgILmma7pgJrlt6Xlhbfov5Tlm57ml6DpnIDph43lpI3ms6jlhaXvvJvlhbHkuqvlkI7nq6/ni6znq4vkuo7lhbfkvZPorrDlv4bmnLrliLbjgII8L3RleHQ+Cjwvc3ZnPgo=" alt="不同记忆机制通过同一契约参与 Agent" /></p>
+<p><em>图 4：固定的是接入契约，不是检索算法。动态注入是可选路径；普通工具结果走已有工具返回路径，不需要再复制为 MetaMessage。文件方案和外部服务是扩展示意。</em></p>
+<p><strong>可选动态参与。</strong> 某些记忆方案确实需要请求前检索，可以实现公开 Hook，而不是把查询逻辑插进 Agent 私有循环。例如下列 Hook 由该 Memory 的 <code>get_hooks()</code> 返回，<code>client.recall()</code> 是应用提供的异步服务。</p>
+<pre class="python"><code>from easyagent.hooks import BaseHook
+from easyagent.metamessages import MetaMessage, MetaMessageLifecycle
+
+class RecallBeforeContext(BaseHook):
+    def __init__(self, memory, client):
+        self.memory, self.client = memory, client
+
+    async def abefore_context(self, payload):
+        note = await self.client.recall(payload[&quot;query&quot;])
+        if note:
+            self.memory.services.metamessages.emit(MetaMessage(
+                name=&quot;evidence-recall&quot;, content=note,
+                lifecycle=MetaMessageLifecycle.REQUEST,
+                metadata={&quot;source&quot;: &quot;memory.evidence&quot;},
+            ))</code></pre>
+<p>此路径使用 <code>ainvoke</code> 或 <code>astream</code>，让框架等待异步 Hook；不需要自动检索的方案完全可以不提供它。Memory 决定内容、时机和来源，MetaMessage 处理注入与生命周期，Context 组装准备好的内容。工具返回已经是观察结果时，不应重复注入。</p>
+<p><strong>仍需遵守什么。</strong> 一个已绑定的有状态 Memory 实例不应同时给多个 Agent 使用；是否关闭外部资源由所有权约定决定。自定义状态若需要保存，也应实现相应状态导出/恢复方法。文件记忆和外部服务在此是扩展方向，不表示框架已提供所有完整产品实现。<a href="../memory_system_guide.md">记忆模块指南</a></p>
+<h3 id="section-20">4.5 自定义压缩器：只定义领域保留策略</h3>
+<p><strong>需求与接口。</strong> 用户希望摘要保留证据引用、实验条件和未解决问题。若组装方式不变，通常只需实现 <code>BaseHistoryCompactor.compact()</code>，而不必替换完整 Context。下面将领域摘要交给调用方提供的 <code>summarize</code> 函数。</p>
+<pre class="python"><code>from easyagent.context import BaseHistoryCompactor, ContextManager
+from easyagent.history import CanonicalMessage
+
+class EvidenceCompactor(BaseHistoryCompactor):
+    recent_turns = 2
+
+    def __init__(self, summarize):
+        super().__init__()
+        self.summarize = summarize
+
+    def compact(self, history):
+        summary = self.summarize(history or [])
+        return [CanonicalMessage(
+            role=&quot;user&quot;, content=[{&quot;type&quot;: &quot;text&quot;, &quot;text&quot;: summary}],
+        )]
+
+def make_context(summarize):
+    context = ContextManager(max_tokens=24_000)
+    context.set_history_compactor(EvidenceCompactor(summarize))
+    return context
+
+# 安装：agent.with_context(make_context(summarize))</code></pre>
+<p><strong>用户写什么。</strong> 摘要策略及其输出消息。<code>compact()</code> 接收的是 Context 决定交给它处理的历史片段，不应假定始终得到完整会话；默认管理器另行处理保留的近期轮次。</p>
+<p><strong>框架接管什么。</strong> 默认管线组装候选请求、检查预算、调用已配置压缩器、重组历史，并在发送前作最终预算检查。用户不用自己在每一轮调用前插入计数与压缩分支。当前用量机制还统一处理有效 API usage 基线与本地增量估算；自定义压缩器不必重新实现它。</p>
+<p><strong>仍需遵守什么。</strong> 摘要不能杜撰证据或破坏消息语义。框架保留预算检查和默认管理器的失败处理，不保证任意用户实现都能压缩到预算内。若需要改变组装机制本身，再实现 <code>BaseContextManager</code>；若摘要服务是原生异步，应提供相应 <code>acompact()</code>。<a href="../context_and_compaction_guide.md">Context 与压缩指南</a></p>
+<h3 id="section-21">4.6 自定义会话存储：保存记录，不重建 Agent</h3>
+<p><strong>需求与接口。</strong> 用户希望将会话放入自己的数据库。<code>BaseSessionStore</code> 接收框架组织好的快照及元数据，存储作者不需要逐个访问 Agent 内部模块。下面只展示保存与读取这两个操作；<code>repository</code> 是应用自己的数据库访问层。</p>
+<pre class="python"><code>from easyagent.session import BaseSessionStore
+
+class DomainSessionStore(BaseSessionStore):
+    def __init__(self, repository):
+        self.repository = repository
+
+    def create_or_update_session(
+        self, session_id, agent_type, agent_name, snapshot,
+        metadata=None, expires_at=None, *, expected_revision=None,
+    ):
+        return self.repository.write_session(
+            session_id=session_id, agent_type=agent_type, agent_name=agent_name,
+            snapshot=snapshot, metadata=metadata, expires_at=expires_at,
+            expected_revision=expected_revision,
+        )
+
+    def get_session(self, session_id, touch=False):
+        return self.repository.read_session(session_id, touch=touch)
+
+# 安装：agent.with_session(DomainSessionStore(repository))</code></pre>
+<p><strong>用户写什么。</strong> 数据读写、并发版本检查和返回记录格式。数据库访问层必须履行 Store 的记录契约，包括 <code>snapshot</code>、<code>revision</code>、<code>metadata</code> 等字段；未知记录返回 <code>None</code>。列表、删除及清理等方法按应用需求继续实现，此例不是一个完整生产数据库后端。已有 SQLite 或内存实现适用时，可以直接使用，不写这段接入代码。</p>
+<p><strong>框架接管什么。</strong> SessionPersistence 从当前历史和约定的状态参与者中收集可序列化数据，调用 Store 保存，并在恢复时检查格式，将数据交给已装配实例的状态恢复路径。用户不需要在 Store 中构建 Agent、初始化模型，或为每个模块重新编写一套恢复流程。</p>
+<p><strong>仍需遵守什么。</strong> 保存与恢复由产品显式发起，框架不保证每轮自动保存。数据库必须原子地处理 <code>expected_revision</code>；异步后端需提供对应异步方法。会话快照不是完整原始日志，也不意味着重放或恢复外部进程。Memory 和 RAG 需要共享文档、向量或图后端时，可以使用独立的 Storage 契约，而不是把这些数据混入会话实例装配。<a href="../session_restore_persistence_guide.md">会话指南</a>、<a href="../storage_guide.md">公共存储指南</a></p>
+<h3 id="section-22">4.7 将模块装配成产品，而不是再次编写 Harness</h3>
+<p>下面把本章定义的类装配起来。<code>repository</code> 用于证据读取，<code>memory_tools</code> 为另外提供的记忆工具，<code>summarize</code> 为领域摘要函数，<code>session_store</code> 可以是已有实现或上面的自定义实现。工具名称应互不冲突。</p>
+<pre class="python"><code>from easyagent import BasicAgent
+
+def build_research_agent(llm, repository, memory_tools, summarize, session_store):
+    agent = BasicAgent(&quot;research-agent&quot;, llm)
+    agent.with_prompt(ResearchPrompt())
+    agent.add_tool(LookupEvidence(repository))
+    agent.with_memory(EvidenceMemory(memory_tools))
+    agent.with_context(make_context(summarize))
+    agent.with_session(session_store)
+    return agent</code></pre>
+<p>应用之后仍调用普通 Agent 接口。保存时使用 <code>save_session()</code>；恢复时先用同一装配函数创建所需实例，再调用 <code>restore_session()</code>。本章并没有让用户手动调用提示词编译、模型工具协议解析、记忆注册或历史恢复的内部实现。</p>
+<p>这不是消除领域工程，而是改变工程边界：<strong>用户实现自己模块的逻辑，框架处理模块如何参与默认 Agent 运行。</strong> 若整个循环策略需要变化，仍可替换 Executor；但那属于更深的控制层，不是增加工具、改变提示词或接入记忆的前提。</p>
+<h2 id="section-23">5. 与主流 Agent 框架对比</h2>
+<!-- role: evidence / comparison methodology -->
+<p>本节比较各项目的主要编程入口、已公开的能力与 EasyAgent 的相关取向，不将“文档未强调”写成“不支持”。所有项目都可能通过组合、扩展或改源码实现更多功能；差别在于开发者要接触什么契约，以及需求是否能沿正式扩展路径完成。每行最后一列是本文的架构判断，不是测量结果。</p>
+<h3 id="section-24">5.1 十二个维度：比较的是编程边界</h3>
+<p>下表概括两种常见的<strong>使用路线</strong>，不是给所有项目贴互斥标签。应用框架可以提供 Harness，完整产品也可以公开模块接口；中间的模块化方案在第 7 节单独比较。EasyAgent 一列描述当前接口及其设计取向，不是效果评分。</p>
+<p>表 1：十二维定位总览。列描述使用入口，行描述开发者需要控制的对象。</p>
+<table>
+<thead>
+<tr class="header">
+<th>维度</th>
+<th>EasyAgent：面向 Harness 的模块编程</th>
+<th>以应用／编排为入口</th>
+<th>以完整 Harness 集成为入口</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>D01 编程模型</td>
+<td>执行器、Context、Memory、Session 等职责契约</td>
+<td>节点、事件、Agent、任务与运行状态</td>
+<td>产品客户端、会话与产品配置</td>
+</tr>
+<tr class="even">
+<td>D02 循环控制权</td>
+<td>默认执行器可用，也可整体替换</td>
+<td>图、Runner 或 Agent 实现控制循环</td>
+<td>产品运行时控制循环，外部发起和干预运行</td>
+</tr>
+<tr class="odd">
+<td>D03 模块替换粒度</td>
+<td>关键机制有独立契约，不止参数开关</td>
+<td>通过组件、节点、中间件等扩展</td>
+<td>通过产品开放的配置、Hook、插件或内部代码</td>
+</tr>
+<tr class="even">
+<td>D04 提示词与动态注入</td>
+<td>Prompt Composer 与 MetaMessage 分工</td>
+<td>请求前处理、状态或中间件</td>
+<td>产品指令、上下文入口及 Hook</td>
+</tr>
+<tr class="odd">
+<td>D05 上下文与压缩</td>
+<td>Context 总预算，压缩器可替换</td>
+<td>消息变换、节点或内置上下文策略</td>
+<td>复用产品策略，在公开范围内定制</td>
+</tr>
+<tr class="even">
+<td>D06 记忆机制</td>
+<td>可选说明、工具和 Hook，不强制召回流程</td>
+<td>Memory、Store、工具或应用状态</td>
+<td>产品记忆约定，或自定义工具与插件</td>
+</tr>
+<tr class="odd">
+<td>D07 存储复用</td>
+<td>Session Store 与领域中立 Storage 分开</td>
+<td>状态持久化、记忆后端与数据组件</td>
+<td>产品存储接口或源码中的服务边界</td>
+</tr>
+<tr class="even">
+<td>D08 工具与协议</td>
+<td>Tool／Registry、MCP 等能力供产品装配</td>
+<td>函数工具、组件工具、MCP 等</td>
+<td>产品内置工具加扩展工具</td>
+</tr>
+<tr class="odd">
+<td>D09 权限与隔离</td>
+<td>Permission 做决策；隔离设施另行接入</td>
+<td>审批／Guardrails 与部署环境组合</td>
+<td>采用产品权限、审批及沙箱设施</td>
+</tr>
+<tr class="even">
+<td>D10 会话与恢复</td>
+<td>装配后恢复状态，快照不等于完整日志</td>
+<td>Checkpointer、Session 或工作流恢复</td>
+<td>恢复、fork、回溯以产品公开语义为准</td>
+</tr>
+<tr class="odd">
+<td>D11 流式、取消与事件</td>
+<td>同步／异步／流式入口及运行事件</td>
+<td>流、回调、事件与运行状态接口</td>
+<td>SDK／协议转发运行事件和控制请求</td>
+</tr>
+<tr class="even">
+<td>D12 产品集成与学习边界</td>
+<td>默认组合即可使用；定制时理解相关契约</td>
+<td>理解应用模型及需求对应的运行接口</td>
+<td>简单集成学习 SDK；深度改造可能进入产品内部</td>
+</tr>
+</tbody>
+</table>
+<p>表 1 的价值不是把某一列全部判为“更好”，而是明确控制权放在哪里。EasyAgent 的优势主要落在 D03、D06、D07、D10：机制级接口、记忆与存储分离、装配与恢复分离；D09 的统一执行隔离和 D12 的实际学习成本则不能当作已经全面领先的结论。</p>
+<h3 id="section-25">5.2 应用、编排与通用 Agent 开发框架</h3>
+<p>表 2：主流框架的主要入口与适用取向。详细机制不能仅由本表的项目分类推断。</p>
+<table>
+<colgroup>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>项目</th>
+<th>主要入口与已公开能力</th>
+<th>与 EasyAgent 的关键对照</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangChain / LangGraph</a></td>
+<td>模型、工具与 Agent 组件；图状态、持久执行、流式和人工介入</td>
+<td>适合应用与执行编排。EasyAgent 把 Harness 模块契约作为主要入口，不要求先用图描述内部机制；外层流程可以继续使用图。</td>
+</tr>
+<tr class="even">
+<td><a href="https://docs.crewai.com/en/introduction">CrewAI</a></td>
+<td>Agent、Task、Crew、Flow；自主协作与有状态流程</td>
+<td>角色与任务分工清晰。EasyAgent 优先表达一个 Agent 的运行组成，而不要求先组织成团队任务。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://developers.openai.com/api/docs/guides/agents">OpenAI Agents SDK</a></td>
+<td>Agent、Runner、Tools、Handoffs、Guardrails、会话与运行状态</td>
+<td>已提供循环和运行能力，并非仅做编排。应比较具体模块的替换边界，而不能声称它没有 Harness。</td>
+</tr>
+<tr class="even">
+<td><a href="https://adk.dev/">Google ADK</a></td>
+<td>Agent 开发、模型和工具接入、调试部署与图式工作流</td>
+<td>覆盖从 Agent 到应用部署的需求。EasyAgent 侧重按运行机制划分的 Python 模块装配；并不声称 ADK 只能使用 Google 模型。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://learn.microsoft.com/en-us/agent-framework/overview/">Microsoft Agent Framework</a></td>
+<td>Agent 与多 Agent 模式、工作流、会话状态、中间件和遥测</td>
+<td>企业集成与工作流是重要组成。EasyAgent 的取向是以领域 Harness 的局部定制作为设计中心，而非取代其企业生态。</td>
+</tr>
+<tr class="even">
+<td><a href="https://huggingface.co/docs/smolagents/index">smolagents</a></td>
+<td>轻量 Agent；CodeAgent 通过代码表达工具行动，支持沙箱执行</td>
+<td>它也不是图编排框架。比较重点是轻量行动模型与较完整的模块、状态和产品装配需求，不是“模型能否自主行动”。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://developers.llamaindex.ai/python/llamaagents/workflows/">LlamaIndex Workflows</a></td>
+<td>由事件触发的步骤、类型化事件和执行流</td>
+<td>适合将应用逻辑表达为事件驱动工作流。EasyAgent 针对的是工作流内部的 Agent 运行机制；二者可处于不同层次。</td>
+</tr>
+<tr class="even">
+<td><a href="https://docs.haystack.deepset.ai/docs/agents">Haystack</a></td>
+<td>组件与 Pipeline；Agent 管理工具循环、共享状态、流式和人工审核</td>
+<td>检索与组件复用具有直接价值。EasyAgent 不替代检索 Pipeline，而允许检索工具或模块接入自身 Harness。</td>
+</tr>
+</tbody>
+</table>
+<p>Microsoft 官方将 Agent Framework 描述为 AutoGen 与 Semantic Kernel 的后续方向，因此这里按这一谱系比较，而不是把旧项目当成静止不变的竞争对象。<a href="https://learn.microsoft.com/en-us/agent-framework/overview/">Microsoft 官方概览</a></p>
+<p>OpenAI Agents SDK 的 Sandbox Agent 已公开文件、Shell、记忆和压缩等能力组合，开发者也能切换执行环境。因此，EasyAgent 的差异不能建立在“其他 SDK 没有环境、记忆或压缩”之上，而应落在契约粒度、实现替换路径和产品独立性上。<a href="https://developers.openai.com/api/docs/guides/agents/sandboxes">Sandbox Agents</a></p>
+<h3 id="section-26">5.3 记忆、上下文和持久化：具体接口横向对照</h3>
+<p>表 3：四种实际开发入口的机制对照。格内记录公开接口或责任位置；“未核对”只表示本版资料覆盖不足，不表示不支持。</p>
+<table>
+<colgroup>
+<col style="width: 20%"></col>
+<col style="width: 20%"></col>
+<col style="width: 20%"></col>
+<col style="width: 20%"></col>
+<col style="width: 20%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>维度</th>
+<th>EasyAgent</th>
+<th>LangGraph</th>
+<th>CrewAI</th>
+<th>OpenAI Agents SDK</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>记忆的表达对象</td>
+<td><code>BaseMemory</code> 提供说明、工具、Hook</td>
+<td>状态、长期 Store 与自定义逻辑</td>
+<td><code>Memory</code> 的保存、召回与记忆记录</td>
+<td>Session 管理对话；Sandbox Memory 提供记忆能力</td>
+</tr>
+<tr class="even">
+<td>检索由谁触发</td>
+<td>记忆实现选择模型工具或 Hook</td>
+<td>应用定义查询与调用位置</td>
+<td>默认 Crew 路径按任务召回；也可独立调用</td>
+<td>Sandbox 记忆支持模型读取；其他方案由应用接入</td>
+</tr>
+<tr class="odd">
+<td>上下文压缩入口</td>
+<td>压缩器或完整 Context 契约</td>
+<td>裁剪、删除、总结消息及自定义策略</td>
+<td>可配置自动摘要；独立压缩契约未核对</td>
+<td>Sandbox Compaction 能力；细节依具体运行路径</td>
+</tr>
+<tr class="even">
+<td>会话／状态保存</td>
+<td>SessionPersistence + Store 契约</td>
+<td>Checkpointer 保存执行状态</td>
+<td>Flow 状态与 Memory 后端是不同对象</td>
+<td>SDK Session 与可恢复运行状态</td>
+</tr>
+<tr class="odd">
+<td>存储与机制关系</td>
+<td>公共 Storage 不规定记忆记录形状</td>
+<td>Checkpointer 与长期 Store 分工</td>
+<td>可实现 <code>StorageBackend</code> 替换记忆后端</td>
+<td>应用可控制存储；Sandbox 环境另有状态</td>
+</tr>
+<tr class="even">
+<td>定制时主要理解</td>
+<td>相关模块契约与协作责任</td>
+<td>图状态、消息及持久化语义</td>
+<td>Agent／Crew／Flow 与 Memory 语义</td>
+<td>Agent／Runner、Session 与能力生命周期</td>
+</tr>
+</tbody>
+</table>
+<p>依据：<a href="https://docs.langchain.com/oss/python/langgraph/add-memory">LangGraph Memory</a>、<a href="https://docs.crewai.com/en/concepts/memory">CrewAI Memory</a>、<a href="https://docs.crewai.com/en/concepts/agents">CrewAI Agent 参数</a>、<a href="https://developers.openai.com/api/docs/guides/agents">Agents SDK</a>、<a href="https://developers.openai.com/api/docs/guides/agents/sandboxes">Sandbox Agents</a>，以及 EasyAgent 的 <a href="../memory_system_guide.md">Memory</a>、<a href="../context_and_compaction_guide.md">Context</a>、<a href="../session_restore_persistence_guide.md">Session</a>、<a href="../storage_guide.md">Storage</a> 指南。</p>
+<p>这个比较揭示了一个重要区别：CrewAI 已公开记忆后端替换方式，LangGraph 也提供多种历史处理与持久化路径。EasyAgent 要强调的不是“只有我能换数据库”，而是 <code>BaseMemory</code> 不要求用户先接受一种记忆记录与召回机制；底层存储的替换和整个记忆机制的替换分别有自己的位置。</p>
+<h3 id="section-27">5.4 面对这些框架，EasyAgent 补什么</h3>
+<p>EasyAgent 首先补的是一套以 Harness 机制为中心的组织方式：用户可以直接讨论记忆、上下文和会话接口，而不是每次重新决定这些概念怎样映射到应用状态。其次，它将默认运行与模块装配放在一起，避免只交给用户孤立组件。最后，它提供从默认实现到自定义机制的连续路径，降低进入整个系统内部的必要性。</p>
+<p>这些是设计层面的价值，不代表其他项目无法实现同样目标。团队若已深度依赖某个生态，应同时评估复用既有部署、观测和工作流设施的收益。为保持产品可控而引入 EasyAgent，与为追求统一技术栈而沿用原框架，都是可以成立的工程选择。</p>
+<h2 id="section-28">6. 与完整 Harness 产品对比</h2>
+<!-- role: evidence / product harnesses -->
+<h3 id="section-29">6.1 从“驱动已有 Agent”到“构建自己的机制”</h3>
+<p>表 4：完整 Harness 的产品集成入口，不将产品目标误当作框架能力缺陷。</p>
+<table>
+<colgroup>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>项目或产品接口</th>
+<th>已公开的集成方式与优势</th>
+<th>深度领域化时应检查什么</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="https://learn.chatgpt.com/docs/app-server">Codex App Server</a></td>
+<td>通过结构化协议集成认证、会话、审批和流式事件，可构建自己的客户端</td>
+<td>需要的是运行 Codex，还是替换其内部机制？产品操作接口不自动等同于任意模块替换接口。</td>
+</tr>
+<tr class="even">
+<td><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Code / Claude Agent SDK</a></td>
+<td>复用 Claude Code 的工具、Agent Loop 和上下文管理；提供提示词、工具、Hook 等扩展</td>
+<td>需求是否能通过正式扩展点完成？修改默认行为和接管机制是不同层次，但不能因此说 SDK 不支持定制。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI</a></td>
+<td>开源终端 Agent，提供工具及扩展能力，可结合其源码与文档构建集成</td>
+<td>终端与产品配置假设是否符合目标领域？若要改核心机制，需核查当前版本的公共边界。</td>
+</tr>
+<tr class="even">
+<td><a href="https://opencode.ai/docs/sdk/">OpenCode SDK</a></td>
+<td>类型化 JS/TS 客户端，程序化访问服务、会话、文件和事件</td>
+<td>服务客户端擅长集成已有运行时；客户端可操作的范围与内部模块可替换范围需要分别评估。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://aider.chat/docs/usage.html">Aider</a></td>
+<td>面向代码库的交互式编辑，文件上下文与 Git 工作方式紧密结合</td>
+<td>若目标不是代码编辑，需要明确哪些交互和状态假设仍适用。不能把它的产品目标视为一般框架缺陷。</td>
+</tr>
+</tbody>
+</table>
+<p>对这类产品，EasyAgent 的吸引力不是“也能执行任务”，而是开发者能保留自己对 Harness 机制的定义权。工具、记忆、上下文和会话的公共契约，不应依赖某个终端产品的命令、目录习惯或完成任务方式。</p>
+<p>一个产品可以基于 EasyAgent 构建自己的 Core，再向外提供 CLI、TUI、SDK 和无界面服务。外部程序使用产品 SDK；产品的内部界面与 SDK 则共同消费 Core。这样的分层使“产品可被调用”与“产品依赖什么框架”分开，也避免把 EasyAgent 的内部类型直接变成所有外部用户必须理解的 API。</p>
+<h3 id="section-30">6.2 S4Code：框架与产品分离的具体落点</h3>
+<p>S4Code 在这个工作空间中是基于 EasyAgent 的具体 Coding Agent 产品。<code>S4CodeAgent</code> 属于产品 Core 的一个组成部分，而不是整个 Core；配置、运行、会话和工具装配共同形成产品核心。Python SDK、CLI、Textual TUI 与桥接服务是产品核心的消费者，Ink TUI 经桥接访问同一 Core。</p>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNDQwIDkyMCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsbGVkYnk9InRpdGxlIGRlc2MiPgogIDx0aXRsZSBpZD0idGl0bGUiPkVhc3lBZ2VudCDkuI7kuqflk4EgQ29yZeOAgeWvueWkluaOpeWPo+eahOiBjOi0o+i+ueeVjDwvdGl0bGU+CiAgPGRlc2MgaWQ9ImRlc2MiPkNMSeOAgVRVSeOAgVNESyDlkozml6DnlYzpnaLmnI3liqHlubPnuqfmtojotLnkuqflk4EgQ29yZeOAguS6p+WTgSBDb3JlIOS9v+eUqCBFYXN5QWdlbnQg55qE5YWs5YWx5qih5Z2X77yM5aSW6YOo5omn6KGM546v5aKD55Sx5bel5YW35ZKM5Lqn5ZOB5o6l5YWl44CCPC9kZXNjPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYSIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI4IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNyIgbWFya2VySGVpZ2h0PSI3IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wIDAgMTAgNSAwIDEwWiIgZmlsbD0iIzZmODE5NiIvPjwvbWFya2VyPgogICAgPHN0eWxlPnRleHR7Zm9udC1mYW1pbHk6J05vdG8gU2FucyBDSksgU0MnLCdNaWNyb3NvZnQgWWFIZWknLHNhbnMtc2VyaWY7ZmlsbDojMTcyYjQ0fS5oe2ZvbnQtc2l6ZToyOHB4O2ZvbnQtd2VpZ2h0OjcwMH0uYntmb250LXNpemU6MjNweH0uc3tmb250LXNpemU6MThweDtmaWxsOiM1MzY3N2V9Lmt7Zm9udC1zaXplOjE2cHg7Zm9udC13ZWlnaHQ6NzAwO2xldHRlci1zcGFjaW5nOjJweH0ubGluZXtmaWxsOm5vbmU7c3Ryb2tlOiM2ZjgxOTY7c3Ryb2tlLXdpZHRoOjI7bWFya2VyLWVuZDp1cmwoI2EpfTwvc3R5bGU+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSIxNDQwIiBoZWlnaHQ9IjkyMCIgcng9IjI0IiBmaWxsPSIjZjVmN2ZhIi8+CiAgPHRleHQgeD0iNTIiIHk9IjU4IiBjbGFzcz0iayI+RUFTWUFHRU5UIC8gUkVTUE9OU0lCSUxJVFkgQk9VTkRBUklFUzwvdGV4dD4KICA8dGV4dCB4PSI1MiIgeT0iMTA2IiBmb250LXNpemU9IjM2IiBmb250LXdlaWdodD0iNzAwIj7moYbmnrbmj5DkvpvmnLrliLbvvIzkuqflk4Hoo4XphY3og73lipvvvIznlYzpnaLotJ/otKPkuqTkupI8L3RleHQ+CiAgPHRleHQgeD0iNTIiIHk9IjE0NCIgY2xhc3M9InMiPueureWktOihqOekuuS9v+eUqOWFs+ezu++8m+WQjOWxguaOpeWPo+S4jeimgeaxgumAmui/h+W9vOatpOiuv+mXriBDb3Jl44CCPC90ZXh0PgogIDxnIGZpbGw9IndoaXRlIiBzdHJva2U9IiNjZGQ4ZTYiPgogICAgPHJlY3QgeD0iMjYwIiB5PSIxOTIiIHdpZHRoPSIyMzgiIGhlaWdodD0iNjgiIHJ4PSIxMiIvPjxyZWN0IHg9IjUyNiIgeT0iMTkyIiB3aWR0aD0iMjM4IiBoZWlnaHQ9IjY4IiByeD0iMTIiLz4KICAgIDxyZWN0IHg9Ijc5MiIgeT0iMTkyIiB3aWR0aD0iMjM4IiBoZWlnaHQ9IjY4IiByeD0iMTIiLz48cmVjdCB4PSIxMDU4IiB5PSIxOTIiIHdpZHRoPSIyNzgiIGhlaWdodD0iNjgiIHJ4PSIxMiIvPgogIDwvZz4KICA8dGV4dCB4PSI1MiIgeT0iMjMyIiBjbGFzcz0iYiI+5a+55aSW5o6l5Y+jPC90ZXh0PgogIDx0ZXh0IHg9IjM3OSIgeT0iMjM2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+Q0xJPC90ZXh0Pjx0ZXh0IHg9IjY0NSIgeT0iMjM2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+VFVJPC90ZXh0PgogIDx0ZXh0IHg9IjkxMSIgeT0iMjM2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5Lqn5ZOBIFNESzwvdGV4dD48dGV4dCB4PSIxMTk3IiB5PSIyMzYiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJiIj7mnI3liqEgLyBCcmlkZ2U8L3RleHQ+CiAgPHBhdGggZD0iTTM3OSAyNjdWMzA3IiBjbGFzcz0ibGluZSIvPjxwYXRoIGQ9Ik02NDUgMjY3VjMwNyIgY2xhc3M9ImxpbmUiLz4KICA8cGF0aCBkPSJNOTExIDI2N1YzMDciIGNsYXNzPSJsaW5lIi8+PHBhdGggZD0iTTExOTcgMjY3VjMwNyIgY2xhc3M9ImxpbmUiLz4KICA8cmVjdCB4PSIyNjAiIHk9IjMxOSIgd2lkdGg9IjEwNzYiIGhlaWdodD0iMTM1IiByeD0iMTYiIGZpbGw9IiNlOGVlZjkiIHN0cm9rZT0iI2JjY2JlMSIvPgogIDx0ZXh0IHg9IjUyIiB5PSIzODAiIGNsYXNzPSJiIj7poobln5/kuqflk4E8L3RleHQ+CiAgPHRleHQgeD0iMjk0IiB5PSIzNjIiIGNsYXNzPSJoIj5Qcm9kdWN0IENvcmU8L3RleHQ+CiAgPHRleHQgeD0iMjk0IiB5PSI0MDEiIGNsYXNzPSJiIj7kuqflk4EgQWdlbnQgwrcg6Lqr5Lu95LiO6YWN572uIMK3IOi/kOihjOS4juS8muivneacjeWKoSDCtyDlt6Xlhbfoo4XphY08L3RleHQ+CiAgPHRleHQgeD0iMjk0IiB5PSI0MzIiIGNsYXNzPSJzIj5TNENvZGVBZ2VudCDmmK8gQ29yZSDnmoTnu4TmiJDpg6jliIbvvJvkuI3mmK/mlbTkuKogQ29yZe+8jOS5n+S4jeaYr+WklumDqOW6lOeUqOeahCBTREvjgII8L3RleHQ+CiAgPHBhdGggZD0iTTc5OCA0NjFWNTA0IiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjI2MCIgeT0iNTE2IiB3aWR0aD0iMTA3NiIgaGVpZ2h0PSIyMzkiIHJ4PSIxNiIgZmlsbD0iI2VhZjZmNCIgc3Ryb2tlPSIjMTY4ODgzIiBzdHJva2Utd2lkdGg9IjIiLz4KICA8dGV4dCB4PSI1MiIgeT0iNTgwIiBjbGFzcz0iYiI+6L+Q6KGM5py65Yi2PC90ZXh0Pjx0ZXh0IHg9IjI5NCIgeT0iNTYwIiBjbGFzcz0iaCI+RWFzeUFnZW50IOWFrOWFseaooeWdl+Wlkee6puS4jum7mOiupOWunueOsDwvdGV4dD4KICA8ZyBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjYThkNGNkIj4KICAgIDxyZWN0IHg9IjI5NCIgeT0iNTg0IiB3aWR0aD0iMjMyIiBoZWlnaHQ9IjU3IiByeD0iOSIvPjxyZWN0IHg9IjU1MyIgeT0iNTg0IiB3aWR0aD0iMjMyIiBoZWlnaHQ9IjU3IiByeD0iOSIvPgogICAgPHJlY3QgeD0iODEyIiB5PSI1ODQiIHdpZHRoPSIyMzIiIGhlaWdodD0iNTciIHJ4PSI5Ii8+PHJlY3QgeD0iMTA3MSIgeT0iNTg0IiB3aWR0aD0iMjMyIiBoZWlnaHQ9IjU3IiByeD0iOSIvPgogICAgPHJlY3QgeD0iMjk0IiB5PSI2NjAiIHdpZHRoPSIyMzIiIGhlaWdodD0iNTciIHJ4PSI5Ii8+PHJlY3QgeD0iNTUzIiB5PSI2NjAiIHdpZHRoPSIyMzIiIGhlaWdodD0iNTciIHJ4PSI5Ii8+CiAgICA8cmVjdCB4PSI4MTIiIHk9IjY2MCIgd2lkdGg9IjIzMiIgaGVpZ2h0PSI1NyIgcng9IjkiLz48cmVjdCB4PSIxMDcxIiB5PSI2NjAiIHdpZHRoPSIyMzIiIGhlaWdodD0iNTciIHJ4PSI5Ii8+CiAgPC9nPgogIDx0ZXh0IHg9IjQxMCIgeT0iNjIxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+QWdlbnQgLyBFeGVjdXRvcjwvdGV4dD48dGV4dCB4PSI2NjkiIHk9IjYyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPk1vZGVsIC8gVG9vbDwvdGV4dD4KICA8dGV4dCB4PSI5MjgiIHk9IjYyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgY2xhc3M9ImIiPkNvbnRleHQ8L3RleHQ+PHRleHQgeD0iMTE4NyIgeT0iNjIxIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+TWVtb3J5PC90ZXh0PgogIDx0ZXh0IHg9IjQxMCIgeT0iNjk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+U2Vzc2lvbiAvIFN0b3JhZ2U8L3RleHQ+PHRleHQgeD0iNjY5IiB5PSI2OTciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGNsYXNzPSJiIj5QZXJtaXNzaW9uPC90ZXh0PgogIDx0ZXh0IHg9IjkyOCIgeT0iNjk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+TWV0YU1lc3NhZ2U8L3RleHQ+PHRleHQgeD0iMTE4NyIgeT0iNjk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+RXZlbnRzIC8gSG9va3M8L3RleHQ+CiAgPHBhdGggZD0iTTc5OCA3NjJWNzk2IiBjbGFzcz0ibGluZSIvPgogIDxyZWN0IHg9IjI2MCIgeT0iODA4IiB3aWR0aD0iMTA3NiIgaGVpZ2h0PSI2MSIgcng9IjEyIiBmaWxsPSJ3aGl0ZSIgc3Ryb2tlPSIjYTNhZmJmIiBzdHJva2UtZGFzaGFycmF5PSI3IDUiLz4KICA8dGV4dCB4PSI1MiIgeT0iODQ3IiBjbGFzcz0iYiI+5aSW6YOo6K6+5pa9PC90ZXh0Pjx0ZXh0IHg9Ijc5OCIgeT0iODQ3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBjbGFzcz0iYiI+5qih5Z6L5pyN5YqhIMK3IOaVsOaNruW6kyDCtyDmlofku7bns7vnu58gwrcgT1MgLyDlrrnlmaggLyDov5znq6/miafooYznjq/looM8L3RleHQ+CiAgPHRleHQgeD0iMjYwIiB5PSI4OTkiIGNsYXNzPSJzIj7lpJbpg6jorr7mlr3pnIDmraPnoa7mjqXlhaXvvJtQZXJtaXNzaW9uIOeahOetlueVpeWIpOaWreS4jeetieS6jiBPUyDnuqfpmpTnprvvvIzmnrbmnoTliIblsYLkuI3ku6PooajmiYDmnInlkI7nq6/lt7Llrp7njrDjgII8L3RleHQ+Cjwvc3ZnPgo=" alt="EasyAgent、产品 Core 与平级接口的职责关系" /></p>
+<p><em>图 5：框架之外的产品分工。领域产品 Core 负责产品装配和规则，CLI、TUI、SDK 是平级消费者。与第 3 章框架内部图不同，本图说明这些能力怎样组成面向用户的产品。执行隔离仍需相应外部设施。</em></p>
+<p>这一案例说明 EasyAgent 可以承载产品构建，但不将 S4Code 的全部行为下沉为框架规则。提示词身份、斜杠命令、界面 checkpoint 交互以及主题等由产品相应层负责；可复用的模型、工具、上下文和状态能力属于框架。S4Code 是具体案例，不是多个领域迁移效果已经被测量的证据。<a href="comparison-sources.md#s4code-产品案例">产品边界说明</a></p>
+<h3 id="section-31">6.3 对照成熟产品：运行接口与构建接口</h3>
+<p>表 5：EasyAgent 与两种代表性产品接口的控制边界。比较对象是所列公开入口，不是源码可修改性的极限。</p>
+<table>
+<thead>
+<tr class="header">
+<th>维度</th>
+<th>EasyAgent</th>
+<th>Codex App Server</th>
+<th>Claude Agent SDK</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>开发者直接操作</td>
+<td>自己的 Agent 和运行模块</td>
+<td>产品 thread、turn、item 与请求</td>
+<td>SDK 运行、消息、工具和配置</td>
+</tr>
+<tr class="even">
+<td>谁提供默认循环</td>
+<td>EasyAgent 默认执行器</td>
+<td>Codex 运行时</td>
+<td>Claude Code 共用的运行时</td>
+</tr>
+<tr class="odd">
+<td>如何改变核心行为</td>
+<td>替换对应模块；必要时替换执行器</td>
+<td>先使用协议和产品扩展点；更深机制逐项核查</td>
+<td>提示词、工具、Hook 等扩展；更深机制逐项核查</td>
+</tr>
+<tr class="even">
+<td>压缩控制入口</td>
+<td>可实现压缩器或 Context</td>
+<td><code>thread/compact/start</code> 发起产品压缩</td>
+<td>自动压缩、总结指令、<code>PreCompact</code> 等</td>
+</tr>
+<tr class="odd">
+<td>动态上下文</td>
+<td>模块经 MetaMessage 或工具结果参与</td>
+<td>通过产品的消息与工具入口</td>
+<td>通过 SDK 输入、工具与 Hook</td>
+</tr>
+<tr class="even">
+<td>会话与分支</td>
+<td>Store 契约、恢复与 fork；不是完整归档</td>
+<td>thread 恢复、fork、回溯等产品操作</td>
+<td>SDK 的会话管理能力，遵循产品状态语义</td>
+</tr>
+<tr class="odd">
+<td>审批与交互</td>
+<td>框架做权限判断，产品实现交互入口</td>
+<td>服务请求审批，客户端返回决定</td>
+<td>SDK 提供审批与行为控制接口</td>
+</tr>
+<tr class="even">
+<td>自建 UI／外部 API</td>
+<td>产品 Core 自行提供，S4Code 是案例</td>
+<td>已有协议适合构建独立客户端</td>
+<td>SDK 适合嵌入自己的应用</td>
+</tr>
+</tbody>
+</table>
+<p>依据：<a href="https://learn.chatgpt.com/docs/app-server">Codex App Server</a>、<a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK</a>、<a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">Claude Agent Loop 与压缩</a>。能发起压缩，不等同于已经公开替换任意压缩算法的构建契约；反过来，使用构建契约也意味着产品团队要承担更多装配责任。EasyAgent 的价值是把这份责任划分清楚，而不是把它全部消除。</p>
+<h2 id="section-32">7. 与模块化 Harness SDK 的正面对照</h2>
+<!-- role: evidence / closest alternatives -->
+<p>最接近 EasyAgent 的并不只有编排框架，也包括已经将 Harness 做成可复用库的项目。下面这些方案承认并解决了相同问题的一部分。将它们忽略，或仅称为“不能扩展的成品”，会削弱比较的可信度。</p>
+<h3 id="section-33">7.1 最接近的比较对象</h3>
+<p>表 6：模块化 Harness SDK 总览。下两张表进一步对照具体机制。</p>
+<table>
+<colgroup>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+<col style="width: 33%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>项目</th>
+<th>官方公开的模块化方式</th>
+<th>EasyAgent 应坚持比较的具体边界</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="https://docs.langchain.com/oss/python/deepagents/overview">Deep Agents</a></td>
+<td>基于 LangChain / LangGraph 的 Harness；文件系统、上下文、子 Agent、人工介入及可接入后端</td>
+<td>不以“有没有 Harness”为差别；比较替换完整机制时依赖的接口，以及开发者需掌握的运行模型。</td>
+</tr>
+<tr class="even">
+<td><a href="https://pydantic.dev/docs/ai/harness/">Pydantic AI Harness</a></td>
+<td>以 Capability 组合指令、工具与行为；完整 Coder 也可拆成组成能力</td>
+<td>模块化本身不是 EasyAgent 独有。重点比较 Memory、Context、Session 的独立领域契约，与统一能力组合方式各自的使用成本。</td>
+</tr>
+<tr class="odd">
+<td><a href="https://docs.openhands.dev/sdk/arch/sdk">OpenHands Software Agent SDK</a></td>
+<td>Agent、Conversation、Tools、Workspace、Condenser、Security；支持本地及远程运行</td>
+<td>已有相当直接的运行时抽象。应比较契约、状态责任和产品装配方式，不笼统声称它只有产品、没有框架。</td>
+</tr>
+<tr class="even">
+<td><a href="https://github.com/cline/cline/blob/main/sdk/ARCHITECTURE.md">Cline SDK</a></td>
+<td>将模型层、无状态 Agent 循环和有状态 Core 分层，公开运行与扩展边界</td>
+<td>同样体现产品运行时可复用化。EasyAgent 的特色需由自己的模块语义和扩展示例呈现，而非仅凭“Core 解耦”。</td>
+</tr>
+</tbody>
+</table>
+<p>EasyAgent 的设计辨识度来自一组明确选择：将记忆机制与存储后端分开，将动态注入与内容来源分开，将上下文组装与检索策略分开，将会话数据与产品实例装配分开，并将执行器作为可替换的协调点。这些选择一起形成面向 Harness 的编程模型。</p>
+<p>本文将它们称为 EasyAgent 的设计特色与创新组合，而不主张首次提出模块化、依赖反转或 Harness SDK。OpenHands 已有专门讨论可组合生产 Agent 架构的论文；EasyAgent 的比较重点则是各机制的独立契约及其组合方式。<a href="https://arxiv.org/abs/2511.03690">OpenHands SDK 论文</a></p>
+<h3 id="section-34">7.2 与 Deep Agents、Pydantic AI Harness 对照</h3>
+<p>表 7：独立职责契约、中间件栈和统一能力组合的差别。</p>
+<table>
+<colgroup>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>维度</th>
+<th>EasyAgent</th>
+<th>Deep Agents</th>
+<th>Pydantic AI Harness</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>主要组合单位</td>
+<td>各职责自己的契约与 <code>with_*</code></td>
+<td>Agent 配置、中间件与后端</td>
+<td>Capability 与组合 Capability</td>
+</tr>
+<tr class="even">
+<td>默认完整 Agent</td>
+<td><code>BasicAgent</code>；产品再装配能力</td>
+<td>可直接使用的 Deep Agent</td>
+<td>Coder／Researcher，也可拆开组合</td>
+</tr>
+<tr class="odd">
+<td>定制压缩</td>
+<td>压缩器／Context</td>
+<td>可替换默认摘要中间件</td>
+<td>组合或定制上下文管理能力</td>
+</tr>
+<tr class="even">
+<td>记忆接入</td>
+<td>说明、工具、可选 Hook；不固定 CRUD</td>
+<td>记忆相关能力与后端；可用中间件扩展</td>
+<td>Memory 等 Capability，可与自定义能力组合</td>
+</tr>
+<tr class="odd">
+<td>动态信息参与</td>
+<td>MetaMessage 与工具结果各有路径</td>
+<td>中间件处理请求与运行状态</td>
+<td>指令、Hook 与能力生命周期</td>
+</tr>
+<tr class="even">
+<td>复用存储／环境</td>
+<td>公共 Storage；环境需另行接入</td>
+<td>State／Store／Composite 等后端与沙箱后端</td>
+<td>文件、Shell、记忆等能力；按需接入环境</td>
+</tr>
+<tr class="odd">
+<td>需要理解的定制概念</td>
+<td>对应职责契约及依赖</td>
+<td>中间件顺序、状态与后端约定</td>
+<td>Capability 组合、Hook 与运行上下文</td>
+</tr>
+<tr class="even">
+<td>值得注意的取舍</td>
+<td>边界显式，但接口种类较多</td>
+<td>成熟栈可复用，替换需理解栈内约定</td>
+<td>组合形式统一，需理解能力之间的协作</td>
+</tr>
+</tbody>
+</table>
+<p>依据：<a href="https://docs.langchain.com/oss/python/deepagents/customization">Deep Agents 定制指南</a>、<a href="https://pydantic.dev/docs/ai/harness/">Pydantic AI Harness</a> 和 EasyAgent 公开接口。Deep Agents 的文档明确说明默认摘要中间件可以被替换；Pydantic AI 明确支持从完整 Harness 拆解或从能力块组合。因此，EasyAgent 不以“别人只能修改参数”为论据，而以记忆、上下文、持久化等职责是否分别拥有清晰契约作为自己的设计特色。</p>
+<h3 id="section-35">7.3 与 OpenHands SDK、Cline SDK 对照</h3>
+<p>表 8：产品出身的模块化 SDK 与 EasyAgent 的运行、状态及产品边界。</p>
+<table>
+<colgroup>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>维度</th>
+<th>EasyAgent</th>
+<th>OpenHands SDK</th>
+<th>Cline SDK</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>执行与状态组织</td>
+<td>Agent 持有当前历史；执行器协调</td>
+<td>Agent 推理行动；Conversation 管理状态</td>
+<td>无状态 agents 循环；core 管理有状态编排</td>
+</tr>
+<tr class="even">
+<td>上下文扩展入口</td>
+<td>Context 与压缩器契约</td>
+<td><code>CondenserBase</code> 与事件视图</td>
+<td>core 的上下文管线与策略注册</td>
+</tr>
+<tr class="odd">
+<td>动态请求准备</td>
+<td>Prompt／MetaMessage／Hook 分工</td>
+<td>AgentContext、事件与视图</td>
+<td>prepare-turn 扩展点与消息投影</td>
+</tr>
+<tr class="even">
+<td>历史与压缩关系</td>
+<td>压缩可替换当前历史；不承诺完整日志</td>
+<td>EventLog 与压缩后的 View 分开</td>
+<td>canonical transcript 与压缩产物分开</td>
+</tr>
+<tr class="odd">
+<td>会话与恢复入口</td>
+<td>显式装配后恢复；Store 可替换</td>
+<td>Conversation 生命周期与持久化</td>
+<td>core 会话服务及存储边界</td>
+</tr>
+<tr class="even">
+<td>执行环境</td>
+<td>工具与外部设施组合；统一接口仍待完善</td>
+<td>Workspace 与本地／远端 Conversation</td>
+<td>RuntimeHost 与本地／Hub 路径</td>
+</tr>
+<tr class="odd">
+<td>对外消费层</td>
+<td>产品定义 Core、SDK 和界面</td>
+<td>SDK／Agent Server／客户端</td>
+<td>应用消费 core／RuntimeHost</td>
+</tr>
+<tr class="even">
+<td>实际选型关注点</td>
+<td>关键机制独立契约及产品自由度</td>
+<td>已有环境与事件视图设施是否匹配</td>
+<td>共享 Core 服务与运行管线是否匹配</td>
+</tr>
+</tbody>
+</table>
+<p>依据：<a href="https://docs.openhands.dev/sdk/arch/condenser">OpenHands Condenser</a>、<a href="https://docs.openhands.dev/sdk/arch/conversation">OpenHands Conversation</a>、<a href="https://github.com/cline/cline/blob/main/sdk/ARCHITECTURE.md">Cline SDK Architecture</a>。尤其在完整历史与压缩视图分离、远端环境组织上，其他方案已经提供明确设施，EasyAgent 不能用模块化理念代替现有能力。表 8 同时标出这些边界，便于团队按真实需求选择。</p>
+<h2 id="section-36">8. 优势如何落到领域需求上</h2>
+<!-- role: advantage / concrete use cases -->
+<h3 id="section-37">8.1 从分层记忆换到证据型记忆</h3>
+<p>需求不是换一个向量库，而是改变模型使用知识的方式：只有需要证据时才搜索；结果携带来源；保存时记录可复用结论。EasyAgent 的 <code>BaseMemory</code> 不强制统一记忆分类或 CRUD，因此可以由该实现提供相应说明和工具，不要求 Context 配合新增检索来源。</p>
+<p>这个需求的修改落点是记忆实现及其工具，而不是为 Context 增加一种来源，或在执行器中增加一条记忆专用分支。</p>
+<h3 id="section-38">8.2 从聊天摘要换到领域保留策略</h3>
+<p>科研记录可能要保留实验条件，运维记录可能要保留资源标识与变更结果。通过压缩器或 Context 契约，产品可以明确这些规则，而不必把每一种领域规则硬编码进默认执行器。</p>
+<p>替换压缩策略仍需保证输入输出有效，不能破坏待处理工具调用与结果关系，也不能假定摘要包含全部原始记录。模块化降低的是接入范围，不是免除实现者对自身行为的责任。</p>
+<h3 id="section-39">8.3 从本地对话扩展到自己的产品服务</h3>
+<p>产品可以将 Core 能力提供给不同界面，并通过自己的 SDK 为外部应用提供稳定入口。S4Code 的结构体现了这种分工。框架不需要知道某次查询来自命令行还是界面；界面也不需要独立维护另一套模型和记忆装配。</p>
+<p>远程任务、受控计算环境和企业审批同样是有价值的扩展方向，但它们需要相应的工具实现、执行基础设施与产品集成。现版本没有承诺一个配置项即可覆盖所有云端执行环境、故障恢复语义或 OS 级隔离。</p>
+<h3 id="section-40">8.4 知识门槛降低，来自稳定的责任边界</h3>
+<p>默认用户只需知道如何组合模块；扩展用户需要知道自己模块的契约；运行时专家才需要深入协调策略。理想情况下，开发者根据需要逐层增加控制，而不必一开始就掌握整个 Harness。</p>
+<p>这也是 EasyAgent 最重要的用户承诺：使用默认实现时能够开始工作，默认实现不合适时仍有正式的扩展路径。框架所封装的不只是代码，也包括模块如何参与运行的知识。</p>
+<h3 id="section-41">8.5 相同定制需求，比较实际修改入口</h3>
+<p>表 9：把“更方便扩展”拆解为具体工作。后两列描述常见路径，详细接口以前述项目表为准；不是假设所有项目都需要改源码。</p>
+<table>
+<colgroup>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+<col style="width: 25%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>定制需求</th>
+<th>EasyAgent 的修改落点</th>
+<th>使用应用／编排框架</th>
+<th>二次开发完整 Harness</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>改为模型主动搜索的记忆</td>
+<td>实现 Memory 的说明和工具</td>
+<td>将查询暴露为工具，处理其状态与调用位置</td>
+<td>先用自定义工具／插件，并确认默认记忆如何关闭或配合</td>
+</tr>
+<tr class="even">
+<td>压缩时保留领域证据</td>
+<td>实现压缩器，沿 Context 管线使用</td>
+<td>改消息处理或摘要节点／中间件</td>
+<td>先用总结指令与 Hook；机制替换查具体契约</td>
+</tr>
+<tr class="odd">
+<td>更换会话数据库</td>
+<td>实现 Session Store，保持装配方式</td>
+<td>替换 Checkpointer／Session 后端</td>
+<td>查产品存储接口；无合适边界时才涉及内部实现</td>
+</tr>
+<tr class="even">
+<td>Memory 与 RAG 共用后端</td>
+<td>使用公共 Storage，各自做领域转换</td>
+<td>通过共享数据组件或应用服务组合</td>
+<td>查产品后端是否能独立复用</td>
+</tr>
+<tr class="odd">
+<td>提供另一种审批界面</td>
+<td>保留 Permission，产品处理交互</td>
+<td>连接审批／中断状态与前端</td>
+<td>产品 SDK／协议通常已提供审批入口</td>
+</tr>
+<tr class="even">
+<td>更换整套循环策略</td>
+<td>替换 Executor，承担协调约定</td>
+<td>自定义图、Runner 或 Agent</td>
+<td>先核查公开扩展能力；超出边界才修改运行时</td>
+</tr>
+</tbody>
+</table>
+<p>从表 9 可以看出，EasyAgent 并不是在每一行都减少工作：使用成熟产品已有的审批协议，可能比自己装配界面更直接。它主要帮助那些<strong>必须改变内部机制、又希望保留其余运行能力</strong>的需求，将改动集中在可说明、可验证的契约边界内。</p>
+<h2 id="section-42">9. 当前能力、设计边界与选型</h2>
+<!-- role: limitation / implementation status -->
+<h3 id="section-43">9.1 不把设计图当作完成清单</h3>
+<p>表 10：EasyAgent 当前能力与边界，用于解释前面各表中的实现状态。</p>
+<table>
+<colgroup>
+<col style="width: 50%"></col>
+<col style="width: 50%"></col>
+</colgroup>
+<thead>
+<tr class="header">
+<th>能力</th>
+<th>当前依据与边界</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Agent 与执行器</td>
+<td>已有 <code>BasicAgent</code> 和可替换执行器接口，同步、异步及流式入口；整体替换执行器需履行协调责任。</td>
+</tr>
+<tr class="even">
+<td>Memory</td>
+<td>已有机制级契约和内置 <code>LayeredMemory</code>；文件记忆及其他服务是可接入方向，不在本文中宣称已有完整实现。</td>
+</tr>
+<tr class="odd">
+<td>Context / MetaMessage</td>
+<td>已分离组装、总预算、压缩与动态注入；主模型 usage 基线用于计数，失效时回退估算。</td>
+</tr>
+<tr class="even">
+<td>Session / Storage</td>
+<td>已有显式装配后恢复、Store 契约和共享存储接口；快照不是完整日志，不保证外部操作自动恢复。</td>
+</tr>
+<tr class="odd">
+<td>Tool / Permission / MCP / Skill</td>
+<td>已提供相关能力与公开入口；权限判断不是 OS 沙箱，工具仍需正确处理资源、副作用和取消。</td>
+</tr>
+<tr class="even">
+<td>Environment / 调度细粒度替换</td>
+<td>现有工具和运行设施可供使用；统一执行环境接口、任意后端无缝替换等不能当成全部已完成。</td>
+</tr>
+<tr class="odd">
+<td>产品案例与成熟度</td>
+<td>S4Code 提供具体集成案例；本版没有跨领域对照实验或生产规模基准。</td>
+</tr>
+</tbody>
+</table>
+<p>以上状态来自当前公开 API、指南和相应模块实现，不代表兼容所有第三方环境。它们也不应被解释为“装上框架就自动达到工业级”。安全部署、领域验收、运营监控与外部系统恢复仍然是完整产品的工作。<a href="../framework_api.md">框架 API</a>、<a href="../module_refactor_progress.md">模块重构记录</a></p>
+<h3 id="section-44">9.2 什么时候选择 EasyAgent</h3>
+<p>当团队预计会持续调整记忆、上下文、工具或会话机制，希望这些能力通过公开接口被控制，而且不希望维护完整产品的源码分支时，EasyAgent 是值得考虑的构建底座。它尤其适合将运行方式视为产品差异的一部分，而不是只替换界面或提示词的场景。</p>
+<p>若重点是确定性业务流程、已有生态集成或企业级编排设施，现成工作流框架可能更直接；若目标与成熟 Coding Agent 高度一致，产品 SDK 可能更省事；若需要成熟的远程工作空间和其他既有运行设施，则应与 OpenHands 等方案仔细对照。需要单一工具调用循环的简单应用，也不必为了“架构完整”安装全部模块。</p>
+<p>选择 EasyAgent，不应出于其他项目被人为描述得不够灵活，而应出于本项目的公共契约与自己的领域需求确实匹配。</p>
+<h2 id="section-45">10. 结语：把构建 Harness 变成可掌握的开发工作</h2>
+<!-- role: conclusion / takeaway -->
+<p>EasyAgent 面向的不是“再写一个调用模型的循环”，而是围绕循环形成一套开发者可以理解、使用和替换的运行机制。通用框架提供了强大的应用组织能力，成熟 Harness 提供了完整的 Agent 工作能力；EasyAgent 将自己的设计中心放在构建领域 Harness 的公共模块契约上。</p>
+<p>它的核心思想可以归结为三句话：面向运行机制，而不强制面向编排概念；复用默认实现，而不把默认实现固化为唯一机制；让开发者负责领域差异，让框架承担可复用的系统协作。</p>
+<p><strong>让使用默认能力的人不必成为 Harness 专家，让需要改变机制的人不必重建整个 Harness。</strong> 这是 EasyAgent 的产品方向，也是本白皮书所要表达的价值。</p>
+<h2 id="section-46">参考资料</h2>
+<p><strong>阅读与版本说明。</strong> 本文不提供竞品功能打分、性能雷达图、开发成本百分比或“首次／唯一”结论。官方资料证明的是项目公开的能力与接口；架构判断说明的是这些能力与目标需求的关系。未来若发布量化结论，应另行说明版本、环境与验证方法。</p>
+<p>配套的 <a href="comparison-sources.md">来源与对比口径</a> 记录第三方资料及 EasyAgent 的实现依据；<a href="editorial-review.md">编辑审校记录</a> 记录段落职责、主张—证据对应关系和本版打磨过程。两者属于编辑附件，正文可独立阅读。</p>
+<p>以下均为项目官方资料或项目作者论文，核对日期为 2026-09-07。正文中的链接直接指向支持相应描述的页面；本列表便于转发 PDF 时保留完整引用索引。</p>
+<ol type="1">
+<li><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph overview — LangChain Docs</a></li>
+<li><a href="https://docs.crewai.com/en/introduction">Introduction — CrewAI</a></li>
+<li><a href="https://developers.openai.com/api/docs/guides/agents">Agents SDK — OpenAI</a></li>
+<li><a href="https://developers.openai.com/api/docs/guides/agents/sandboxes">Sandbox Agents — OpenAI</a></li>
+<li><a href="https://adk.dev/">Agent Development Kit — Google ADK</a></li>
+<li><a href="https://learn.microsoft.com/en-us/agent-framework/overview/">Microsoft Agent Framework Overview — Microsoft Learn</a></li>
+<li><a href="https://huggingface.co/docs/smolagents/index">smolagents — Hugging Face</a></li>
+<li><a href="https://developers.llamaindex.ai/python/llamaagents/workflows/">Workflows Introduction — LlamaIndex</a></li>
+<li><a href="https://docs.haystack.deepset.ai/docs/agents">Agents — Haystack Documentation</a></li>
+<li><a href="https://learn.chatgpt.com/docs/app-server">Codex App Server — ChatGPT Learn</a></li>
+<li><a href="https://code.claude.com/docs/en/agent-sdk/overview">Agent SDK Overview — Claude Code Docs</a></li>
+<li><a href="https://github.com/google-gemini/gemini-cli">Gemini CLI — Official Repository</a></li>
+<li><a href="https://opencode.ai/docs/sdk/">SDK — OpenCode</a></li>
+<li><a href="https://aider.chat/docs/usage.html">Usage — Aider</a></li>
+<li><a href="https://docs.langchain.com/oss/python/deepagents/overview">Deep Agents Overview — LangChain Docs</a></li>
+<li><a href="https://pydantic.dev/docs/ai/harness/">Pydantic AI Harness — Pydantic Docs</a></li>
+<li><a href="https://docs.openhands.dev/sdk/arch/sdk">SDK Package Architecture — OpenHands</a></li>
+<li><a href="https://github.com/cline/cline/blob/main/sdk/ARCHITECTURE.md">Cline SDK Architecture — Official Repository</a></li>
+<li><a href="https://arxiv.org/abs/2511.03690">The OpenHands Software Agent SDK: A Composable and Extensible Foundation for Production Agents</a></li>
+<li><a href="https://docs.langchain.com/oss/python/langgraph/add-memory">Memory — LangGraph</a></li>
+<li><a href="https://docs.crewai.com/en/concepts/memory">Memory — CrewAI</a></li>
+<li><a href="https://docs.langchain.com/oss/python/deepagents/customization">Customize Deep Agents — LangChain Docs</a></li>
+<li><a href="https://docs.openhands.dev/sdk/arch/condenser">Condenser Architecture — OpenHands</a></li>
+<li><a href="https://docs.openhands.dev/sdk/arch/conversation">Conversation Architecture — OpenHands</a></li>
+<li><a href="https://code.claude.com/docs/en/agent-sdk/agent-loop">How the Agent Loop Works — Claude Code Docs</a></li>
+<li><a href="https://docs.crewai.com/en/concepts/agents">Agent Attributes and Context Window — CrewAI</a></li>
+</ol></main>
+<footer class="footer">EasyAgent · 技术白皮书 v0.3 · 资料核对：2026-09-07<br>正文与插图可编辑；对比反映查阅时的公开接口，不是性能或成熟度排名。</footer>
+</div></body></html>

@@ -573,6 +573,13 @@ class AnthropicNativeCodec(BaseProviderCodec):
             return getattr(value, "usage", None)
         return None
 
+    def _merge_stream_usage(self, previous, current):
+        # message_delta typically reports only output_tokens; retain the input
+        # and cache counts supplied by message_start. Counts are cumulative.
+        before = self._as_dict(previous) if previous is not None else {}
+        after = self._as_dict(current)
+        return {**before, **{key: value for key, value in after.items() if value is not None}}
+
     def _extract_stream_delta_text(self, delta: Any) -> Optional[str]:
         delta = self._as_dict(delta)
         if isinstance(delta, dict):
@@ -671,7 +678,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
             message = payload.get("message") if isinstance(payload, dict) else getattr(event, "message", None)
             usage = self._extract_stream_usage(message)
             if usage is not None:
-                state["usage"] = usage
+                state["usage"] = self._merge_stream_usage(state.get("usage"), usage)
             return events
         if event_type == "content_block_start":
             index = payload.get("index", 0) if isinstance(payload, dict) else getattr(event, "index", 0)
@@ -737,7 +744,7 @@ class AnthropicNativeCodec(BaseProviderCodec):
                 payload.get("delta") if isinstance(payload, dict) else getattr(event, "delta", None)
             )
             if usage is not None:
-                state["usage"] = usage
+                state["usage"] = self._merge_stream_usage(state.get("usage"), usage)
             delta = payload.get("delta") if isinstance(payload, dict) else getattr(event, "delta", None)
             stop_reason = delta.get("stop_reason") if isinstance(delta, dict) else getattr(delta, "stop_reason", None)
             if stop_reason == "tool_use":

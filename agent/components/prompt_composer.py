@@ -11,7 +11,6 @@ from core.Config import Config
 from prompt import (
     PromptBlock,
     SystemPromptTemplate,
-    build_memory_prompt_section,
     build_output_efficiency_section,
     build_safety_section,
     build_task_execution_section,
@@ -53,11 +52,17 @@ class PromptBuildContext:
 class BaseSystemPromptComposer(ABC):
     """Module extension boundary; subclasses normally override only ``build``."""
 
+    include_module_blocks = True
+
     def build(self, context: PromptBuildContext) -> list[PromptBlock]:
         return []
 
     def compose(self, context: PromptBuildContext) -> list[PromptBlock]:
-        blocks = self.build(context)
+        module_blocks = (
+            context.memory.get_prompt_blocks(context)
+            if self.include_module_blocks and context.memory is not None else []
+        )
+        blocks = SystemPromptComposer._merge([*module_blocks, *self.build(context)])
         for block in blocks:
             if not isinstance(block, PromptBlock):
                 raise TypeError(
@@ -75,8 +80,10 @@ class SystemPromptComposer(BaseSystemPromptComposer):
         blocks: Iterable[PromptBlock] | None = None,
         *,
         include_defaults: bool = True,
+        include_module_blocks: bool = True,
     ) -> None:
         self.include_defaults = bool(include_defaults)
+        self.include_module_blocks = bool(include_module_blocks)
         self._blocks = list(blocks or [])
         for block in self._blocks:
             if not isinstance(block, PromptBlock):
@@ -142,9 +149,6 @@ class SystemPromptComposer(BaseSystemPromptComposer):
         with ``include_defaults=False`` instead of copying framework composition.
         """
         blocks = self._skill_blocks(context, start_order=100)
-        memory_block = self._memory_block(context, order=140, language=language)
-        if memory_block is not None:
-            blocks.append(memory_block)
         inventory = self._tool_inventory_block(context, order=160)
         if inventory is not None:
             blocks.append(inventory)
@@ -185,20 +189,6 @@ class SystemPromptComposer(BaseSystemPromptComposer):
                 )
             ]
         return []
-
-    @staticmethod
-    def _memory_block(
-        context: PromptBuildContext, *, order: int, language: str = "zh"
-    ) -> PromptBlock | None:
-        if context.memory is None:
-            return None
-        memory_types = list(getattr(context.memory, "memory_types", {}).keys())
-        content = build_memory_prompt_section(
-            supported_memory_types=memory_types,
-            include_working_memory=False,
-            language=language,
-        )
-        return PromptBlock("memory_policy", content, placement="system_reminder", order=order)
 
     @staticmethod
     def _tool_inventory_block(context: PromptBuildContext, *, order: int) -> PromptBlock | None:

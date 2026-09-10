@@ -1,63 +1,22 @@
-"""
-Token 预算管理
+"""One budget for the complete model input; no source-specific allocation."""
 
-按来源分配 token 配额，支持动态调整。
-"""
-from dataclasses import dataclass, field
-from typing import Dict
+from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class TokenBudget:
-    """Token 预算分配器"""
+    max_tokens: int | None = None
 
-    max_tokens: int = 8000
-    default_allocation: float = 0.10
-    allocations: Dict[str, float] = field(default_factory=lambda: {
-        "history": 0.80,
-        "rag": 0.10,
-        "memory": 0.10,
-    })
+    def __post_init__(self):
+        if self.max_tokens is not None and (isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int) or self.max_tokens < 0):
+            raise ValueError("max_tokens must be a non-negative integer or None")
 
-    def get_budget(self, source: str) -> int:
-        """获取指定来源的 token 预算"""
-        ratio = self.allocations.get(source, self.default_allocation)
-        return int(self.max_tokens * ratio)
+    def remaining(self, used: int) -> int | None:
+        return None if self.max_tokens is None else max(0, self.max_tokens - used)
 
-    def set_allocation(self, source: str, ratio: float) -> None:
-        """设置指定来源的分配比例"""
-        self.allocations[source] = ratio
 
-    def remaining(self, used: Dict[str, int]) -> int:
-        """计算剩余可用 token"""
-        return self.max_tokens - sum(used.values())
-
-    def redistribute(self, used: Dict[str, int]) -> Dict[str, int]:
-        """将各来源未用完的配额按比例重分配给超额来源
-
-        Returns:
-            各来源最终可用 token 数
-        """
-        budgets = {s: self.get_budget(s) for s in self.allocations}
-        surplus = 0
-        deficit_sources = []
-
-        for source, budget in budgets.items():
-            actual = used.get(source, 0)
-            if actual < budget:
-                surplus += budget - actual
-                budgets[source] = actual  # 只给实际量
-            elif actual > budget:
-                deficit_sources.append(source)
-
-        # 按原比例把 surplus 分配给 deficit sources
-        if deficit_sources and surplus > 0:
-            total_deficit_ratio = sum(
-                self.allocations[s] for s in deficit_sources
-            )
-            for source in deficit_sources:
-                if total_deficit_ratio > 0:
-                    share = int(surplus * self.allocations[source] / total_deficit_ratio)
-                    budgets[source] += share
-
-        return budgets
+class ContextBudgetExceeded(ValueError):
+    def __init__(self, tokens: int, max_tokens: int):
+        self.tokens = tokens
+        self.max_tokens = max_tokens
+        super().__init__(f"Request requires approximately {tokens} input tokens; budget is {max_tokens}")

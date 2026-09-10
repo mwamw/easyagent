@@ -10,7 +10,8 @@ from agent import BasicAgent
 from agent.components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext
 from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
-from db import ConversationStore, SessionStore
+from easyagent.session import SQLiteSessionStore as SessionStore
+from db import ConversationStore
 from metamessage import MetaMessage, MetaMessageLifecycle
 from observability import InMemoryObservabilityStore
 from plan import PlanModeConfig
@@ -160,6 +161,8 @@ def test_session_store_crud_and_expiration(tmp_path):
 
 
 def test_conversation_store_round_trips_canonical_messages(tmp_path):
+    # The old messages table is retained only as a legacy-data format.
+    from db import SessionStore
     path = str(tmp_path / "conversations.sqlite3")
     sessions = SessionStore(path)
     conversations = ConversationStore(path)
@@ -210,19 +213,18 @@ def test_basic_agent_restores_explicit_standard_modules(tmp_path):
     agent.save_session("session-v3", store=store)
 
     snapshot = store.get_session("session-v3")["snapshot"]
-    assert snapshot["schemaVersion"] == 3
-    assert snapshot["modules"]["tools"]["state"]["names"] == ["Echo"]
+    assert snapshot["schemaVersion"] == 4
+    assert snapshot["tools"] == ["Echo"]
     assert snapshot["modules"]["plan"]["implementation"] == "PlanModeManager"
     assert snapshot["modules"]["observability"]["implementation"] == "ObservabilityManager"
     saved_events = snapshot["modules"]["runtimeEvents"]["state"]["events"]
     assert saved_events[-1]["type"] == "agent.invoke.completed"
 
-    restored = BasicAgent.load_session(
-        "session-v3",
-        llm=SessionLLM(),
-        store=store,
-        tool_registry=_registry(),
-    )
+    restored = (BasicAgent("session-agent", SessionLLM(), system_prompt="session prompt")
+                .with_tool(_registry())
+                .with_plan(config=PlanModeConfig(register_tools=False))
+                .with_observability(store=InMemoryObservabilityStore()))
+    restored.restore_session("session-v3", store=store)
 
     assert restored.system_prompt == "session prompt"
     assert restored.plan is not None and restored.plan.is_active
@@ -268,11 +270,8 @@ def test_session_restores_directory_skills_and_conditional_activation(tmp_path):
     assert skill_state["activatedPathSkills"] == ["python-review"]
     assert [item["name"] for item in skill_state["skills"]] == ["python-review"]
 
-    restored = BasicAgent.load_session(
-        "skill-session",
-        llm=SessionLLM(),
-        store=store,
-    )
+    restored = BasicAgent("skill-session", SessionLLM()).with_skill(tmp_path / "skills")
+    restored.restore_session("skill-session", store=store)
 
     assert restored.skill_manager is not None
     assert restored.skill_manager.has_skill("python-review")
@@ -293,17 +292,13 @@ def test_restore_reports_missing_custom_and_optional_modules(tmp_path):
     )
     agent.save_session("missing", store=store)
 
-    restored = BasicAgent.load_session(
-        "missing",
-        llm=SessionLLM(),
-        store=store,
-    )
+    restored = BasicAgent("missing", SessionLLM()).restore_session("missing", store=store)
     report = restored.get_last_restore_report()
     codes = {item["code"] for item in report["issues"]}
 
     assert report["status"] == "degraded"
-    assert "prompt_implementation_missing" in codes
-    assert "tasks_implementation_missing" in codes
+    assert "component_missing" in codes
+    assert any(item["component"] == "tasks" for item in report["issues"])
     assert "missing_tools" in codes
 
 

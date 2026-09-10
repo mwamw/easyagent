@@ -38,7 +38,9 @@ class VectorRetriever(BaseRetriever):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
     ):
-        self.vectorstore = vectorstore
+        from storage.vector import VectorStore
+        from ..index import ChunkIndex
+        self.vectorstore = ChunkIndex(vectorstore) if isinstance(vectorstore, VectorStore) else vectorstore
         self.embedding = embedding
         self.k = k
         self.score_threshold = score_threshold

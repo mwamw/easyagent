@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 780" role="img" aria-labelledby="title desc">
+  <title id="title">三种开发入口</title>
+  <desc id="desc">应用编排、Harness 构建与完整 Agent 集成是不同入口，不是能力高低排序。EasyAgent 以运行机制的组合和替换作为入口。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10Z" fill="#627188"/></marker>
+    <style>text{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b44} .h{font-size:30px;font-weight:700}.b{font-size:22px}.s{font-size:18px;fill:#52647b}.k{font-size:16px;letter-spacing:2px;font-weight:700}.line{stroke:#627188;stroke-width:2;fill:none;marker-end:url(#arrow)}</style>
+  </defs>
+  <rect width="1440" height="780" rx="24" fill="#f5f7fa"/>
+  <text x="52" y="58" class="k" fill="#087e80">EASYAGENT / DESIGN PERSPECTIVE</text>
+  <text x="52" y="107" font-size="36" font-weight="700">同样构建 Agent，开发者面对的入口不同</text>
+  <text x="52" y="146" class="s">比较的是编程关注点，而不是功能完备度或运行性能。</text>
+  <rect x="52" y="190" width="424" height="504" rx="18" fill="white" stroke="#d5deea"/>
+  <rect x="508" y="190" width="424" height="504" rx="18" fill="#eaf6f4" stroke="#168883" stroke-width="2"/>
+  <rect x="964" y="190" width="424" height="504" rx="18" fill="white" stroke="#d5deea"/>
+  <text x="82" y="236" class="k">01 / APPLICATION</text>
+  <text x="82" y="285" class="h">组织应用执行</text>
+  <text x="82" y="322" class="s">用状态、步骤和关系描述工作</text>
+  <rect x="88" y="360" width="148" height="58" rx="9" fill="#edf2fa"/>
+  <rect x="292" y="360" width="148" height="58" rx="9" fill="#edf2fa"/>
+  <text x="162" y="397" text-anchor="middle" class="b">任务 A</text>
+  <text x="366" y="397" text-anchor="middle" class="b">任务 B</text>
+  <path d="M240 389H280" class="line"/>
+  <path d="M366 424V450H264V472" class="line"/>
+  <rect x="166" y="484" width="196" height="58" rx="9" fill="#edf2fa"/>
+  <text x="264" y="521" text-anchor="middle" class="b">Agent 工作单元</text>
+  <text x="82" y="597" class="b">主要问题</text>
+  <text x="82" y="631" class="s">下一步做什么，状态如何流转？</text>
+  <text x="82" y="662" class="s">适合流程与协作的组织</text>
+  <text x="538" y="236" class="k">02 / HARNESS</text>
+  <text x="538" y="285" class="h">构建运行机制</text>
+  <text x="538" y="322" class="s">EasyAgent 的主要编程入口</text>
+  <g fill="white" stroke="#9dcfc8">
+    <rect x="544" y="360" width="164" height="58" rx="9"/><rect x="732" y="360" width="164" height="58" rx="9"/>
+    <rect x="544" y="434" width="164" height="58" rx="9"/><rect x="732" y="434" width="164" height="58" rx="9"/>
+  </g>
+  <text x="626" y="397" text-anchor="middle" class="b">执行 / 工具</text><text x="814" y="397" text-anchor="middle" class="b">上下文</text>
+  <text x="626" y="471" text-anchor="middle" class="b">记忆</text><text x="814" y="471" text-anchor="middle" class="b">会话 / 权限</text>
+  <text x="720" y="535" text-anchor="middle" class="s">默认实现 + 对应模块契约</text>
+  <text x="538" y="597" class="b">主要问题</text>
+  <text x="538" y="631" class="s">这个 Agent 怎样运行和扩展？</text>
+  <text x="538" y="662" class="s">替换领域差异，复用共同机制</text>
+  <text x="994" y="236" class="k">03 / PRODUCT</text>
+  <text x="994" y="285" class="h">集成完整 Agent</text>
+  <text x="994" y="322" class="s">配置、调用并扩展现成运行时</text>
+  <rect x="1000" y="360" width="352" height="84" rx="10" fill="#f0edf8"/>
+  <text x="1176" y="395" text-anchor="middle" class="b">已装配的 Harness</text>
+  <text x="1176" y="424" text-anchor="middle" class="s">工具 · 上下文 · 会话</text>
+  <path d="M1176 451V474" class="line"/>
+  <rect x="1058" y="486" width="236" height="58" rx="9" fill="#f0edf8"/>
+  <text x="1176" y="523" text-anchor="middle" class="b">SDK / 服务 / 界面</text>
+  <text x="994" y="597" class="b">主要问题</text>
+  <text x="994" y="631" class="s">怎样将这套 Agent 用到产品中？</text>
+  <text x="994" y="662" class="s">适合直接复用已有产品能力</text>
+  <text x="52" y="741" class="s">一个项目可以覆盖多个入口。模块化 Harness SDK 已处于中间位置，应作为 EasyAgent 的直接比较对象。</text>
+</svg>

@@ -146,7 +146,7 @@ Permission 决定能否执行；Hook 可以阻断或改写；Callback 只观察 
 
 - `ContextManager`
 - `ContextBuilder`
-- `BaseContextSource`
+- `BaseContextManager`
 - `ContextItem`
 - `TokenBudget`
 - `TokenCounter`
@@ -189,8 +189,9 @@ Training 只消费 observability store，不是 Agent 内部执行模块。
 
 `easyagent.session`：
 
-- `SessionStore`
-- `ConversationStore`
+- `BaseSessionStore`
+- `SQLiteSessionStore` / `InMemorySessionStore`
+- `SessionPersistence` / `SessionStateParticipant`
 - `SessionRestoreReport`
 - `ComponentRestoreReport`
 - `RestoreIssue`

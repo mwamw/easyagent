@@ -1,3 +1,4 @@
+from memory.repositories import document_repository, vector_index
 from typing import List, Dict, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 import hashlib
@@ -9,12 +10,12 @@ import numpy as np
 from PIL import Image
 import io
 try:
-    from .BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
+    from .BaseMemory import MemoryConfig,BaseMemoryLayer,MemoryItem,MemoryType,ForgetType
     from .Store.VectorStore import VectorStore
     from .Store.DocumentStore import DocumentStore
     from .Embedding.BaseEmbeddingModel import BaseEmbeddingModel
 except ImportError:
-    from BaseMemory import MemoryConfig,BaseMemory,MemoryItem,MemoryType,ForgetType
+    from BaseMemory import MemoryConfig,BaseMemoryLayer,MemoryItem,MemoryType,ForgetType
     from Store.VectorStore import VectorStore
     from Store.DocumentStore import DocumentStore
     from Embedding.BaseEmbeddingModel import BaseEmbeddingModel
@@ -39,13 +40,13 @@ class Perception:
         else:
             return hashlib.md5(str(self.data).encode()).hexdigest()
 
-class PerceptualMemory(BaseMemory):
+class PerceptualMemory(BaseMemoryLayer):
     def __init__(self,memory_config:MemoryConfig,document_store:DocumentStore,vector_stores:dict[str,VectorStore],embedding_model:BaseEmbeddingModel,supported_modalities:Optional[List[str]]=None
     ,image_encoder:Optional[str]=None,audio_encoder:Optional[str]=None,video_encoder:Optional[str]=None):
         super().__init__(memory_config)
-        self.document_store=document_store
+        self.document_store = document_repository(document_store)
         self.supported_modalities=supported_modalities if supported_modalities else ["text"]
-        self.vector_stores=vector_stores
+        self.vector_stores = {name: vector_index(store) for name, store in vector_stores.items()}
         self.embedding_model=embedding_model
         self.text_embedding_dim=self.embedding_model.dimension
 
@@ -224,7 +225,7 @@ class PerceptualMemory(BaseMemory):
     def _encoder_text(self,data:str)->Optional[list[float]]:
         """编码文本数据"""
         if self.embedding_model:
-            return self.embedding_model.embed([data])[0]
+            return self.embedding_model.embed_documents([data])[0]
         else:
             logger.warning("文本编码器编码失败")
             return None

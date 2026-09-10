@@ -96,7 +96,7 @@ from .runtime import (
     RuntimeEventType,
     TeamManager,
 )
-from .session import ConversationStore, SessionRestoreReport, SessionStore
+from .session import BaseSessionStore, SQLiteSessionStore, InMemorySessionStore, SessionRestoreReport
 from .skills import SkillManager, SkillManifest, SkillTool
 from .tasks import TaskRecord, TaskService, TaskStatus
 from .tools import Tool, ToolConflictPolicy, ToolRegistry, ToolResult, ToolSpec
@@ -138,7 +138,9 @@ __all__ = [
     "CodeIntelProvider",
     "Config",
     "ContextManager",
-    "ConversationStore",
+    "BaseSessionStore",
+    "SQLiteSessionStore",
+    "InMemorySessionStore",
     "DangerousCommandGuardrail",
     "DefaultAgentExecutor",
     "EasyLLM",
@@ -203,7 +205,6 @@ __all__ = [
     "SQLiteObservabilityStore",
     "SecretLeakGuardrail",
     "SessionRestoreReport",
-    "SessionStore",
     "SkillManager",
     "SkillManifest",
     "SkillTool",

@@ -1,21 +1,4 @@
-"""
-上下文工程模块（Context Engineering）
-
-提供模块化、可组合的上下文管理能力：
-- 多源上下文收集（RAG、Memory、对话历史）
-- Token 预算管理与智能压缩
-- 多种格式化输出（Plain/XML/Markdown）
-- 与 Agent 系统无缝集成
-
-Quick Start:
-    from context import ContextManager
-    from context.source import RAGContextSource
-    from context.formatter import XMLFormatter
-
-    manager = ContextManager(max_tokens=8000)
-    manager.add_source(RAGContextSource(pipeline))
-    manager.set_formatter(XMLFormatter())
-"""
+"Request assembly, total input budgets, and replaceable compression."
 
 # 核心
 from .window import ContextItem, ContextWindow
@@ -27,10 +10,10 @@ from .token.counter import TokenCounter
 from .token.budget import TokenBudget
 
 # 来源
-from .source.base import BaseContextSource
-from .source.history_source import HistoryContextSource
-from .source.rag_source import RAGContextSource
-from .source.memory_source import MemoryContextSource
+
+
+
+
 
 # 压缩器
 from .compressor.base import BaseCompressor
@@ -56,10 +39,10 @@ __all__ = [
     "TokenCounter",
     "TokenBudget",
     # 来源
-    "BaseContextSource",
-    "HistoryContextSource",
-    "RAGContextSource",
-    "MemoryContextSource",
+
+
+
+
     # 压缩器
     "BaseCompressor",
     "SlidingWindowCompressor",
@@ -76,3 +59,8 @@ __all__ = [
     "XMLFormatter",
     "MarkdownFormatter",
 ]
+
+from .base import BaseContextManager
+from .manager import HistoryCompactionResult
+from .token.budget import ContextBudgetExceeded
+__all__ += ["BaseContextManager", "HistoryCompactionResult", "ContextBudgetExceeded"]

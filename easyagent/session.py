@@ -1,12 +1,10 @@
-"""Stable public session exports."""
+"""Public session persistence contracts and explicit storage implementations."""
+from core.session import (
+    BaseSessionStore, SQLiteSessionStore, InMemorySessionStore, SessionConflictError,
+    SessionPersistence, SessionStateParticipant,
+    ComponentRestoreReport, RestoreIssue, SessionRestoreReport,
+)
 
-from core.session import ComponentRestoreReport, RestoreIssue, SessionRestoreReport
-from db import ConversationStore, SessionStore
-
-__all__ = [
-    "ComponentRestoreReport",
-    "ConversationStore",
-    "RestoreIssue",
-    "SessionRestoreReport",
-    "SessionStore",
-]
+__all__ = ["BaseSessionStore", "SQLiteSessionStore", "InMemorySessionStore",
+           "SessionConflictError", "SessionPersistence", "SessionStateParticipant",
+           "ComponentRestoreReport", "RestoreIssue", "SessionRestoreReport"]

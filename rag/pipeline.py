@@ -86,7 +86,9 @@ class RAGPipeline:
     ):
         self.llm = llm
         self.embedding = embedding
-        self.vectorstore = vectorstore
+        from storage.vector import VectorStore
+        from .index import ChunkIndex
+        self.vectorstore = ChunkIndex(vectorstore) if isinstance(vectorstore, VectorStore) else vectorstore
         self.k = k
         self.prompt_template = prompt_template or self.DEFAULT_PROMPT
         self.query_transformer = query_transformer

@@ -180,6 +180,16 @@ class BaseProvider(ABC):
             "supportsCacheUsageFields",
             bool(getattr(capability, "supports_usage_cache_fields", False)),
         )
+        # Context occupancy and billing/cache fields have different inclusion
+        # rules. Preserve reported fields and expose an unambiguous context base.
+        inputs = _usage_int(normalized, "inputTokens")
+        outputs = _usage_int(normalized, "outputTokens")
+        if inputs is not None:
+            if normalized.get("cacheUsageSemantics") == "anthropic_style":
+                inputs += (_usage_int(normalized, "cacheReadTokens") or 0) + (_usage_int(normalized, "cacheCreationTokens") or 0)
+            normalized["contextInputTokens"] = inputs
+            if outputs is not None:
+                normalized["contextTotalTokens"] = inputs + outputs
         return normalized
 
     def wrap_response_with_usage(

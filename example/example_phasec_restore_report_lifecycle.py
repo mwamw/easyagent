@@ -158,27 +158,8 @@ def main() -> None:
     print("If the background agent has not finished yet, restore report should show a degraded/interrupted runtime path.")
     print()
 
-    restored = BasicAgent.load_session(
-        session_id,
-        llm=EasyLLM(
-            provider="openai",
-            base_url="http://127.0.0.1:5124/v1",
-            api_key="122",
-            model="qwen3.5-9b",
-        ),
-        store=env["session_db"],
-        task_service=agent.task_service,
-        worktree_manager=WorktreeManager(
-            repo_root=WorktreeManager.detect_repo_root(env["repo"]),
-            storage_dir=os.path.join(example_dir, ".phasec-worktrees"),
-            original_cwd=env["repo"],
-        ),
-        multi_agent_runtime=MultiAgentRuntime(
-            workspace_root=env["repo"],
-            storage_dir=os.path.join(example_dir, ".phasec-agents"),
-            max_background_tasks=4,
-        ),
-    )
+    restored, _ = build_agent()
+    restored.restore_session(session_id, store=env["session_db"])
 
     print("=== Restore Report ===")
     print(restored.get_last_restore_report())

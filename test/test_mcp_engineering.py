@@ -195,18 +195,10 @@ class TestMCPEngineering(unittest.TestCase):
             session_id = "mcp-phase-f"
             agent.save_session(session_id, store=db_path)
 
-            restored = BasicAgent.load_session(
-                session_id,
-                llm=DummyLLM(),
-                store=db_path,
-                mcp_managers=[
-                    MCPToolManager(
-                        server_source="alpha",
-                        client=FakeMCPClient(),
-                        include_resources=True,
-                    )
-                ],
-            )
+            restored = BasicAgent("assistant", DummyLLM()).with_mcp(MCPToolManager(
+                server_source="alpha", client=FakeMCPClient(), include_resources=True,
+            ))
+            restored.restore_session(session_id, store=db_path)
 
             self.assertIsNotNone(restored.tool_registry)
             self.assertTrue(restored.tool_registry.has_tool("echo"))

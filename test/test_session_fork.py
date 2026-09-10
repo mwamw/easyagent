@@ -1,6 +1,6 @@
 import pytest
 from easyagent import BasicAgent
-from easyagent.session import SessionStore
+from easyagent.session import SQLiteSessionStore as SessionStore
 from test_session_persistence import SessionLLM
 
 
@@ -18,8 +18,9 @@ def test_public_fork_excludes_execution_handles_and_preserves_source(tmp_path):
         assert agent.current_task_id == "active-task"
         assert branch["snapshot"]["currentTaskId"] is None
         assert branch["snapshot"]["history"] == source["snapshot"]["history"]
-        assert branch["metadata"] == {"parent": "source"}
-        with pytest.raises(Exception, match="already exists"):
+        assert branch["metadata"]["parent"] == "source"
+        assert branch["metadata"]["forked_from_session_id"] == "source"
+        with pytest.raises(Exception, match="revision changed"):
             agent.fork_session("source", store=store)
         assert store.get_session("source", touch=False)["snapshot"] == source["snapshot"]
     finally:

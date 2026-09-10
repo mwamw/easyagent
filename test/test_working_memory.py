@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'memory', 'V2'))
 
 from memory.V2.WorkingMemory import WorkingMemory
-from memory.V2.BaseMemory import BaseMemory, MemoryConfig, MemoryItem, ForgetType
+from memory.V2.BaseMemory import BaseMemoryLayer, MemoryConfig, MemoryItem, ForgetType
 
 
 class TestWorkingMemoryBasic(unittest.TestCase):

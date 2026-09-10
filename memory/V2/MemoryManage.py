@@ -5,10 +5,10 @@ import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 try:
-    from .BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from .BaseMemory import BaseMemoryLayer, ForgetType, MemoryConfig, MemoryItem
     from .WorkingMemory import WorkingMemory
 except ImportError:
-    from BaseMemory import BaseMemory, ForgetType, MemoryConfig, MemoryItem
+    from BaseMemory import BaseMemoryLayer, ForgetType, MemoryConfig, MemoryItem
     from WorkingMemory import WorkingMemory
 
 if TYPE_CHECKING:
@@ -40,7 +40,8 @@ class MemoryManage:
     ):
         self.config = config or MemoryConfig()
         self.user_id = user_id
-        self.memory_types: Dict[str, BaseMemory] = {}
+        self._owned_resources = []
+        self.memory_types: Dict[str, BaseMemoryLayer] = {}
 
         if enable_working:
             self.memory_types["working"] = working_memory or WorkingMemory(self.config)
@@ -108,6 +109,7 @@ class MemoryManage:
         episode_document_store = SQLiteDocumentStore(
             os.getenv("EPISODIC_SQLITE_PATH") or "./EpisodicMemory.db"
         )
+        self._owned_resources.append(episode_document_store)
         episodic_vector_store = QdrantVectorStore(
             way="local",
             collection_name="episodic_memory",
@@ -115,9 +117,11 @@ class MemoryManage:
             port=int(os.getenv("QDRANT_PORT") or 6379),
             vector_size=int(os.getenv("QDRANT_VECTOR_SIZE") or 384),
         )
+        self._owned_resources.append(episodic_vector_store)
         embedding_model = HuggingfaceEmbeddingModel(
             os.getenv("EMBEDDING_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
         )
+        self._owned_resources.append(embedding_model)
         return EpisodicMemory(
             self.config,
             episode_document_store,
@@ -145,6 +149,8 @@ class MemoryManage:
 
         try:
             memory_id=self.memory_types[memory_type].add_memory(memory_item)
+            if not memory_id:
+                raise RuntimeError(f"The {memory_type} backend did not save the memory")
             logger.debug(f"Add memory to {memory_type}: {memory_id}")
             return memory_id
         except Exception as e:
@@ -194,9 +200,11 @@ class MemoryManage:
                 results=self.memory_types[memory_type].search_memory(query,limit,user_id=self.user_id,importance_threshold=importance_threshold,time_range=time_range,session_id=session_id)
                 all_results.extend(results)
             except Exception as e:
-                logger.warning(f"Failed to search memory in {memory_type}: {e}")
+                raise RuntimeError(f"Failed to search memory in {memory_type}: {e}") from e
         all_results.sort(key=lambda x: x.importance, reverse=True)
-        return all_results
+        if session_id is not None:
+            all_results = [item for item in all_results if item.metadata.get("session_id") == session_id]
+        return all_results[:max(0, limit)]
 
 
     def update_memory(self,memory_id:str,content:str,importance:Optional[float]=None,metadata:Optional[Dict[str,Any]]=None)->bool:
@@ -281,8 +289,10 @@ class MemoryManage:
             if memory.importance>=importance_threshold:
                 merged_memories.append(memory)
         for memory in merged_memories:
+            copied = memory.model_copy(update={"type": target_type}, deep=True)
+            if not target_memory.add_memory(copied):
+                raise RuntimeError("Memory migration failed; the source memory was preserved")
             if source_memory.remove_memory(memory.id):
-                target_memory.add_memory(memory)
                 merged_count+=1
         logger.info(f"Merged {merged_count} memories from {source_type} to {target_type}")        
             
@@ -298,4 +308,3 @@ class MemoryManage:
         for memory_type,memory_instance in self.memory_types.items():
             memory_instance.load_from_store()
         logger.info("Loaded all memories")
-

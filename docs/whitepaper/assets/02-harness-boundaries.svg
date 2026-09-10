@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 920" role="img" aria-labelledby="title desc">
+  <title id="title">EasyAgent 与产品 Core、对外接口的职责边界</title>
+  <desc id="desc">CLI、TUI、SDK 和无界面服务平级消费产品 Core。产品 Core 使用 EasyAgent 的公共模块，外部执行环境由工具和产品接入。</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#6f8196"/></marker>
+    <style>text{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b44}.h{font-size:28px;font-weight:700}.b{font-size:23px}.s{font-size:18px;fill:#53677e}.k{font-size:16px;font-weight:700;letter-spacing:2px}.line{fill:none;stroke:#6f8196;stroke-width:2;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1440" height="920" rx="24" fill="#f5f7fa"/>
+  <text x="52" y="58" class="k">EASYAGENT / RESPONSIBILITY BOUNDARIES</text>
+  <text x="52" y="106" font-size="36" font-weight="700">框架提供机制，产品装配能力，界面负责交互</text>
+  <text x="52" y="144" class="s">箭头表示使用关系；同层接口不要求通过彼此访问 Core。</text>
+  <g fill="white" stroke="#cdd8e6">
+    <rect x="260" y="192" width="238" height="68" rx="12"/><rect x="526" y="192" width="238" height="68" rx="12"/>
+    <rect x="792" y="192" width="238" height="68" rx="12"/><rect x="1058" y="192" width="278" height="68" rx="12"/>
+  </g>
+  <text x="52" y="232" class="b">对外接口</text>
+  <text x="379" y="236" text-anchor="middle" class="b">CLI</text><text x="645" y="236" text-anchor="middle" class="b">TUI</text>
+  <text x="911" y="236" text-anchor="middle" class="b">产品 SDK</text><text x="1197" y="236" text-anchor="middle" class="b">服务 / Bridge</text>
+  <path d="M379 267V307" class="line"/><path d="M645 267V307" class="line"/>
+  <path d="M911 267V307" class="line"/><path d="M1197 267V307" class="line"/>
+  <rect x="260" y="319" width="1076" height="135" rx="16" fill="#e8eef9" stroke="#bccbe1"/>
+  <text x="52" y="380" class="b">领域产品</text>
+  <text x="294" y="362" class="h">Product Core</text>
+  <text x="294" y="401" class="b">产品 Agent · 身份与配置 · 运行与会话服务 · 工具装配</text>
+  <text x="294" y="432" class="s">S4CodeAgent 是 Core 的组成部分；不是整个 Core，也不是外部应用的 SDK。</text>
+  <path d="M798 461V504" class="line"/>
+  <rect x="260" y="516" width="1076" height="239" rx="16" fill="#eaf6f4" stroke="#168883" stroke-width="2"/>
+  <text x="52" y="580" class="b">运行机制</text><text x="294" y="560" class="h">EasyAgent 公共模块契约与默认实现</text>
+  <g fill="white" stroke="#a8d4cd">
+    <rect x="294" y="584" width="232" height="57" rx="9"/><rect x="553" y="584" width="232" height="57" rx="9"/>
+    <rect x="812" y="584" width="232" height="57" rx="9"/><rect x="1071" y="584" width="232" height="57" rx="9"/>
+    <rect x="294" y="660" width="232" height="57" rx="9"/><rect x="553" y="660" width="232" height="57" rx="9"/>
+    <rect x="812" y="660" width="232" height="57" rx="9"/><rect x="1071" y="660" width="232" height="57" rx="9"/>
+  </g>
+  <text x="410" y="621" text-anchor="middle" class="b">Agent / Executor</text><text x="669" y="621" text-anchor="middle" class="b">Model / Tool</text>
+  <text x="928" y="621" text-anchor="middle" class="b">Context</text><text x="1187" y="621" text-anchor="middle" class="b">Memory</text>
+  <text x="410" y="697" text-anchor="middle" class="b">Session / Storage</text><text x="669" y="697" text-anchor="middle" class="b">Permission</text>
+  <text x="928" y="697" text-anchor="middle" class="b">MetaMessage</text><text x="1187" y="697" text-anchor="middle" class="b">Events / Hooks</text>
+  <path d="M798 762V796" class="line"/>
+  <rect x="260" y="808" width="1076" height="61" rx="12" fill="white" stroke="#a3afbf" stroke-dasharray="7 5"/>
+  <text x="52" y="847" class="b">外部设施</text><text x="798" y="847" text-anchor="middle" class="b">模型服务 · 数据库 · 文件系统 · OS / 容器 / 远端执行环境</text>
+  <text x="260" y="899" class="s">外部设施需正确接入；Permission 的策略判断不等于 OS 级隔离，架构分层不代表所有后端已实现。</text>
+</svg>

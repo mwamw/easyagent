@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "easyagent"
-version = "0.7.2"
-description = "A code-agent-first general agent framework with runtime, tools, tasks, MCP, and session lifecycle support."
+version = "0.8.0"
+description = "A composable Python framework for building custom Agent Harnesses with replaceable runtime components."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -47,6 +47,7 @@ mcp = [
 dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=0.23.0",
+  "tomli>=2.0; python_version < '3.11'",
   "google-search-results>=2.4.0",
 ]
 
@@ -80,6 +81,7 @@ include = [
   "Tool*",
   "observability*",
   "training*",
+  "storage*",
 ]
 exclude = [
   "docs*",

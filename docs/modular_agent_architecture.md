@@ -36,7 +36,7 @@ optional modules
   -> TaskService
   -> ObservabilityManager
   -> MultiAgentRuntime
-  -> MemoryManage
+  -> BaseMemory (optional; LayeredMemory is one implementation)
   -> MCPToolManager
   -> CodeIntelManager
   -> WorktreeManager

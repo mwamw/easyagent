@@ -1,10 +1,2 @@
-from abc import ABC,abstractmethod
-from typing import List,Any
-class BaseEmbeddingModel(ABC):
-    @abstractmethod
-    def embed(self,text:List[str])->List[List[float]]:
-        pass
-    @property
-    @abstractmethod
-    def dimension(self)->int:
-        pass
+"""Layered memory uses the common embedding interface."""
+from storage.embedding import EmbeddingModel as BaseEmbeddingModel

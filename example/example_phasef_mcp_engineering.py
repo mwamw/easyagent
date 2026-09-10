@@ -93,12 +93,9 @@ def main() -> None:
     # 2. 保存 session，快照里会带上 mcp_runtime。
     agent.save_session(session_id, store=store_path)
 
-    # 3. 重新恢复 session，ToolRegistry 会自动重建 MCP runtime。
-    restored = BasicAgent.load_session(
-        session_id,
-        llm=build_llm(),
-        store=store_path,
-    )
+    # 3. 显式装配 MCP 模块后恢复数据；持久化层不创建客户端。
+    restored = build_agent(workspace_root)
+    restored.restore_session(session_id, store=store_path)
     print("=== Restore Report ===")
     print(restored.get_last_restore_report())
 

@@ -12,13 +12,12 @@ if project_root not in sys.path:
 from core.llm import EasyLLM
 from agent.BasicAgent import BasicAgent
 from Tool.ToolRegistry import ToolRegistry
-from memory.V2.MemoryManage import MemoryManage
+from easyagent.memory import LayeredMemory
 from memory import MemoryConfig
 from Tool.builtin import (
     register_search_tool,
     register_web_fetch_tool,
 )
-from memory.V2 import EpisodicMemory
 async def main():
     load_dotenv()
     
@@ -27,7 +26,7 @@ async def main():
     
     # 1. 初始化记忆后端
     memory_config = MemoryConfig()
-    memory_manage = MemoryManage(memory_config,enable_episodic=False)
+    memory_manage = LayeredMemory(memory_config,enable_episodic=False)
     # 2. 注册搜索、抓取和记忆工具
     register_search_tool(registry)
     register_web_fetch_tool(registry)

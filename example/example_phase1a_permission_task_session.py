@@ -178,7 +178,7 @@ def build_prompt() -> str:
 5. 最终说明：
    - 哪些权限规则命中了
    - 创建或更新了哪些任务
-   - 如果现在执行 save_session("phase1a-demo") 再 load_session，会保留哪些状态
+   - 如果现在执行 save_session("phase1a-demo") 再 restore_session，会保留哪些状态
 
 注意：
 - 这个 workspace 内的 FileWrite/FileEdit 已被高优先级规则允许。
@@ -201,9 +201,8 @@ def main() -> None:
     print("result = agent.invoke(prompt, max_iter=12)")
     print(f'agent.save_session("phase1a-demo", store="{SESSION_DB}")')
     print(
-        "restored = BasicAgent.load_session("
-        f'"phase1a-demo", llm=agent.llm, store="{SESSION_DB}", task_service=agent.task_service'
-        ")"
+        "restored = build_agent(); "
+        f'restored.restore_session("phase1a-demo", store="{SESSION_DB}")'
     )
     print("print(restored.get_context_usage())")
     print()

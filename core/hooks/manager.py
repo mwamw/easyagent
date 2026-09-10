@@ -26,8 +26,37 @@ class HookManager:
         for hook in hooks:
             self.add_hook(hook)
 
+    def remove_hook(self, hook: BaseHook) -> None:
+        self._hooks = [item for item in self._hooks if item is not hook]
+
     def before_llm_request(self, payload: dict[str, Any]) -> HookExecutionResult:
         return self._run_stage("before_llm_request", payload)
+
+    def before_context(self, payload: dict[str, Any]) -> HookExecutionResult:
+        return self._run_stage("before_context", payload)
+
+    async def arun_stage(self, stage: str, payload: dict[str, Any]) -> HookExecutionResult:
+        """Await native async hooks in registration order; never fire-and-forget."""
+        current = dict(payload)
+        audit = []
+        for hook in self._hooks:
+            asynchronous = getattr(hook, "a" + stage, None)
+            if callable(asynchronous):
+                decision = await asynchronous(dict(current))
+            else:
+                handler = getattr(hook, stage, None)
+                decision = handler(dict(current)) if callable(handler) else None
+            if decision is None:
+                continue
+            if not isinstance(decision, HookDecision):
+                raise TypeError(f"{hook.name}.{stage} must return HookDecision or None")
+            audit.append({"hook": hook.name, "stage": stage, "action": decision.action,
+                          "message": decision.message, "metadata": dict(decision.metadata)})
+            if decision.action == "block":
+                return HookExecutionResult(payload=current, audit=audit, blocked=True,
+                                           message=decision.message, error_type=decision.error_type)
+            current.update(decision.updates or {})
+        return HookExecutionResult(payload=current, audit=audit)
 
     def after_llm_response(self, payload: dict[str, Any]) -> HookExecutionResult:
         return self._run_stage("after_llm_response", payload)

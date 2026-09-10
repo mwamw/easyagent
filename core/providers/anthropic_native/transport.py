@@ -186,6 +186,7 @@ class AnthropicNativeProvider(BaseProvider):
             "cachedInputTokens": _usage_int(usage, "cache_read_input_tokens"),
             "costUsd": _usage_float(usage, "cost_usd", "total_cost", "total_cost_usd"),
             "usageSource": "provider",
+            "cacheUsageSemantics": "anthropic_style",
         }
         if payload["totalTokens"] is None and payload["inputTokens"] is not None and payload["outputTokens"] is not None:
             payload["totalTokens"] = payload["inputTokens"] + payload["outputTokens"]

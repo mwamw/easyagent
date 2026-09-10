@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 780" role="img" aria-labelledby="title desc">
+  <title id="title">记忆机制的替换与接入</title>
+  <desc id="desc">内置分层记忆、文件记忆扩展示例与外部服务扩展示例均可实现 BaseMemory，通过提示词、工具和可选 Hook 参与 Agent。MetaMessage 只负责动态注入，Context 只组装准备好的内容。</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#62788a"/></marker>
+    <style>text{font-family:'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b44}.h{font-size:27px;font-weight:700}.b{font-size:22px}.s{font-size:18px;fill:#53677e}.k{font-size:16px;font-weight:700;letter-spacing:2px}.line{fill:none;stroke:#62788a;stroke-width:2;marker-end:url(#a)}</style>
+  </defs>
+  <rect width="1440" height="780" rx="24" fill="#f5f7fa"/>
+  <text x="52" y="58" class="k">EASYAGENT / MECHANISM-LEVEL EXTENSION</text>
+  <text x="52" y="106" font-size="36" font-weight="700">替换记忆机制，不需要改写整个 Harness</text>
+  <text x="52" y="145" class="s">固定接入方式，不固定记忆分类、检索算法或存储后端。</text>
+  <rect x="52" y="202" width="300" height="103" rx="14" fill="#eaf6f4" stroke="#168883"/>
+  <text x="82" y="245" class="h">LayeredMemory</text><text x="82" y="278" class="s">已有内置实现</text>
+  <rect x="52" y="339" width="300" height="103" rx="14" fill="white" stroke="#9daec0" stroke-dasharray="6 5"/>
+  <text x="82" y="382" class="h">文件记忆</text><text x="82" y="415" class="s">扩展示例 · 模型主动搜索</text>
+  <rect x="52" y="476" width="300" height="103" rx="14" fill="white" stroke="#9daec0" stroke-dasharray="6 5"/>
+  <text x="82" y="519" class="h">外部记忆服务</text><text x="82" y="552" class="s">扩展示例 · 自定义接入</text>
+  <path d="M360 253H390V365H430" class="line"/><path d="M360 391H430" class="line"/>
+  <path d="M360 527H390V417H430" class="line"/>
+  <rect x="444" y="229" width="294" height="322" rx="18" fill="#172b44"/>
+  <text x="591" y="279" text-anchor="middle" font-size="29" font-weight="700" style="fill:white">BaseMemory</text>
+  <text x="591" y="322" text-anchor="middle" font-size="19" style="fill:#bcd7df">完整机制的接入契约</text>
+  <text x="479" y="379" font-size="21" style="fill:white">Prompt Blocks</text>
+  <text x="479" y="432" font-size="21" style="fill:white">Tools</text>
+  <text x="479" y="485" font-size="21" style="fill:white">Hooks（可选）</text>
+  <path d="M747 371H800V249H840" class="line"/><path d="M747 424H840" class="line"/>
+  <path d="M747 478H800V563H840" class="line"/>
+  <rect x="854" y="202" width="534" height="104" rx="14" fill="white" stroke="#ccd8e4"/>
+  <text x="884" y="244" class="h">说明如何使用记忆</text><text x="884" y="279" class="s">Prompt Composer → 模型可见的机制说明</text>
+  <rect x="854" y="371" width="534" height="104" rx="14" fill="white" stroke="#ccd8e4"/>
+  <text x="884" y="413" class="h">提供搜索与保存行为</text><text x="884" y="448" class="s">Tool → 执行与结果 → 后续模型上下文</text>
+  <rect x="854" y="518" width="534" height="104" rx="14" fill="white" stroke="#ccd8e4"/>
+  <text x="884" y="560" class="h">按需动态注入</text><text x="884" y="595" class="s">Hook → MetaMessage → 待组装上下文</text>
+  <rect x="52" y="667" width="1336" height="65" rx="12" fill="#e5ecf3"/>
+  <text x="720" y="708" text-anchor="middle" class="b">Memory 决定内容与时机　·　MetaMessage 管理注入　·　Context 组装已有内容</text>
+  <text x="52" y="759" class="s">虚线框表示可实现的方案，并非已随包提供。普通工具返回无需重复注入；共享后端独立于具体记忆机制。</text>
+</svg>
