@@ -120,7 +120,7 @@ def build_agent() -> BasicAgent:
             "Use TodoWrite as a task-backed summary view, respect permission rules, "
             "and explain what state would survive a session restore."
         ),
-    ).with_tool(registry).with_task_service(task_service)
+    ).with_tool(registry).with_task_service(task_service).with_permissions()
 
     for tool_name in ("FileWrite", "FileEdit"):
         agent.permission_engine.add_rule(

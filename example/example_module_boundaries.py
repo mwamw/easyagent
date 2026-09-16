@@ -10,15 +10,19 @@ from easyagent.session import InMemorySessionStore
 class ApplicationMemory(BaseMemory):
     """Applications supply their own tools; no CRUD or storage shape is imposed."""
 
-    def __init__(self, instructions, tools=()):
+    def __init__(self, instructions, retrieval_tools=(), persistence_tools=()):
         self.instructions = instructions
-        self.tools = list(tools)
+        self.retrieval_tools = list(retrieval_tools)
+        self.persistence_tools = list(persistence_tools)
 
     def get_prompt_blocks(self, context):
         return [PromptBlock("memory.application", self.instructions)]
 
-    def get_tools(self):
-        return self.tools
+    def get_retrieval_tools(self):
+        return self.retrieval_tools
+
+    def get_persistence_tools(self):
+        return self.persistence_tools
 
 
 def build_agent(llm, *, memory=None, store=None):

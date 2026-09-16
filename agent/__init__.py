@@ -1,15 +1,15 @@
 """Maintained Agent API."""
 
 from .BasicAgent import BasicAgent
-from .components.conversation_history import ConversationHistory
-from .components.executor import (
+from context.history import ConversationHistory
+from executor import (
     AgentExecutionServices,
     AgentInvocationPhase,
     AgentInvocationState,
     BaseAgentExecutor,
     DefaultAgentExecutor,
 )
-from .components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext, SystemPromptComposer
+from prompt.composer import BaseSystemPromptComposer, PromptBuildContext, SystemPromptComposer
 
 __all__ = [
     "BasicAgent",

@@ -18,14 +18,14 @@ class MetaMessageHistoryPort(Protocol):
         """Return whether the history still contains this injected message."""
 
 
-class AgentMetaMessageHistoryPort:
-    """Adapter over the framework's fixed ConversationHistory boundary."""
+class ContextMetaMessageHistoryPort:
+    """Inject/remove messages using the installed Context's public interface."""
 
     def __init__(self, history):
-        from agent.components.conversation_history import ConversationHistory
+        from context.base import BaseContextManager
 
-        if not isinstance(history, ConversationHistory):
-            raise TypeError("history must be ConversationHistory")
+        if not isinstance(history, BaseContextManager):
+            raise TypeError("history must be a Context module")
         self._history = history
 
     def append(self, message: CanonicalMessage) -> str:
@@ -48,4 +48,4 @@ class AgentMetaMessageHistoryPort:
         )
 
 
-__all__ = ["AgentMetaMessageHistoryPort", "MetaMessageHistoryPort"]
+__all__ = ["ContextMetaMessageHistoryPort", "MetaMessageHistoryPort"]

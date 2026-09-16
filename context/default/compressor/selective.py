@@ -5,8 +5,8 @@
 参考：Selective Context (Litman et al.)
 """
 from typing import List, Optional
-from context.window import ContextItem
-from context.compressor.base import BaseCompressor
+from context.default.window import ContextItem
+from context.default.compressor.base import BaseCompressor
 
 
 class SelectiveCompressor(BaseCompressor):

@@ -100,7 +100,7 @@ class ShellToolsTestCase(unittest.TestCase):
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_type, "task_not_found")
 
-    def test_bash_rejects_unsupported_sandbox_flag(self):
+    def test_bash_ignores_sandbox_bypass_when_sandbox_is_disabled(self):
         result = self.bash.run(
             {
                 "command": "printf 'hello\\n'",
@@ -108,8 +108,9 @@ class ShellToolsTestCase(unittest.TestCase):
             }
         )
 
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "unsupported_option")
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.structured_data["return_code"], 0)
+        self.assertFalse(result.structured_data["sandbox"]["configured"])
 
     def test_register_shell_tools(self):
         registry = ToolRegistry()

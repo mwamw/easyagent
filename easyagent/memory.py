@@ -1,6 +1,6 @@
 """Stable public memory exports."""
 
-from memory import BaseMemory, MemoryServices
+from memory import BaseMemory, MemoryServices, MetaMessageEmitterPort
 
 __all__ = [
     "BaseMemory",
@@ -10,8 +10,10 @@ __all__ = [
     "ForgetType",
     "MemoryConfig",
     "MemoryItem",
+    "MemoryManage",
     "LayeredMemory",
     "MemoryServices",
+    "MetaMessageEmitterPort",
     "MemoryType",
     "WorkingMemory",
 ]

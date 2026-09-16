@@ -26,11 +26,11 @@ def main() -> None:
         invocation_id="manual-inspection",
         data={"query": "Review skill/manager.py"},
     )
-    result = agent.execute_tool_result(
+    result = agent.tool_registry.execute_tool_result(
         "skill_tool",
         {"skill": "repository-review", "args": "skill/manager.py"},
     )
-    agent.history_store.append_tool_result(
+    agent.context_manager.append_tool_result(
         result.to_display_string(),
         "manual-skill-call",
         "skill_tool",

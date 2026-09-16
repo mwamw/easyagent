@@ -5,29 +5,27 @@ Retrieval, dynamic injection, and persistence belong to their own modules.
 
 from __future__ import annotations
 
-from typing import Optional,Any
-from dataclasses import dataclass
-from venv import logger
-from context.builder import ContextBuilder
-from context.compressor.base import BaseCompressor
-from context.compressor.history import BaseHistoryCompactor
-from context.formatter.base import BaseFormatter
+import logging
+import json
+from typing import Optional, Any
+from context.default.builder import ContextBuilder
+from context.default.compressor.base import BaseCompressor
+from context.default.compressor.history import BaseHistoryCompactor
+from context.default.formatter.base import BaseFormatter
 from context.base import BaseContextManager
-from context.token.budget import TokenBudget
-from context.token.counter import TokenCounter
+from context.models import (
+    ContextCompactionResult,
+    ContextUsage,
+)
+from context.default.estimation import RequestEstimation
+from context.default.usage import ContextUsageTracker
+from context.default.token.budget import TokenBudget
+from context.default.token.counter import TokenCounter
 from core.request_input import ReplayRequestInput
 from core.providers import create_codec
-from core.history import CanonicalMessage, _json_safe, coerce_canonical_message
-@dataclass
-class HistoryCompactionResult:
-    canonical_history: list[Any]
-    replay_history: list[Any]
-    was_compacted: bool
-    compaction_possible: bool
-    tokens_before: int
-    tokens_after: int
-    budget: int
-    metadata: dict[str, Any]
+from core.history import _json_safe, coerce_canonical_message
+
+logger = logging.getLogger(__name__)
 def _copy_entry(value: Any) -> Any:
     if isinstance(value, dict):
         return _json_safe(value)
@@ -89,8 +87,8 @@ def _result(
     tokens_after: int,
     budget: int,
     metadata: Optional[dict[str, Any]] = None,
-) -> HistoryCompactionResult:
-    return HistoryCompactionResult(
+) -> ContextCompactionResult:
+    return ContextCompactionResult(
         canonical_history=canonical_history,
         replay_history=replay_history,
         was_compacted=was_compacted,
@@ -102,7 +100,37 @@ def _result(
     )
 
 
-class ContextManager(BaseContextManager):
+class ContextManager(BaseContextManager, RequestEstimation):
+    def append_tool_context(self, tool_name: str, value: Any) -> None:
+        if value is None or self._metamessages is None:
+            return
+        from metamessage import MetaMessage, MetaMessageLifecycle
+
+        content = value if isinstance(value, str) else json.dumps(
+            value, ensure_ascii=False, default=str, indent=2,
+        )
+        if content.strip():
+            self._metamessages.emit(MetaMessage(
+                name=f"tool_context:{tool_name}",
+                content=(
+                    f"<system-reminder>\nRuntime context produced by tool `{tool_name}`:\n"
+                    f"{content}\n</system-reminder>"
+                ),
+                lifecycle=MetaMessageLifecycle.INVOCATION,
+                metadata={"source": "tool_result", "toolName": tool_name},
+            ))
+
+    def get_prompt_blocks(self, context):
+        from prompt import PromptBlock
+        if self.budget.max_tokens is None:
+            return []
+        return [PromptBlock(
+            "compaction",
+            "Auto-compact is enabled. When the context window is nearly full, older messages "
+            "may be compacted. Continue from retained context and re-read sources for exact details.",
+            placement="system_reminder", order=200,
+        )]
+
     def _history_compactor_metadata(self) -> dict[str, Any]:
         info = {}
         if hasattr(self.history_compactor, "get_last_run_info"):
@@ -130,16 +158,203 @@ class ContextManager(BaseContextManager):
         formatter: Optional[BaseFormatter] = None,
         budget: Optional[TokenBudget] = None,
     ):
+        super().__init__()
+        self._context_epoch = 0
+        self._usage = ContextUsageTracker()
+        self._prepared_usage = None
         if budget is None:
             budget = TokenBudget(max_tokens=max_tokens)
-
-        if builder is not None:
-            self._builder = builder
-        else:
-            self._builder = ContextBuilder(budget=budget)
-
+        self._builder = builder or ContextBuilder(budget=budget)
         if formatter:
             self._builder.set_formatter(formatter)
+
+    def bind(self, llm, *, metamessages=None, owner=None):
+        previous = self._llm
+        super().bind(
+            llm,
+            metamessages=metamessages,
+            owner=owner,
+        )
+        if previous is not None and previous is not llm:
+            self._context_epoch += 1
+            self._usage.invalidate()
+        return self
+
+    @property
+    def context_epoch(self):
+        return self._context_epoch
+
+    @property
+    def history_epoch(self):
+        return self._context_epoch
+
+    @property
+    def provider_name(self):
+        return self._llm.provider_name if self._llm is not None else None
+
+    @property
+    def usage_revision(self):
+        return self._usage.revision
+
+    @property
+    def last_query(self):
+        return self._usage.last_query
+
+    def replace(self, messages):
+        super().replace(messages)
+        self._context_epoch += 1
+        self._usage.invalidate()
+
+    def rebuild_replay(self):
+        self._usage.invalidate()
+        return self.replay
+
+    def change_llm(self, llm):
+        self.bind(
+            llm,
+            metamessages=self._metamessages,
+            owner=self._owner,
+        )
+
+    def clear(self):
+        super().clear()
+        self._context_epoch += 1
+        self._usage.invalidate()
+
+    def restore_state(self, state):
+        super().restore_state(state)
+        self._context_epoch += 1
+        self._usage.invalidate()
+
+    def build_input(self, prompt_blocks, *, tools, options, query,
+                    cache_policy, replay_history=None) -> ReplayRequestInput:
+        from core.request_compiler import compile_prompt_blocks
+
+        compiled = compile_prompt_blocks(prompt_blocks, cache_policy=cache_policy)
+        return self.build_request_input(
+            query=query, include_query=False,
+            replay_history=self.replay if replay_history is None else replay_history,
+            provider_name=self._require_llm().provider_name,
+            system_prompt=compiled.system_prompt,
+            system_prompt_blocks=compiled.system_prompt_blocks,
+            system_reminder_blocks=compiled.system_reminder_blocks,
+            dynamic_tail_blocks=compiled.dynamic_tail_blocks,
+            on_demand_expansion_blocks=compiled.on_demand_expansion_blocks,
+            cache_policy=compiled.cache_policy, tools=tools,
+            reasoning=options.get("reasoning"),
+        )
+
+    def calculate_usage(self, request_input, *, tools, options) -> ContextUsage:
+        estimate = self.estimate_request(
+            request_input, usage_tracker=self._usage, llm=self._llm,
+            history_epoch=self.context_epoch, tools=tools,
+            reasoning=options.get("reasoning"), options=options,
+        )
+        return ContextUsage(
+            estimated_tokens=estimate.tokens, max_tokens=self.budget.max_tokens,
+            local_estimated_tokens=estimate.local_tokens, source=estimate.source,
+            metadata=dict(estimate.metadata),
+        )
+
+    def should_compact(self, usage: ContextUsage) -> bool:
+        return usage.over_budget
+
+    def compact_context(self, request_input, usage, *, canonical_history,
+                        replay_history, tools, options, max_tokens=None):
+        base_tokens = self._llm.count_request_tokens(
+            self.counter, replay_history,
+            system_prompt=request_input.render_system_prompt(), tools=tools,
+            reasoning=options.get("reasoning"),
+        )
+        overhead = max(0, (usage.local_estimated_tokens or usage.estimated_tokens) - base_tokens)
+        limit = usage.max_tokens if max_tokens is None else max_tokens
+        return self.compact_persistent_history(
+            canonical_history, replay_history, provider_name=self._llm.provider_name,
+            token_counter=self.counter, system_prompt=request_input.render_system_prompt(),
+            tools=tools, reasoning=options.get("reasoning"),
+            max_tokens=max(0, min(usage.max_tokens, int(limit)) - overhead),
+            tokens_before_override=max(0, usage.estimated_tokens - overhead),
+            metadata={"token_estimate": {"source": usage.source, **usage.metadata}},
+        )
+
+    async def acompact_context(self, request_input, usage, *, canonical_history,
+                               replay_history, tools, options, max_tokens=None):
+        # Preserve the default compactor's native asynchronous implementation.
+        base_tokens = self._llm.count_request_tokens(
+            self.counter, replay_history,
+            system_prompt=request_input.render_system_prompt(), tools=tools,
+            reasoning=options.get("reasoning"),
+        )
+        overhead = max(0, (usage.local_estimated_tokens or usage.estimated_tokens) - base_tokens)
+        limit = usage.max_tokens if max_tokens is None else max_tokens
+        return await self.acompact_persistent_history(
+            canonical_history, replay_history, provider_name=self._llm.provider_name,
+            token_counter=self.counter, system_prompt=request_input.render_system_prompt(),
+            tools=tools, reasoning=options.get("reasoning"),
+            max_tokens=max(0, min(usage.max_tokens, int(limit)) - overhead),
+            tokens_before_override=max(0, usage.estimated_tokens - overhead),
+            metadata={"token_estimate": {"source": usage.source, **usage.metadata}},
+        )
+
+    def validate_input(self, request_input, *, tools, options, history_epoch=None):
+        self.validate_request(
+            request_input, tools=tools, reasoning=options.get("reasoning"),
+            usage_tracker=self._usage, llm=self._llm,
+            history_epoch=self.context_epoch if history_epoch is None else history_epoch,
+            options=options,
+        )
+
+    def observe_prepared_input(self, request_input, *, tools, options, query):
+        self._prepared_usage = self._usage.prepare(
+            self, request_input, llm=self._llm, history_epoch=self.context_epoch,
+            tools=tools, reasoning=options.get("reasoning"), options=options,
+            query=query,
+        )
+
+    def observe_model_result(self, usage, response_replay, *, use_output):
+        self._usage.observe(self, self._prepared_usage, usage, response_replay=response_replay, use_output=use_output)
+
+    async def acompact_persistent_history(self, *args, **kwargs):
+        import asyncio
+        return await asyncio.to_thread(self.compact_persistent_history, *args, **kwargs)
+
+    def get_usage(self, prompt_blocks, *, tools=None, reasoning=None, cache_policy=None) -> dict[str, Any]:
+        from core.request_compiler import compile_prompt_blocks
+
+        tracker = self._usage
+        manager = self
+        compiled = compile_prompt_blocks(
+            prompt_blocks, cache_policy=cache_policy,
+        )
+        request = manager.build_request_input(
+            query="", include_query=False, replay_history=self.replay,
+            provider_name=self._llm.provider_name, system_prompt=compiled.system_prompt,
+            system_prompt_blocks=compiled.system_prompt_blocks,
+            system_reminder_blocks=compiled.system_reminder_blocks,
+            dynamic_tail_blocks=compiled.dynamic_tail_blocks,
+            on_demand_expansion_blocks=compiled.on_demand_expansion_blocks,
+            cache_policy=compiled.cache_policy, tools=tools, reasoning=reasoning,
+        )
+        estimate = manager.estimate_request(
+            request, usage_tracker=tracker, llm=self._llm,
+            history_epoch=self.context_epoch,
+            tools=tools, reasoning=reasoning, options=tracker.last_options,
+        )
+        limit = manager.budget.max_tokens
+        return {
+            "estimatedRequestTokens": estimate.tokens,
+            "localEstimatedRequestTokens": estimate.local_tokens,
+            "request_estimate_source": estimate.source,
+            "requestEstimate": {
+                "estimatedRequestTokens": estimate.tokens, "source": estimate.source,
+                "localEstimatedRequestTokens": estimate.local_tokens, "metadata": estimate.metadata,
+            },
+            "maxTokens": limit,
+            "budget": {"maxTokens": limit, "remainingTokens": None if limit is None else max(0, limit - estimate.tokens)},
+            "canonicalMessages": len(self.canonical),
+            "replayMessages": len(self.replay),
+            "provider": self._llm.provider_name,
+        }
 
     def set_compressor(self, compressor: BaseCompressor) -> "ContextManager":
         self._builder.set_compressor(compressor)
@@ -203,7 +418,7 @@ class ContextManager(BaseContextManager):
         force: bool = False,
         tokens_before_override: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
-    ) -> HistoryCompactionResult:
+    ) -> ContextCompactionResult:
         codec = create_codec(provider_name)
         base_metadata = dict(metadata or {})
         if tokens_before_override is None:
@@ -249,7 +464,7 @@ class ContextManager(BaseContextManager):
             compactor_metadata = self._merge_compactor_metadata(base_metadata, self._history_compactor_metadata())
         except Exception as exc:
             logger.warning("历史压缩器运行失败，回退到规则截断: %s", exc)
-            from context.compressor.history import RuleBasedHistoryCompactor
+            from context.default.compressor.history import RuleBasedHistoryCompactor
             fallback_compactor = RuleBasedHistoryCompactor(token_counter=token_counter)
             compacted_prefix = fallback_compactor.compact(canonical_prefix)
             compactor_metadata = self._merge_compactor_metadata(
@@ -300,7 +515,7 @@ class ContextManager(BaseContextManager):
         force: bool = False,
         tokens_before_override: Optional[int] = None,
         metadata: Optional[dict[str, Any]] = None,
-    ) -> HistoryCompactionResult:
+    ) -> ContextCompactionResult:
         codec = create_codec(provider_name)
         base_metadata = dict(metadata or {})
         if tokens_before_override is None:
@@ -345,7 +560,7 @@ class ContextManager(BaseContextManager):
             compactor_metadata = self._merge_compactor_metadata(base_metadata, self._history_compactor_metadata())
         except Exception as exc:
             logger.warning("历史异步压缩器运行失败，回退到规则截断: %s", exc)
-            from context.compressor.history import RuleBasedHistoryCompactor
+            from context.default.compressor.history import RuleBasedHistoryCompactor
             fallback_compactor = RuleBasedHistoryCompactor(token_counter=token_counter)
             compacted_prefix = await fallback_compactor.acompact(canonical_prefix)
             compactor_metadata = self._merge_compactor_metadata(

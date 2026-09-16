@@ -16,7 +16,7 @@ import json
 import logging
 
 from core.history import coerce_canonical_message, is_canonical_message
-from context.token.counter import TokenCounter
+from context.default.token.counter import TokenCounter
 from core.llm import EasyLLM
 
 logger = logging.getLogger(__name__)

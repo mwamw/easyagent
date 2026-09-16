@@ -7,8 +7,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from context.window import ContextItem, ContextWindow
-from context.token.counter import TokenCounter
+from context.default.window import ContextItem, ContextWindow
+from context.default.token.counter import TokenCounter
 from manual_test_runner import run_manual_tests, exit_with_status
 
 

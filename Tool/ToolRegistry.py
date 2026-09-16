@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import json
 from typing import Any, Literal, Type
 
 from pydantic import BaseModel
@@ -162,6 +163,7 @@ class ToolRegistry:
             arguments=validated,
             descriptor=descriptor,
             context=context or AuthorizationContext(),
+            extensions=tool.get_permission_extensions(validated),
         )
 
     def authorize_request(
@@ -173,8 +175,50 @@ class ToolRegistry:
         """Authorize a normalized request through the new framework contract."""
         return permission_engine.authorize(request)
 
+    @staticmethod
+    def parse_model_call(tool_call: Any, fallback_id: str) -> tuple[str, dict[str, Any], str]:
+        if isinstance(tool_call, dict):
+            function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+            name = tool_call.get("name") or function.get("name") or ""
+            arguments = tool_call.get("arguments", function.get("arguments", tool_call.get("input", {})))
+            tool_id = tool_call.get("call_id") or tool_call.get("id") or fallback_id
+        else:
+            function = getattr(tool_call, "function", None)
+            name = getattr(tool_call, "name", None) or getattr(function, "name", None) or ""
+            arguments = getattr(tool_call, "arguments", None)
+            if arguments is None:
+                arguments = getattr(function, "arguments", None)
+            if arguments is None:
+                arguments = getattr(tool_call, "input", {})
+            tool_id = getattr(tool_call, "call_id", None) or getattr(tool_call, "id", None) or fallback_id
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON arguments for tool {name or 'unknown'}: {exc}") from exc
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            raise ValueError(f"Tool arguments for {name or 'unknown'} must be an object")
+        if not name:
+            raise ValueError("Tool call is missing a tool name")
+        return str(name), dict(arguments), str(tool_id)
+
     def get_tools_description(self) -> list[dict[str, Any]]:
         return self.list_tool_descriptors(stable=True, include_parameters=True)
+
+    def get_prompt_blocks(self, context):
+        from prompt import PromptBlock, format_tool_inventory
+        if context.config.tool_schema_mode != "deferred":
+            return []
+        inventory = format_tool_inventory(self.list_tool_descriptors(stable=True), include_parameters=False)
+        return [PromptBlock(
+            "tool_inventory",
+            "## Available tools\nTool schemas are loaded on demand. Call `tool_schema_tool` "
+            "to load the schemas of tools not yet exposed in this request.\n\n" + inventory,
+            placement="system_reminder", order=160,
+            metadata={"cache_partition": "session", "cacheable": True},
+        )]
 
     def list_tool_descriptors(
         self,

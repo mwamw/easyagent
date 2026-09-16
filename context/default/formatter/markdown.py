@@ -2,8 +2,8 @@
 Markdown 格式化器
 """
 from typing import List
-from context.window import ContextItem
-from context.formatter.base import BaseFormatter
+from context.default.window import ContextItem
+from context.default.formatter.base import BaseFormatter
 
 _SOURCE_TITLES = {
     "rag": "参考资料",

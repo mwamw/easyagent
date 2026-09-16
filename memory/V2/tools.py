@@ -9,7 +9,7 @@ import logging
 import asyncio
 
 if TYPE_CHECKING:
-    from memory.V2.MemoryManage import MemoryManage
+    from .MemoryManage import MemoryManage
 
 logger = logging.getLogger(__name__)
 
@@ -441,14 +441,26 @@ class MemoryMaintenanceTool(_MemoryTool):
 # ==========================================
 # 便利注册接口
 # ==========================================
-def build_memory_tools(memory_manage, *, session_id_provider: Callable[[], str] | None = None):
+def build_retrieval_tools(memory_manage, *, session_id_provider: Callable[[], str] | None = None):
     return [
-        AddMemoryTool(memory_manage, session_id_provider=session_id_provider),
         SearchMemoryTool(memory_manage, session_id_provider=session_id_provider),
         GetMemoryTool(memory_manage),
+    ]
+
+
+def build_persistence_tools(memory_manage, *, session_id_provider: Callable[[], str] | None = None):
+    return [
+        AddMemoryTool(memory_manage, session_id_provider=session_id_provider),
         UpdateMemoryTool(memory_manage),
         RemoveMemoryTool(memory_manage),
         MemoryMaintenanceTool(memory_manage),
+    ]
+
+
+def build_memory_tools(memory_manage, *, session_id_provider: Callable[[], str] | None = None):
+    return [
+        *build_retrieval_tools(memory_manage, session_id_provider=session_id_provider),
+        *build_persistence_tools(memory_manage, session_id_provider=session_id_provider),
     ]
 
 

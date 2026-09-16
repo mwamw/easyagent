@@ -1,14 +1,14 @@
 """Replaceable memory modules; optional implementations are imported on demand."""
 
-from .base import BaseMemory, MemoryServices
+from .base import BaseMemory, MemoryServices, MetaMessageEmitterPort
 
-__all__ = ["BaseMemory", "MemoryServices", "LayeredMemory", "MemoryConfig", "MemoryItem", "MemoryType", "ForgetType", "WorkingMemory", "BaseMemoryLayer", "migrate_memory_sqlite", "migrate_legacy_graph"]
+__all__ = ["BaseMemory", "MemoryServices", "MetaMessageEmitterPort", "MemoryManage", "LayeredMemory", "MemoryConfig", "MemoryItem", "MemoryType", "ForgetType", "WorkingMemory", "BaseMemoryLayer", "migrate_memory_sqlite", "migrate_legacy_graph"]
 
 
 def __getattr__(name):
-    if name == "LayeredMemory":
-        from .layered import LayeredMemory
-        return LayeredMemory
+    if name in {"MemoryManage", "LayeredMemory"}:
+        from .V2.MemoryManage import MemoryManage
+        return MemoryManage
     if name in {"MemoryConfig", "MemoryItem", "MemoryType", "ForgetType", "BaseMemoryLayer"}:
         from importlib import import_module
         return getattr(import_module(".V2.BaseMemory", __name__), name)

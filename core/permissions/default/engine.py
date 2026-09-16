@@ -113,8 +113,8 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
         for rule in self._policy.rules:
             if self._matcher.matches(rule, request):
                 matching.append(rule)
-        # Claude Code precedence is behavior-first, not specificity-first.
-        for behavior in (PermissionBehavior.DENY, PermissionBehavior.ASK, PermissionBehavior.ALLOW):
+        # Explicit deny rules always win, including over one-shot grants.
+        for behavior in (PermissionBehavior.DENY,):
             for rule in matching:
                 if rule.behavior == behavior:
                     return PermissionDecision(
@@ -122,6 +122,44 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
                         rule.description or f"Matched {behavior.value} permission rule.",
                         {"source": rule.source, "policy_revision": self._policy_revision},
                     )
+
+        for index, grant in enumerate(self._grants):
+            if grant.tool_name != request.tool_name:
+                continue
+            if dict(grant.arguments) != dict(request.arguments):
+                continue
+            if grant.session_id and grant.session_id != request.context.session_id:
+                continue
+            if grant.scope == "request":
+                self._grants.pop(index)
+                self._policy_revision += 1
+            return PermissionDecision(
+                PermissionBehavior.ALLOW,
+                "Matched an explicit permission grant.",
+                {"grant_id": grant.grant_id, "policy_revision": self._policy_revision},
+            )
+
+        # Claude Code precedence is behavior-first, not specificity-first.
+        for behavior in (PermissionBehavior.ASK, PermissionBehavior.ALLOW):
+            for rule in matching:
+                if rule.behavior == behavior:
+                    return PermissionDecision(
+                        behavior,
+                        rule.description or f"Matched {behavior.value} permission rule.",
+                        {"source": rule.source, "policy_revision": self._policy_revision},
+                    )
+
+        sandbox = request.extensions.get("sandbox")
+        if isinstance(sandbox, dict) and (
+            sandbox.get("auto_allow") is True
+            and sandbox.get("will_sandbox") is True
+            and sandbox.get("bypassed") is not True
+        ):
+            return PermissionDecision(
+                PermissionBehavior.ALLOW,
+                "Auto-allowed because Bash will execute inside the configured sandbox.",
+                {"sandbox_auto_allow": True, "policy_revision": self._policy_revision},
+            )
 
         risks = set(request.descriptor.risk_categories)
         dangerous = request.descriptor.side_effect_level == "high" or bool(

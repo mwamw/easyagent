@@ -17,6 +17,12 @@ from .filesystem import (
 from .file_write import FileWriteTool, register_file_write_tool
 from .file_edit import FileEditTool, register_file_edit_tool
 from .bash_tool import BashTool, register_bash_tool, register_shell_tools
+from .bash_sandbox import (
+    BashSandboxConfig,
+    BashSandboxMode,
+    SandboxNetworkMode,
+    SandboxStatus,
+)
 from .task_output import TaskOutputTool, register_task_output_tool
 from .task_stop import TaskStopTool, register_task_stop_tool
 from .tool_schema_tool import ToolSchemaTool, register_tool_schema_tool
@@ -88,6 +94,10 @@ __all__ = [
     "FileWriteTool",
     "FileEditTool",
     "BashTool",
+    "BashSandboxConfig",
+    "BashSandboxMode",
+    "SandboxNetworkMode",
+    "SandboxStatus",
     "TaskOutputTool",
     "TaskStopTool",
     "ToolSchemaTool",

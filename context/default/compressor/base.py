@@ -3,7 +3,7 @@
 """
 from abc import ABC, abstractmethod
 from typing import List
-from context.window import ContextItem
+from context.default.window import ContextItem
 
 
 class BaseCompressor(ABC):

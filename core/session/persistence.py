@@ -77,6 +77,8 @@ class SessionPersistence:
     def snapshot(self, *, fork=False):
         modules = {} if fork else deepcopy(self._unknown)
         for name, binding in self._participants.items():
+            if name == "context":
+                continue
             component = binding.resolve()
             if component is None or (fork and not binding.forkable):
                 continue
@@ -87,7 +89,7 @@ class SessionPersistence:
             modules[name] = {"version": binding.version, "required": binding.required,
                              "implementation": type(component).__name__, "state": value}
         snapshot = {"schemaVersion": 4, "agentType": type(self.agent).__name__, "name": self.agent.name,
-                    "history": self.agent.history_store.export_state(), "modules": modules,
+                    "history": self.agent.context_manager.export_state(), "modules": modules,
                     "tools": self.agent.tool_registry.get_tool_names() if self.agent.tool_registry else [],
                     "reasoning": deepcopy(self.agent.reasoning),
                     "currentTaskId": None if fork else self.agent.current_task_id}
@@ -153,11 +155,12 @@ class SessionPersistence:
             store = self.resolve_store(store)
             record = await store.aget_session(session_id)
             self._restore_record(session_id, store, record, notify=False)
-            hook = await self.agent.hook_manager.arun_stage("after_session_restore", {
-                "session_id": session_id, "snapshot": record["snapshot"],
-                "restore_report": self.agent.last_restore_report,
-            })
-            self._apply_report(hook, self.agent.last_restore_report)
+            if self.agent.hook_manager is not None:
+                hook = await self.agent.hook_manager.arun_stage("after_session_restore", {
+                    "session_id": session_id, "snapshot": record["snapshot"],
+                    "restore_report": self.agent.last_restore_report,
+                })
+                self._apply_report(hook, self.agent.last_restore_report)
             return self.agent
         finally:
             self.busy = False
@@ -193,22 +196,21 @@ class SessionPersistence:
         if snapshot.get("schemaVersion") != 4:
             raise SessionSerializationError("Explicitly migrate the legacy session to V4 first")
         report = SessionRestoreReport(session_id=session_id, agent_type=type(self.agent).__name__)
-        from core.history import CanonicalMessage
         history = snapshot.get("history")
-        if not isinstance(history, dict) or not isinstance(history.get("canonical"), list):
-            raise SessionSerializationError("Session history must contain canonical messages")
         try:
-            for message in history["canonical"]:
-                CanonicalMessage.model_validate(message)
+            self.agent.context_manager.validate_state(history)
         except Exception as exc:
-            raise SessionSerializationError("Invalid canonical session history") from exc
-        provider = history.get("providerName")
+            raise SessionSerializationError("Invalid Context session state") from exc
+        provider = history.get("providerName") if isinstance(history, dict) else None
         if provider and provider != self.agent.llm.provider_name:
-            report.add_issue(component="history", code="provider_drift", message="Replay was rebuilt for a different provider",
-                             metadata={"savedProvider": provider, "currentProvider": self.agent.llm.provider_name})
+            report.add_issue(component="history", code="provider_drift",
+                message="Replay was rebuilt for a different provider",
+                metadata={"savedProvider": provider, "currentProvider": self.agent.llm.provider_name})
         operations = []
         unknown = {}
         for name, value in snapshot.get("modules", {}).items():
+            if name == "context":
+                continue
             binding = self._participants.get(name)
             component = binding.resolve() if binding else None
             importer = getattr(component, "restore_state", None)
@@ -226,17 +228,16 @@ class SessionPersistence:
                     validator(deepcopy(value["state"]))
                 operations.append((name, component, deepcopy(value["state"])))
         for name, binding in self._participants.items():
+            if name == "context":
+                continue
             if snapshot.get("modules", {}).get(name, {}).get("state") is None:
                 component = binding.resolve()
                 if callable(getattr(component, "reset_session_state", None)):
                     operations.append((name, component, None))
-        from agent.components.conversation_history import ConversationHistory
-        probe = ConversationHistory(self.agent.llm)
-        probe.restore_state(snapshot.get("history"))
-        saved = self.agent.history_store.export_state()
+        saved = self.agent.context_manager.export_state()
         backups = []
         try:
-            self.agent.history_store.restore_state(snapshot.get("history"))
+            self.agent.context_manager.restore_state(snapshot.get("history"))
             for name, component, value in operations:
                 exporter = getattr(component, "export_state", None)
                 backups.append((component, deepcopy(exporter()) if callable(exporter) else None))
@@ -244,7 +245,7 @@ class SessionPersistence:
                 if isinstance(outcome, dict):
                     report.extend_component(name, outcome)
         except BaseException:
-            self.agent.history_store.restore_state(saved)
+            self.agent.context_manager.restore_state(saved)
             for component, backup in reversed(backups):
                 component.restore_state(backup)
             raise
@@ -261,7 +262,7 @@ class SessionPersistence:
             reconcile()
         self.agent._refresh_execution_context()
         self.agent.last_restore_report = report
-        if notify:
+        if notify and self.agent.hook_manager is not None:
             hook = self.agent.hook_manager.after_session_restore({"session_id": session_id, "restore_report": report, "snapshot": snapshot})
             self._apply_report(hook, report)
         return self.agent

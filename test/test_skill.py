@@ -341,7 +341,7 @@ def test_path_conditional_skill_activates_from_filesystem_runtime_event(tmp_path
     agent.execution_context.workspace_root = str(workspace)
 
     assert "`python-review`" not in agent.get_system_prompt_template().render_system_reminders()
-    hidden = agent.execute_tool_result("skill_tool", {"skill": "python-review"})
+    hidden = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "python-review"})
     assert hidden.status == "error"
     assert hidden.error_type == "skill_not_active"
     assert hidden.structured_data["conditionalPaths"] == ["src/**/*.py"]
@@ -373,13 +373,13 @@ def test_skill_tool_queues_full_body_after_result_boundary(tmp_path: Path):
     agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED)
 
-    result = agent.execute_tool_result("skill_tool", {"skill": "review", "args": "src/app.py"})
+    result = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review", "args": "src/app.py"})
     assert result.status == "success"
     assert "Review src/app.py" not in result.to_display_string()
     assert result.structured_data["instructionSource"] in result.to_display_string()
     assert not any("Review src/app.py" in message.text_content() for message in agent.history)
 
-    agent.history_store.append_tool_result(result.to_display_string(), "call-1", "skill_tool")
+    agent.context_manager.append_tool_result(result.to_display_string(), "call-1", "skill_tool")
     agent.metamessage_manager.flush()
     messages = [coerce_canonical_message(item) for item in agent.history]
     assert "Review src/app.py" in messages[-1].text_content()
@@ -410,12 +410,12 @@ def test_executor_injects_skill_between_tool_result_and_next_llm_request(tmp_pat
 
 def test_skill_body_and_permissions_are_reclaimed_on_agent_terminal_event(tmp_path: Path):
     write_skill(tmp_path, "review", extra_frontmatter="recommended-tools: echo_tool")
-    agent = BasicAgent("agent", StubLLM()).add_tool(EchoTool()).with_skill(tmp_path)
+    agent = BasicAgent("agent", StubLLM()).add_tool(EchoTool()).with_skill(tmp_path).with_permissions()
     agent.add_permission_rule(
         {"tool_name": "echo_tool", "behavior": "ask"}, source="session"
     )
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED)
-    result = agent.execute_tool_result("skill_tool", {"skill": "review"})
+    result = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review"})
     assert result.status == "success"
     assert not any(rule["source"] == "skill:review" for rule in agent.permission_engine.rules())
     agent.metamessage_manager.flush()
@@ -431,15 +431,15 @@ def test_same_skill_and_arguments_are_deduplicated_per_invocation(tmp_path: Path
     agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED)
 
-    first = agent.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
-    second = agent.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
+    first = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
+    second = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
     assert first.structured_data["alreadyActive"] is False
     assert second.structured_data["alreadyActive"] is True
     assert len(agent.metamessage_manager.list_pending()) == 1
 
     publish(agent, RuntimeEventType.AGENT_INVOKE_COMPLETED)
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED, "invoke-next")
-    third = agent.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
+    third = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review", "args": "a"})
     assert third.structured_data["alreadyActive"] is False
 
 
@@ -448,7 +448,7 @@ def test_model_disabled_skill_is_hidden_and_rejected(tmp_path: Path):
     agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
 
     assert "`manual`" not in agent.get_system_prompt_template().render_system_reminders()
-    result = agent.execute_tool_result("skill_tool", {"skill": "manual"})
+    result = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "manual"})
     assert result.status == "error"
     assert result.error_type == "skill_model_invocation_disabled"
 
@@ -468,7 +468,7 @@ def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
     fork_tool = ForkAgentTool()
     agent = BasicAgent("agent", StubLLM()).add_tool(fork_tool).with_skill(tmp_path)
 
-    result = agent.execute_tool_result(
+    result = agent.tool_registry.execute_tool_result(
         "skill_tool",
         {"skill": "deep-review", "args": "src/core.py"},
     )
@@ -478,7 +478,7 @@ def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
     assert result.structured_data["outputFile"] == "/tmp/agent-child.md"
     assert result.structured_data["result"] == "fork result"
     assert result.structured_data["recommendedTools"] == ["Agent"]
-    assert not any(rule["source"] == "skill:deep-review" for rule in agent.permission_engine.rules())
+    assert agent.permission_engine is None
     assert fork_tool.last_parameters["subagent_type"] == "reviewer"
     assert fork_tool.last_parameters["model"] == "specialist-model"
     assert "Review src/core.py deeply." in fork_tool.last_parameters["prompt"]

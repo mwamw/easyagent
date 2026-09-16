@@ -9,10 +9,10 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 from agent.BasicAgent import BasicAgent
-from context.compressor.history import RuleBasedHistoryCompactor
-from context.manager import ContextManager
-from context.token.budget import TokenBudget
-from context.token.counter import TokenCounter
+from context.default.compressor.history import RuleBasedHistoryCompactor
+from context.default.manager import ContextManager
+from context.default.token.budget import TokenBudget
+from context.default.token.counter import TokenCounter
 from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
 

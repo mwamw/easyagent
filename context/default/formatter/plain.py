@@ -2,8 +2,8 @@
 纯文本格式化器
 """
 from typing import List
-from context.window import ContextItem
-from context.formatter.base import BaseFormatter
+from context.default.window import ContextItem
+from context.default.formatter.base import BaseFormatter
 
 # 来源名到中文标题的映射
 _SOURCE_TITLES = {

@@ -54,7 +54,10 @@ LLM 的摘要请求或其他 Agent 覆盖。同步、异步、流式请求使用
 
 模型主动检索使用普通 Tool/ToolResult。需要自动检索时，由模块在
 before_context/abefore_context Hook 中自行查询，再调用 MetaMessage。
-Context 不持有模块实例。异步请求会等待异步 Hook 和 acompact_persistent_history。
+Context 不持有功能模块实例。Executor 先运行 Hook，再调用 Context 的
+`process_meta_messages()`、`build_input()`、`calculate_usage()`、
+`should_compact()`、`compact_context()` 和 `validate_input()`。异步请求调用
+对应的异步 Context 接口。
 
 使用 BaseContextManager 替换整个上下文实现，或仅替换 BaseHistoryCompactor。
 压缩器生成结果，执行器在最终预算检查成功后提交历史更新。
@@ -63,7 +66,7 @@ Context 不持有模块实例。异步请求会等待异步 Hook 和 acompact_pe
 
 ## History 与持久化
 
-ConversationHistory 是现有的内存组件，维护 canonical 和 provider replay 两种表示。
+ConversationHistory 是框架层 canonical 消息容器，不依赖 LLM 或 Provider。默认 Context 在准备请求时通过当前 LLM 从 canonical history 生成 provider replay。
 本次重构没有新增完整 transcript journal；持久化保存当前可恢复的历史状态。
 压缩可能替换当前历史，因此不要把当前快照宣称为完整原始会话归档。
 查看 token 用量不运行检索 Hook，也不会发起模型请求。

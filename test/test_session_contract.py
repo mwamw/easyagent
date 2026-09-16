@@ -92,7 +92,7 @@ def test_session_migration_is_copy_only(tmp_path):
     original = BasicAgent("legacy", SessionLLM())
     original.add_user_message("retained")
     LegacyStore(str(source)).create_or_update_session("old", "BasicAgent", "legacy", {
-        "schemaVersion": 3, "history": original.history_store.export_state(), "modules": {},
+        "schemaVersion": 3, "history": original.context_manager.export_state(), "modules": {},
     }, metadata={"title": "old title"})
     before = source.read_bytes()
     assert migrate_session_v3(source, target)["count"] == 1

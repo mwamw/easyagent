@@ -12,12 +12,12 @@ import pytest
 from pydantic import BaseModel
 
 from agent import BasicAgent
-from agent.components.prompt_composer import SystemPromptComposer
-from context.compressor.history import LLMHistoryCompactor
+from prompt.composer import SystemPromptComposer
+from context.default.compressor.history import LLMHistoryCompactor
 from core.history import coerce_canonical_message
 from core.llm import EasyLLM
 from Tool.builtin.filesystem import FileReadTool
-from Tool.builtin import memorytool
+from memory.V2 import tools as memorytool
 from Tool.builtin.mcp_tool import _build_mcp_guidance
 
 

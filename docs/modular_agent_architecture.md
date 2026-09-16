@@ -10,89 +10,41 @@ EasyAgent 是通用 Agent 框架，不是一个固定的 Code Agent 产品。框
 
 - 只维护 `BaseAgent` 和 `BasicAgent` 两种 Agent 类型。
 - 不定义统一的 `AgentModule` 契约；每个模块按自己的职责设计接口。
-- 模块可以依赖真正需要的模块，例如 Plan 依赖 Permission 和 MetaMessage，MultiAgent 依赖 Tool。
+- 模块可以依赖真正需要的模块，例如 Plan 的模式由 Permission 实现解释，指令通过 MetaMessage 注入，MultiAgent 依赖 Tool。
 - 用户通过 `with_*` 显式安装能力，不需要理解 Agent 内部执行器的接线细节。
 - 扩展边界采用名义类型。自定义实现应继承对应模块的基类，而不是依赖运行时 duck typing。
 - Code Agent 是必须支持的场景，但关闭 CodeIntel、Worktree、Task 和 MultiAgent 后，BasicAgent 仍是完整的通用 Agent。
 
-## 2. 当前结构
+## 2. 功能边界与目录
 
-```text
-BasicAgent
-  -> BaseAgent
-     -> ConversationHistory
-     -> SystemPromptComposer
-     -> MetaMessageManager
-     -> SkillManager
-     -> PermissionEngine / PermissionContext
-     -> HookManager / CallbackManager
-     -> RuntimeEventBus
-  -> DefaultAgentExecutor
+- Agent 负责依赖装配，不持有独立的历史数组或 Token 跟踪器。
+- `executor/base.py` 定义执行接口，`executor/default.py` 直接协调 Prompt、Context、LLM、Tool 和可选授权能力。
+- `prompt/base.py` 定义提示词接口，`prompt/composer.py` 收集注册的模块贡献，不认识 Memory/Skill/Plan 的具体类型。
+- `context/base.py` 定义 Context 契约并提供统一历史操作；`context/history.py` 是框架层 canonical `ConversationHistory`。预算、压缩、Provider replay 和输入算法位于 `context/default/`。
+- `runtime/interruptions.py` 提供现有中断机制。本次没有引入新的 AgentRuntime 抽象。
+- LLM 的实现、Provider 目录以及四类模型调用接口保持不变。
 
-optional modules
-  -> ToolRegistry
-  -> ContextManager
-  -> PlanModeManager
-  -> TaskService
-  -> ObservabilityManager
-  -> MultiAgentRuntime
-  -> BaseMemory (optional; LayeredMemory is one implementation)
-  -> MCPToolManager
-  -> CodeIntelManager
-  -> WorktreeManager
-```
+Context 是历史状态的唯一拥有者。默认 Context 的 provider replay、Token 预算、API usage 锚点、压缩器属于其内部实现，Executor 不操作这些字段。MetaMessage 通过 Context 的公共消息接口注入和清理动态信息。
 
-`BaseAgent` 负责身份、固定状态和模块装配。`DefaultAgentExecutor` 负责一次调用的状态机和 tool loop。模块之间通过明确依赖、`ExecutionContext` 和 `RuntimeEventBus` 协作，不再通过多个执行辅助类相互读取 Agent 私有字段。
+## 3. 最小 Agent 与附加模块
 
-## 3. BasicAgent 的最小形态
-
-构造器只接受五个参数：
+构造器仍为：
 
 ```python
-BasicAgent(
-    name,
-    llm,
-    system_prompt=None,
-    description=None,
-    config=None,
-)
+BasicAgent(name, llm, system_prompt=None, description=None, config=None)
 ```
 
-默认存在的轻量能力：
+LLM 由调用方提供，Executor、System Prompt、Context 默认安装。无 Token 上限的默认 Context 仍管理当前历史和完整模型输入。
 
-| 能力 | 默认实现 | 说明 |
-| --- | --- | --- |
-| History | `ConversationHistory` | 保存 provider-neutral canonical history，并维护当前 provider replay |
-| Prompt | `SystemPromptComposer` | 生成 native system 和 request-level system reminder |
-| MetaMessage | `MetaMessageManager` | 管理运行时消息注入与回收 |
-| Skill | 空 `SkillManager` | 未注册 Skill 时没有额外成本 |
-| Permission | `PermissionEngine` + `PermissionContext` | Tool 未安装时不参与执行 |
-| Hook | 默认 guardrail `HookManager` | 提供执行前后策略边界 |
-| Callback | `CallbackManager` | 订阅统一 runtime 事件 |
-| Event | `RuntimeEventBus` | 保存本 Agent 的结构化执行事件 |
-| Executor | `DefaultAgentExecutor` | 提供四种正式调用方式 |
+Permission、Hook、Callback、Tool、Memory、Skill、Plan、Task、Observability、MultiAgent、MCP、CodeIntel、Worktree 与会话后端按需安装。未安装权限模块表示没有该层授权检查，不是自动放入一个隐形默认策略。工具型产品应显式安装自己的权限模块。
 
-默认不安装的重能力：
+Context 现在是有状态的 Agent 私有模块，不能被多个 Agent 实例共享。可以共享无状态配置或 LLM，但应分别创建 Context。空闲时替换 Context 会通过公开历史接口转移当前记录；活跃 invoke 中禁止替换。
 
-- Tool
-- Context / compaction
-- Plan
-- Task
-- Observability
-- MultiAgent
-- Memory
-- MCP
-- CodeIntel
-- Worktree
+### 模块扩展验证
 
-最小通用 Agent：
+自定义 Context 继承 `BaseContextManager` 后直接获得统一的 `ConversationHistory`，并实现输入组装、用量计算、压缩决策、压缩执行和最终校验等明确阶段接口。Executor 直接编排这些接口；实现不必暴露 `builder`、`counter`、`budget` 等内部对象。同步、异步、动态消息和 Session 均通过同一组框架契约协作。
 
-```python
-from easyagent import BasicAgent, EasyLLM
-
-agent = BasicAgent(name="assistant", llm=EasyLLM(...))
-answer = agent.invoke("解释这个概念。")
-```
+自定义 Executor 通过 `execute_tool_call()` 实现 ReAct 循环中的工具阶段。BaseAgent 不提供直接工具执行或批准执行 API，也不会调用默认 Executor 的私有方法。
 
 ## 4. 模块装配接口
 
@@ -103,15 +55,15 @@ answer = agent.invoke("解释这个概念。")
 | `with_prompt(composer)` | 自定义系统提示词组装器 | 无 |
 | `with_skill(*directories, manager=None)` | 目录式 Skill 与 Agent 私有 SkillManager | Tool |
 | `with_tool(registry=None)` | ToolRegistry 和 tool loop | 无 |
-| `with_context(manager)` | 外部上下文与 compaction | 无 |
-| `with_permissions(engine=None, context=None)` | 权限策略 | 无 |
+| `with_context(manager)` | 替换历史、输入组装、预算和压缩策略 | 绑定当前 LLM |
+| `with_permissions(engine=None)` | 权限策略 | 无 |
 | `with_hooks(manager)` | 可阻断、可修改的执行 hook | 无 |
 | `with_callbacks(manager)` | 非阻断运行通知 | RuntimeEventBus 已提供 |
 | `with_plan(plan=None, config=None)` | Plan 状态和进入/退出规则 | 配置 Plan tools 时安装 Tool |
 | `with_task_service(service)` | 结构化 Task 和 task tools | Tool |
 | `with_observability(...)` | AgentInvoke / LLMInvoke 数据记录 | RuntimeEventBus |
 | `with_multi_agent(...)` | subagent、team、mailbox 和控制工具 | Tool |
-| `with_memory(manager)` | Memory context 和 memory tools | Context，必要时 Tool |
+| `with_memory(manager)` | Memory 指令、工具与动态注入 | 必要时 Tool、Hook |
 | `with_mcp(...)` | MCP lifecycle 和远程工具 | Tool |
 | `with_codeintel(...)` | CodeIntel provider 和查询工具 | Tool |
 | `with_worktree(...)` | Git worktree 生命周期和工具 | Tool |
@@ -149,7 +101,7 @@ composer = SystemPromptComposer(
 agent.with_prompt(composer)
 ```
 
-callable 接收 `PromptBuildContext`，不接收 Agent 本身。用户不需要实现请求编译、provider 格式或默认 block 拼装。
+callable 接收 `PromptBuildContext`，不接收 Agent 本身。安装模块时将其 `get_prompt_blocks(context)` 注册为提供者，每轮动态收集。替换 Composer 不丢失贡献，替换模块会移除旧提供者。`include_defaults` 控制默认规则，`include_module_blocks` 独立控制模块贡献。
 
 ### 5.2 MetaMessage
 

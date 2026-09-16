@@ -15,8 +15,8 @@ sys.path.append(os.path.abspath(".."))
 import json
 from core.llm import EasyLLM
 from core.history import CanonicalMessage, CanonicalBlock
-from context.token.counter import TokenCounter
-from context.compressor.history import (
+from context.default.token.counter import TokenCounter
+from context.default.compressor.history import (
     RuleBasedHistoryCompactor,
     LLMHistoryCompactor,
     HybridHistoryCompactor

@@ -1,4 +1,4 @@
-"""Tool interruption controller interfaces and default implementations."""
+"""Public interruption controller interfaces and default implementations."""
 
 from __future__ import annotations
 

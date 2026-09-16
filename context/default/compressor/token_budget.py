@@ -5,8 +5,8 @@ Token 预算压缩器
 这是最通用的压缩策略。
 """
 from typing import List
-from context.window import ContextItem
-from context.compressor.base import BaseCompressor
+from context.default.window import ContextItem
+from context.default.compressor.base import BaseCompressor
 
 
 class TokenBudgetCompressor(BaseCompressor):

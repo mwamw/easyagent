@@ -8,6 +8,12 @@ from context import (
     ContextBuilder,
     ContextItem,
     ContextManager,
+    ContextCompactionResult,
+    ContextUsage,
+    ModelRequestOptions,
+    ModelUsage,
+    ProviderReplayHistory,
+    ToolDefinitions,
     ContextWindow,
     HistoryCompactor,
 
@@ -34,6 +40,12 @@ __all__ = [
     "ContextBuilder",
     "ContextItem",
     "ContextManager",
+    "ContextCompactionResult",
+    "ContextUsage",
+    "ModelRequestOptions",
+    "ModelUsage",
+    "ProviderReplayHistory",
+    "ToolDefinitions",
     "ContextWindow",
     "HistoryCompactor",
 
@@ -52,5 +64,5 @@ __all__ = [
     "XMLFormatter",
 ]
 
-from context import BaseContextManager, HistoryCompactionResult, ContextBudgetExceeded
-__all__ += ["BaseContextManager", "HistoryCompactionResult", "ContextBudgetExceeded"]
+from context import BaseContextManager, ContextBudgetExceeded
+__all__ += ["BaseContextManager", "ContextBudgetExceeded"]

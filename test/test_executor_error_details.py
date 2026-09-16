@@ -1,4 +1,4 @@
-from agent.components.executor import DefaultAgentExecutor
+from executor import DefaultAgentExecutor
 
 
 class _ProviderFailure(Exception):

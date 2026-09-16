@@ -8,6 +8,7 @@ from easyagent import BasicAgent
 from easyagent.context import ContextManager, ContextBudgetExceeded
 from easyagent.hooks import BaseHook, HookDecision, HookManager
 from easyagent.memory import BaseMemory, LayeredMemory
+from memory.V2.MemoryManage import MemoryManage
 from easyagent.metamessages import MetaMessage, MetaMessageLifecycle
 from easyagent.prompting import PromptBlock, SystemPromptComposer
 from test_session_persistence import SessionLLM
@@ -18,12 +19,26 @@ def test_default_layered_memory_is_model_directed_and_lightweight():
     memory.add_memory("private memory content", "working", 1.0)
     agent = BasicAgent("test", SessionLLM()).with_memory(memory)
     assert list(memory.memory_types) == ["working"]
-    assert agent.context_manager is None
+    assert isinstance(agent.context_manager, ContextManager)
     assert agent.tool_registry.has_tool("search_memory_tool")
     assert "private memory content" not in agent.get_enhanced_prompt()
-    assert memory.get_hooks() == []
+    assert memory.get_hooks() == ()
+    assert {tool.name for tool in memory.get_retrieval_tools()} == {
+        "search_memory_tool", "get_memory_tool",
+    }
+    assert {tool.name for tool in memory.get_persistence_tools()} == {
+        "add_memory_tool", "update_memory_tool", "remove_memory_tool",
+        "memory_maintenance_tool",
+    }
     assert agent.invoke("hello") == "session-response"
     assert "private memory content" not in repr(agent.history)
+
+
+def test_v2_memory_is_the_framework_implementation_without_an_adapter_class():
+    assert LayeredMemory is MemoryManage
+    assert MemoryManage.__bases__ == (BaseMemory,)
+    assert issubclass(MemoryManage, BaseMemory)
+    assert MemoryManage.__module__ == "memory.V2.MemoryManage"
 
 
 def test_simple_memory_import_does_not_load_optional_clients():
@@ -43,6 +58,12 @@ def test_memory_tools_use_live_session_scope():
 class ReadOnlyMemory(BaseMemory):
     def get_prompt_blocks(self, context):
         return [PromptBlock("memory.custom", "Custom read-only memory instructions")]
+
+    def get_retrieval_tools(self):
+        return ()
+
+    def get_persistence_tools(self):
+        return ()
 
 
 def test_custom_memory_needs_no_crud_and_owns_its_prompt():

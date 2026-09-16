@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from agent import BasicAgent
-from agent.components.prompt_composer import PromptBuildContext, SystemPromptComposer
+from prompt.composer import PromptBuildContext, SystemPromptComposer
 from core.llm import EasyLLM
 from prompt import PromptBlock, SystemPromptTemplate, build_system_prompt
 from Tool import Tool, ToolRegistry

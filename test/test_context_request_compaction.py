@@ -5,11 +5,11 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from context.builder import ContextBuilder
-from context.compressor.history import LLMHistoryCompactor, RuleBasedHistoryCompactor
-from context.manager import ContextManager
-from context.token.budget import TokenBudget
-from context.token.counter import TokenCounter
+from context.default.builder import ContextBuilder
+from context.default.compressor.history import LLMHistoryCompactor, RuleBasedHistoryCompactor
+from context.default.manager import ContextManager
+from context.default.token.budget import TokenBudget
+from context.default.token.counter import TokenCounter
 from core.llm import EasyLLM
 from core.providers import create_codec
 from core.request_input import ReplayRequestInput

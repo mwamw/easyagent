@@ -1,8 +1,8 @@
 import json
 from core.history import CanonicalMessage, CanonicalBlock
-from context.token.counter import TokenCounter
+from context.default.token.counter import TokenCounter
 from core.providers import create_codec
-from context.compressor.history import BaseHistoryCompactor, LLMHistoryCompactor
+from context.default.compressor.history import BaseHistoryCompactor, LLMHistoryCompactor
 
 def create_test_history():
     history = []

@@ -318,6 +318,15 @@ class Tool(ABC):
 
         return self._permission_descriptor
 
+    def get_permission_extensions(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        """Return request-specific facts for permission engines.
+
+        Extensions are optional and must not perform the Tool action. They let a
+        Tool describe execution facts, such as whether Bash will be sandboxed,
+        without making ToolRegistry depend on a concrete Tool implementation.
+        """
+        return {}
+
     def validate_parameters(self, parameters: dict) -> dict[str, Any]:
         validated = self.parameters.model_validate(parameters)
         if hasattr(validated, "model_dump"):

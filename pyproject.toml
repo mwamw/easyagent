@@ -63,6 +63,7 @@ where = ["."]
 include = [
   "easyagent*",
   "agent*",
+  "executor*",
   "codeintel*",
   "context*",
   "core*",
@@ -84,6 +85,9 @@ include = [
   "storage*",
 ]
 exclude = [
+  "agent.components*",
+  "*.__pycache__*",
+  "build*",
   "docs*",
   "example*",
   "test*",
@@ -91,6 +95,9 @@ exclude = [
 
 [tool.setuptools.package-data]
 easyagent = ["py.typed"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc"]
 
 [tool.pyright]
 include = ["."]

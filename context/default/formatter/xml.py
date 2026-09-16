@@ -4,8 +4,8 @@ XML 格式化器
 结构化 XML 标签包裹上下文，对 Claude 等模型效果最好。
 """
 from typing import List
-from context.window import ContextItem
-from context.formatter.base import BaseFormatter
+from context.default.window import ContextItem
+from context.default.formatter.base import BaseFormatter
 
 
 def _escape_xml(text: str) -> str:

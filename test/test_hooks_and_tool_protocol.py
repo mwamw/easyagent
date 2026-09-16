@@ -12,7 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent import BasicAgent
-from context.manager import ContextManager
+from context.default.manager import ContextManager
 from core.Exception import ToolRegistryError
 from core.hooks import BaseHook, HookDecision, HookManager
 from core.llm import EasyLLM
@@ -196,7 +196,7 @@ class HookAndProtocolTests(unittest.TestCase):
         agent = BasicAgent(
             name="guardrail-agent",
             llm=DummyLLM(PlainProvider("EchoTool", {"text": "sk-abcdefghijklmnopqrstuvwxyz123456"})),
-        ).with_tool(registry)
+        ).with_tool(registry).with_hooks()
 
         result = agent.invoke("send secret")
 
@@ -213,7 +213,7 @@ class HookAndProtocolTests(unittest.TestCase):
         agent = BasicAgent(
             name="external-agent",
             llm=DummyLLM(PlainProvider("ExternalSnippet", {})),
-        ).with_tool(registry)
+        ).with_tool(registry).with_hooks()
 
         result = agent.invoke("read external snippet")
 

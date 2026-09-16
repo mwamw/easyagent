@@ -66,9 +66,9 @@ def main():
         assert agent.tool_registry.has_tool("memory_note")
         blocks = agent.get_system_prompt_blocks("Inspect evidence")
         assert {"identity", "workspace", "memory.evidence"}.issubset({block.name for block in blocks})
-        result = agent.execute_tool_result("lookup_evidence", {"evidence_id": "E-1"})
+        result = agent.tool_registry.execute_tool_result("lookup_evidence", {"evidence_id": "E-1"})
         assert result.status == "success" and result.structured_data["source"] == "E-1"
-        assert agent.execute_tool_result("lookup_evidence", {"evidence_id": "missing"}).status == "error"
+        assert agent.tool_registry.execute_tool_result("lookup_evidence", {"evidence_id": "missing"}).status == "error"
         assert module.LookupEvidence(repository).validate_parameters({"evidence_id": "E-1"}) == {"evidence_id": "E-1"}
         try:
             module.LookupEvidence(repository).validate_parameters({"evidence_id": ""})
@@ -93,7 +93,7 @@ def main():
         resumed = build()
         resumed.restore_session(session_id)
         assert any("Persist this evidence" in canonical_text_content(message)
-                   for message in resumed.history_store.canonical)
+                   for message in resumed.context_manager.canonical)
 
         class Client:
             async def recall(self, query):
@@ -114,7 +114,7 @@ def main():
             assert "Temporary evidence context" in repr(invoke.call_args)
         assert client.query == "Read prior evidence"
         assert not any("Temporary evidence context" in canonical_text_content(message)
-                       for message in resumed.history_store.canonical)
+                       for message in resumed.context_manager.canonical)
         print("PASS 7 Markdown examples: imports, assembly, prompt/module merge, tool validation/results,")
         print("memory tool/Hook registration, async request injection, temporary-message cleanup,")
         print("compactor output, Store revision conflict, save and restore. Model response was mocked.")

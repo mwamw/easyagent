@@ -7,11 +7,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from context.window import ContextItem
-from context.compressor.sliding_window import SlidingWindowCompressor
-from context.compressor.token_budget import TokenBudgetCompressor
-from context.compressor.selective import SelectiveCompressor
-from context.compressor.summarization import SummarizationCompressor
+from context.default.window import ContextItem
+from context.default.compressor.sliding_window import SlidingWindowCompressor
+from context.default.compressor.token_budget import TokenBudgetCompressor
+from context.default.compressor.selective import SelectiveCompressor
+from context.default.compressor.summarization import SummarizationCompressor
 from manual_test_runner import run_manual_tests, exit_with_status
 
 

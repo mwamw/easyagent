@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import agent
 from agent import BasicAgent
-from agent.components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext
+from prompt.composer import BaseSystemPromptComposer, PromptBuildContext
 from core.hooks import BaseHook, HookDecision, HookManager
 from core.llm import EasyLLM
 from metamessage import MetaMessage, MetaMessageLifecycle
@@ -201,7 +201,8 @@ def test_basic_agent_has_light_defaults_and_only_final_invocation_api():
 
     instance = BasicAgent("minimal", ScriptedLLM())
     assert instance.tool_registry is None
-    assert instance.context_manager is None
+    assert instance.context_manager is not None
+    assert not hasattr(instance, "history_store")
     assert instance.plan is None
     assert instance.observability is None
     assert instance.multi_agent is None

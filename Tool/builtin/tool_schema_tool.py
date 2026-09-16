@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from Tool.BaseTool import Tool
+from Tool.BaseTool import Tool, ToolResult
 
 
 class ToolSchemaToolParams(BaseModel):
@@ -31,11 +31,11 @@ class ToolSchemaTool(Tool):
         )
         self._registry = registry
 
-    def run(self, parameters: dict) -> dict[str, Any]:
+    def run(self, parameters: dict) -> ToolResult:
         tool_names = [str(name or "").strip() for name in list(parameters.get("tool_names") or [])]
         tool_names = [name for name in tool_names if name and name != self.name]
         expanded_specs = self._registry.expand_deferred_tools(tool_names)
-        return {
+        payload = {
             "expandedToolNames": [spec.name for spec in expanded_specs],
             "toolDescriptors": [self._descriptor(spec) for spec in expanded_specs],
             "message": (
@@ -43,6 +43,11 @@ class ToolSchemaTool(Tool):
                 "in subsequent model responses in this invocation; load them again in a new invocation if needed."
             ),
         }
+        names = self._registry.get_deferred_expanded_tool_names()
+        return ToolResult.success(
+            structured_data=payload,
+            ephemeral_context=("The following deferred tool schemas are now available: " + ", ".join(names)) if names else None,
+        )
 
     def _descriptor(self, spec):
         tool = self._registry.get_tool(spec.name)

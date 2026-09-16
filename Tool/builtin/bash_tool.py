@@ -12,6 +12,12 @@ from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeBashInput
 from ..runtime import BackgroundTaskSnapshot, FilesystemAccessError, FilesystemGuard, PathResolutionError, ProcessManager
 from .input_normalization import normalize_generic_input
+from .bash_sandbox import (
+    BashSandboxConfig,
+    BashSandboxError,
+    LinuxBubblewrapSandbox,
+    SandboxUnavailableError,
+)
 
 
 DEFAULT_BASH_OUTPUT_CHARS = 120000
@@ -276,6 +282,7 @@ class BashTool(_ShellToolBase):
         max_background_tasks: int = 8,
         max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
         process_manager: Optional[ProcessManager] = None,
+        sandbox: BashSandboxConfig | None = None,
     ):
         super().__init__(
             name="Bash",
@@ -297,6 +304,62 @@ class BashTool(_ShellToolBase):
             tags=["shell", "local", "claude_code"],
             resource_scope=["process", "filesystem", "workspace"],
         )
+        self.sandbox_config = sandbox or BashSandboxConfig()
+        self.sandbox = LinuxBubblewrapSandbox(
+            self.sandbox_config,
+            workspace_root=self.workspace_root,
+            allowed_roots=self.guard.allowed_roots,
+            shell=shell,
+        )
+        sandbox_status = self.sandbox.status()
+        if (
+            self.sandbox_config.enabled
+            and not sandbox_status.available
+            and (
+                self.sandbox_config.fail_if_unavailable
+                or not self.sandbox_config.allow_unsandboxed_commands
+            )
+        ):
+            raise SandboxUnavailableError(
+                "; ".join(sandbox_status.errors) or "sandbox unavailable"
+            )
+        self.process_manager.register_cleanup(self.sandbox.close)
+        if self.sandbox_config.enabled:
+            permission_note = (
+                " Commands run inside a Linux Bubblewrap sandbox by default."
+                if sandbox_status.available
+                else " Sandbox was requested but is unavailable; configured fallback policy applies."
+            )
+            self.spec.prompt = f"{self.spec.prompt.rstrip()}\n\n# Sandbox\n{permission_note.strip()}"
+
+    def get_sandbox_status(self) -> dict[str, object]:
+        return self.sandbox.status().to_dict()
+
+    def get_permission_extensions(self, parameters: dict[str, Any]) -> dict[str, Any]:
+        command = normalize_generic_input(parameters.get("command", ""))
+        dangerously_disable = bool(parameters.get("dangerouslyDisableSandbox", False))
+        try:
+            decision = self.sandbox.decide(
+                command, dangerously_disable=dangerously_disable,
+            )
+            return {
+                "sandbox": {
+                    **decision.to_dict(),
+                    "will_sandbox": decision.applied,
+                    "auto_allow": decision.auto_allow,
+                }
+            }
+        except BashSandboxError as exc:
+            return {
+                "sandbox": {
+                    "configured": self.sandbox_config.enabled,
+                    "will_sandbox": False,
+                    "auto_allow": False,
+                    "bypassed": dangerously_disable,
+                    "error": str(exc),
+                    "error_type": exc.error_type,
+                }
+            }
 
     def run(self, parameters: dict) -> ToolResult:
         command = normalize_generic_input(parameters.get("command", ""))
@@ -313,20 +376,35 @@ class BashTool(_ShellToolBase):
                 structured_data={"reason": "empty_command"},
             )
 
-        if dangerously_disable_sandbox:
+        try:
+            sandbox_decision = self.sandbox.decide(
+                command,
+                dangerously_disable=dangerously_disable_sandbox,
+            )
+            sandbox_metadata = sandbox_decision.to_dict()
+            execution_command: Any = command
+            execution_env = None
+            use_shell = True
+            if sandbox_decision.applied:
+                sandboxed = self.sandbox.wrap(command, cwd=self.cwd)
+                execution_command = list(sandboxed.argv)
+                execution_env = sandboxed.environment
+                use_shell = False
+        except BashSandboxError as exc:
             return self._tool_error(
-                "当前 EasyAgent Bash 工具还不支持在工具层切换 dangerouslyDisableSandbox；请由宿主运行时处理权限模式。",
-                error_type="unsupported_option",
-                metadata={"command": command, "dangerouslyDisableSandbox": True},
-                structured_data={"reason": "unsupported_option", "option": "dangerouslyDisableSandbox"},
+                f"Sandbox execution rejected: {exc}",
+                error_type=exc.error_type,
+                metadata={"command": command, "cwd": self.cwd, "sandbox": self.get_sandbox_status()},
+                structured_data={"reason": exc.error_type, "command": command, "cwd": self.cwd},
             )
 
         try:
             if run_in_background:
                 snapshot = self.process_manager.start_background(
-                    command,
+                    execution_command,
                     cwd=self.cwd,
-                    use_shell=True,
+                    env=execution_env,
+                    use_shell=use_shell,
                 )
                 display_text, truncated = _format_background_snapshot(snapshot, max_output_chars=self.max_output_chars)
                 return ToolResult.success(
@@ -335,6 +413,7 @@ class BashTool(_ShellToolBase):
                         **_snapshot_to_dict(snapshot),
                         "description": description,
                         "truncated": truncated,
+                        "sandbox": sandbox_metadata,
                     },
                     metadata={
                         "task_id": snapshot.task_id,
@@ -342,14 +421,16 @@ class BashTool(_ShellToolBase):
                         "cwd": snapshot.cwd,
                         "description": description,
                         "truncated": truncated,
+                        "sandbox": sandbox_metadata,
                     },
                 )
 
             result = self.process_manager.run(
-                command,
+                execution_command,
                 cwd=self.cwd,
+                env=execution_env,
                 timeout_ms=timeout_ms,
-                use_shell=True,
+                use_shell=use_shell,
             )
         except (PathResolutionError, FilesystemAccessError, ValueError) as exc:
             return self._tool_error(
@@ -364,6 +445,25 @@ class BashTool(_ShellToolBase):
                 error_type="command_failed",
                 metadata={"command": command, "cwd": self.cwd},
                 structured_data={"reason": "command_failed", "command": command, "cwd": self.cwd},
+            )
+
+        if (
+            sandbox_decision.applied
+            and result.return_code != 0
+            and result.stderr.lstrip().startswith("bwrap:")
+        ):
+            return self._tool_error(
+                f"Sandbox failed to launch: {result.stderr.strip()}",
+                error_type="sandbox_launch_failed",
+                metadata={"command": command, "cwd": self.cwd, "sandbox": sandbox_metadata},
+                structured_data={
+                    "reason": "sandbox_launch_failed",
+                    "command": command,
+                    "cwd": self.cwd,
+                    "return_code": result.return_code,
+                    "stderr": result.stderr,
+                    "sandbox": sandbox_metadata,
+                },
             )
 
         sections = [
@@ -389,6 +489,7 @@ class BashTool(_ShellToolBase):
                 "timed_out": result.timed_out,
                 "description": description,
                 "truncated": truncated,
+                "sandbox": sandbox_metadata,
             },
             metadata={
                 "command": command,
@@ -397,6 +498,7 @@ class BashTool(_ShellToolBase):
                 "timed_out": result.timed_out,
                 "description": description,
                 "truncated": truncated,
+                "sandbox": sandbox_metadata,
             },
         )
 
@@ -412,6 +514,7 @@ def register_bash_tool(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    sandbox: BashSandboxConfig | None = None,
     expose_in_deferred: bool | None = True,
 ) -> BashTool:
     tool = BashTool(
@@ -423,6 +526,7 @@ def register_bash_tool(
         max_background_tasks=max_background_tasks,
         max_output_chars=max_output_chars,
         process_manager=process_manager,
+        sandbox=sandbox,
     )
     registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
@@ -439,6 +543,7 @@ def register_shell_tools(
     max_background_tasks: int = 8,
     max_output_chars: int = DEFAULT_BASH_OUTPUT_CHARS,
     process_manager: Optional[ProcessManager] = None,
+    sandbox: BashSandboxConfig | None = None,
     expose_in_deferred: bool | None = True,
 ):
     from .task_output import TaskOutputTool
@@ -455,6 +560,7 @@ def register_shell_tools(
         max_background_tasks=max_background_tasks,
         max_output_chars=max_output_chars,
         process_manager=manager,
+        sandbox=sandbox,
         expose_in_deferred=expose_in_deferred,
     )
     task_output_tool = TaskOutputTool(

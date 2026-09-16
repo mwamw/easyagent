@@ -4,8 +4,8 @@ import asyncio
 from types import SimpleNamespace
 
 from agent import BasicAgent
-from agent.components.executor import AgentExecutionServices, BaseAgentExecutor
-from agent.components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext
+from executor import AgentExecutionServices, BaseAgentExecutor
+from prompt.composer import BaseSystemPromptComposer, PromptBuildContext
 from core.llm import EasyLLM
 from runtime import AgentStreamEvent, AgentStreamEventType
 from prompt import PromptBlock
@@ -99,6 +99,6 @@ def test_custom_executor_receives_the_current_composed_services():
 
     assert isinstance(services, AgentExecutionServices)
     assert services.agent_id == "services-agent"
-    assert services.history is agent.history_store
+    assert services.context_manager is agent.context_manager
     assert services.prompt_composer is agent.prompt_composer
     assert services.event_bus is agent.event_bus

@@ -164,7 +164,7 @@ def test_memory_and_prompt_examples_integrate_without_manual_registration(monkey
         assert agent.memory.services.scope.session_id == agent.session_id
         blocks = agent.get_system_prompt_blocks("Find prior evidence")
         assert {block.name for block in blocks} == {"identity", "memory.research"}
-        assert agent.execute_tool_result("Echo", {"text": "evidence"}).content == "evidence"
+        assert agent.tool_registry.execute_tool_result("Echo", {"text": "evidence"}).content == "evidence"
         assert agent.invoke("Hello") == "session-response"
     finally:
         agent.close()

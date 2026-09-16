@@ -24,7 +24,7 @@ from memory.V2.PerceptualMemory import PerceptualMemory
 from memory.V2.SemanticMemory import SemanticMemory
 from memory.V2.Store.Neo4jGraphStore import Neo4jGraphStore
 from memory.V2.Extractor.Extractor import Extractor
-from Tool.builtin.memorytool import register_memory_tools
+from memory.V2.tools import register_memory_tools
 from core.llm import EasyLLM
 from agent.BasicAgent import BasicAgent
 from Tool.ToolRegistry import ToolRegistry
@@ -102,7 +102,7 @@ class TestAgentMemoryIntegration:
         
         assert any(t["function"]["name"] == "add_memory_tool" for t in tools), "Tool registry failed to auto-register memory tools!"
         
-        from context.manager import ContextManager
+        from context.default.manager import ContextManager
         context_manager = ContextManager(max_tokens=50000)
         self.agent.with_context(context_manager)
         print("测试环境初始化完成！")

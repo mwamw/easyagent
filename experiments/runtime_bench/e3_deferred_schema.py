@@ -15,7 +15,7 @@ from common import (
     write_json,
     now_ms,
 )
-from context.token.counter import TokenCounter
+from context.default.token.counter import TokenCounter
 from easyagent import Config
 
 

@@ -13,6 +13,9 @@ from .models import ExecutionMode, ModeController, PlanModeConfig
 
 
 class BasePlanMode(ABC):
+    def get_prompt_blocks(self, context):
+        return []
+
     @property
     @abstractmethod
     def mode(self) -> ExecutionMode:
@@ -155,6 +158,19 @@ class PlanModeManager(BasePlanMode):
         if message.rstrip().endswith("</system-reminder>"):
             return message.rstrip().removesuffix("</system-reminder>") + detail + "\n</system-reminder>"
         return f"{message}\n{detail}"
+
+    def get_prompt_blocks(self, context):
+        from prompt import PromptBlock
+        if not self.is_active:
+            return []
+        return [PromptBlock(
+            "plan_mode",
+            "Plan mode still active (see full instructions earlier in conversation). "
+            "Read-only inspection and planning only; do not modify files or run non-readonly tools. "
+            "Use ExitPlanMode to request approval when the plan is ready.",
+            placement="system_reminder", order=190,
+            metadata={"cache_partition": "dynamic", "cacheable": False},
+        )]
 
     def export_state(self) -> dict:
         return {

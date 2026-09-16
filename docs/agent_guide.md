@@ -89,7 +89,7 @@ agent.with_permissions(RuleBasedPermissionEngine())
 agent.with_hooks(HookManager())
 ```
 
-默认 Agent 已有权限和默认 guardrail。如果产品需要替换它们，使用上述接口显式替换。
+权限与 Hook 是附加模块，默认不安装。`with_permissions()` 安装默认规则引擎，`with_hooks()` 安装默认 guardrail；也可以像上面一样显式传入实现。
 
 ### Plan
 
@@ -159,7 +159,7 @@ agent.with_memory(memory_manager)
 
 ## 4. History 与 Trace
 
-Agent history 使用 `ConversationHistory`：
+Agent history 由当前 Context 模块拥有。默认 Context 内部使用 provider-neutral canonical history：
 
 - `agent.history`：`list[CanonicalMessage]`
 - `agent.replay_history`：当前 provider 可直接发送的 replay
@@ -178,7 +178,7 @@ Agent history 使用 `ConversationHistory`：
 pending = agent.get_pending_interruption()
 ```
 
-用户批准并得到真实工具结果后，通过：
+用户批准后，宿主在自己的授权边界内执行动作并得到真实工具结果，再通过：
 
 ```python
 agent.resolve_pending_interruption(
@@ -187,7 +187,7 @@ agent.resolve_pending_interruption(
 )
 ```
 
-再发起下一次 invoke。自定义中断存储通过 `with_interruptions()` 安装。
+再发起下一次 invoke。BaseAgent 不提供平行的工具执行 API；正常工具执行只发生在 Executor 的 ReAct 流中。自定义中断存储通过 `with_interruptions()` 安装。
 
 ## 6. Session 与关闭
 

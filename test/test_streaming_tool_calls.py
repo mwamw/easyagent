@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.llm import EasyLLM
 from core.providers import AnthropicProvider, GoogleProvider, OpenAIProvider, OpenAIResponsesProvider, create_codec
-from agent.components.executor import DefaultAgentExecutor
+from executor import DefaultAgentExecutor
 from runtime import AgentStreamEvent, AgentStreamEventType
 from Tool.ToolRegistry import ToolRegistry
 

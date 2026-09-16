@@ -1,7 +1,7 @@
 """Public runtime meta-message API."""
 
 from .events import MetaMessageEvent
-from .history import AgentMetaMessageHistoryPort, MetaMessageHistoryPort
+from .history import ContextMetaMessageHistoryPort, MetaMessageHistoryPort
 from .manager import (
     BaseMetaMessageManager,
     MetaMessageContextProvider,
@@ -18,7 +18,7 @@ from .models import (
 )
 
 __all__ = [
-    "AgentMetaMessageHistoryPort",
+    "ContextMetaMessageHistoryPort",
     "BaseMetaMessageManager",
     "MetaMessage",
     "MetaMessageCondition",

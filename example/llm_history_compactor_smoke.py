@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from context import LLMHistoryCompactor
-from context.token.counter import TokenCounter
+from context.default.token.counter import TokenCounter
 from core.llm import EasyLLM
 
 

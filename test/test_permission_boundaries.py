@@ -11,6 +11,7 @@ import pytest
 from pydantic import BaseModel
 
 from agent import BasicAgent
+from easyagent.executors import AgentInvocationState
 from core.Exception import ToolConfirmationRequired
 from core.llm import EasyLLM
 from core.permissions import (
@@ -168,7 +169,7 @@ def test_default_engine_still_blocks_plan_writes(path):
 @pytest.mark.parametrize("approval_mode", list(ApprovalMode))
 @pytest.mark.parametrize("exit_via", ["agent", "plan"])
 def test_plan_exit_preserves_approval_policy(approval_mode, exit_via):
-    agent = BasicAgent("exit-plan", OfflineLLM()).with_plan(config=PlanModeConfig(register_tools=False))
+    agent = BasicAgent("exit-plan", OfflineLLM()).with_permissions().with_plan(config=PlanModeConfig(register_tools=False))
     agent.set_permission_mode(approval_mode)
     before = agent.permission_engine.export_state()
     factory = agent._services().authorization_context_factory
@@ -190,7 +191,7 @@ def test_plan_exit_preserves_approval_policy(approval_mode, exit_via):
 
 
 def test_mode_changed_during_plan_is_not_reset_on_exit():
-    agent = BasicAgent("change-plan", OfflineLLM()).with_plan(config=PlanModeConfig(register_tools=False))
+    agent = BasicAgent("change-plan", OfflineLLM()).with_permissions().with_plan(config=PlanModeConfig(register_tools=False))
     try:
         agent.enter_plan_mode()
         agent.set_permission_mode(ApprovalMode.AUTO_APPROVE_SAFE)
@@ -213,8 +214,13 @@ def test_executor_uses_context_factory_without_reading_engine_mode():
         engine = OpaqueEngine(PermissionBehavior.ALLOW)
         services.permission_engine = engine
         services.authorization_context_factory = lambda: context
-        _, _, _, result = agent.executor._prepare_tool(services, tool_name="WriteProbe", arguments={})
-        assert result is None
+        state = AgentInvocationState("invoke-test", "test", False, round_number=1)
+        call = SimpleNamespace(
+            id="call-test",
+            function=SimpleNamespace(name="WriteProbe", arguments="{}"),
+        )
+        _, _, _, result = agent.executor.execute_tool_call(services, state, call)
+        assert result.status == "success"
         assert engine.requests[0].context is context
     finally:
         agent.close()
@@ -231,7 +237,7 @@ def test_skill_never_mutates_authorization_or_tool_visibility(tmp_path, monkeypa
         f"---\nname: review\ndescription: Review code\n{frontmatter}: WriteProbe\n---\nInspect carefully.\n",
         encoding="utf-8",
     )
-    agent = BasicAgent("skill-boundary", OfflineLLM()).add_tool(CountingWriteTool())
+    agent = BasicAgent("skill-boundary", OfflineLLM()).add_tool(CountingWriteTool()).with_permissions()
     engine = agent.permission_engine
     engine.add_rule(tool_name="WriteProbe", behavior="deny")
     before = engine.export_state()
@@ -245,9 +251,12 @@ def test_skill_never_mutates_authorization_or_tool_visibility(tmp_path, monkeypa
     monkeypatch.setattr(agent.tool_registry, "expand_deferred_tools", forbidden)
     try:
         agent.with_skill(tmp_path)
-        assert agent.execute_tool_result("skill_tool", {"skill": "review"}).status == "success"
+        assert agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review"}).status == "success"
         agent.event_bus.publish(terminal, agent_id=agent.name, invocation_id="skill-test")
-        assert agent.execute_tool_result("WriteProbe", {}).error_type == "permission_denied"
+        request = agent.tool_registry.build_permission_request(
+            "WriteProbe", {}, context=agent.build_authorization_context()
+        )
+        assert engine.authorize(request).behavior == PermissionBehavior.DENY
         agent.skill_manager.restore_state(agent.skill_manager.export_state())
         agent.skill_manager.close()
         assert engine.export_state() == before

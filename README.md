@@ -16,6 +16,11 @@ EasyAgent 是一个面向 **Agent Harness 开发**的 Python Runtime Framework�
 
 [快速开始](#quick-start) · [自定义模块](#custom-components) · [架构与能力](#runtime-capabilities) · [框架对比](#comparison) · [文档导航](#documentation) · [技术白皮书](docs/whitepaper/README.md)
 
+Linux 上的内置 `BashTool` 可选使用 Bubblewrap 沙箱。沙箱是 Bash 的执行后端，
+不是 Agent Module；支持 regular/auto-allow、严格禁止无沙箱回退、文件系统
+读写边界，以及继承网络或完全断网。参见
+[Linux Bash Sandbox](docs/bash_sandbox_guide.md)。
+
 ## Why EasyAgent?
 
 专业 Agent 的差异，不只在提示词和工具列表中。
@@ -122,7 +127,7 @@ finally:
     agent.close()
 ```
 
-最小 `BasicAgent` 不会自动安装 Memory、MCP、MultiAgent、CodeIntel、Worktree 或创建 Observability 数据库。框架已有轻量的历史、提示词、权限、事件与执行设施，其他能力按需装配。
+最小 `BasicAgent` 始终安装 LLM、Executor、System Prompt 和 Context。Context 拥有历史与请求准备；默认不设总预算上限。Permission、Hook、Callback、Tool、Memory 等附加模块通过 `with_*` 显式安装，不会创建隐式权限策略或 Observability 数据库。
 
 ### 显式装配产品能力
 
@@ -149,6 +154,8 @@ def build_product_agent(llm, workspace="."):
         BasicAgent("product-agent", llm, config=Config(workspace_root=str(root)))
         .with_tool(registry)
         .with_context(context)
+        .with_permissions()
+        .with_hooks()
         .with_observability(path=str(root / ".easyagent" / "observability.sqlite3"))
     )
 ```
@@ -190,8 +197,9 @@ from easyagent.memory import BaseMemory
 from easyagent.prompting import PromptBlock
 
 class ResearchMemory(BaseMemory):
-    def __init__(self, tools):
-        self.tools = list(tools)
+    def __init__(self, retrieval_tools=(), persistence_tools=()):
+        self.retrieval_tools = list(retrieval_tools)
+        self.persistence_tools = list(persistence_tools)
 
     def get_prompt_blocks(self, context):
         return [PromptBlock(
@@ -200,11 +208,14 @@ class ResearchMemory(BaseMemory):
             "Save reusable conclusions with their evidence references.",
         )]
 
-    def get_tools(self):
-        return self.tools
+    def get_retrieval_tools(self):
+        return self.retrieval_tools
 
-def install_research_memory(agent, memory_tools):
-    return agent.with_memory(ResearchMemory(memory_tools))
+    def get_persistence_tools(self):
+        return self.persistence_tools
+
+def install_research_memory(agent, retrieval_tools=(), persistence_tools=()):
+    return agent.with_memory(ResearchMemory(retrieval_tools, persistence_tools))
 ```
 
 安装时，框架绑定服务并注册模块提供的工具和 Hook；请求准备时，正常的 Prompt Composer 合并记忆说明。模型调用记忆工具时，执行和结果走普通工具路径。
@@ -244,7 +255,7 @@ def install_research_prompt(agent):
 | 记忆机制 | `BaseMemory` | `with_memory(memory)` |
 | 产品提示词 | `BaseSystemPromptComposer` | `with_prompt(composer)` |
 | 工具 | `Tool` / `ToolRegistry` | `add_tool(tool)` / `with_tool(registry)` |
-| 权限策略 | `PermissionEngine` / `PermissionContext` | `with_permissions(engine, context)` |
+| 权限策略 | `BasePermissionEngine` | `with_permissions(engine)` |
 | 会话存储 | `BaseSessionStore` | `with_session(store)` |
 | 可观测性 | `BaseObservabilityManager` / `BaseObservabilityStore` | `with_observability(manager=...)` 或 `store=...` |
 | 子 Agent 运行时 | `BaseMultiAgentRuntime` | `with_multi_agent(runtime)` |
@@ -323,7 +334,7 @@ def build_code_agent(llm, workspace="."):
     return BasicAgent(
         "code-agent", llm,
         config=Config(workspace_root=str(root), tool_schema_mode="deferred"),
-    ).with_tool(registry)
+    ).with_tool(registry).with_permissions().with_hooks()
 ```
 
 上面仅装配能力，不执行命令。多个 Agent 修改同一仓库时，可用独立 Worktree 分开工作副本；Git 分支合并、外部资源和执行隔离仍需产品管理。

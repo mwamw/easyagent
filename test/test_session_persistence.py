@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from pydantic import BaseModel
 
 from agent import BasicAgent
-from agent.components.prompt_composer import BaseSystemPromptComposer, PromptBuildContext
+from prompt.composer import BaseSystemPromptComposer, PromptBuildContext
 from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
 from easyagent.session import SQLiteSessionStore as SessionStore
@@ -309,7 +309,7 @@ def test_change_model_rebuilds_provider_replay_history():
 
     agent.change_model(SessionLLM("anthropic_native"))
 
-    assert agent.history_store.provider_name == "anthropic_native"
+    assert agent.context_manager.provider_name == "anthropic_native"
     assert [item.role for item in agent.get_canonical_history()] == ["user", "assistant"]
     assert [item["role"] for item in agent.replay_history] == ["user", "assistant"]
 

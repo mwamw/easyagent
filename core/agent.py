@@ -10,14 +10,10 @@ from uuid import uuid4
 from threading import Lock
 from typing import Any, AsyncIterator, Iterator
 
-from agent.components.conversation_history import ConversationHistory
-from agent.components.executor import BaseAgentExecutor
-from agent.components.prompt_composer import (
-    BaseSystemPromptComposer,
-    PromptBuildContext,
-    SystemPromptComposer,
-)
-from context.manager import ContextManager
+from executor.base import BaseAgentExecutor
+from prompt.base import BaseSystemPromptComposer, PromptBuildContext
+from prompt.composer import SystemPromptComposer
+from context.default.manager import ContextManager
 from context.base import BaseContextManager
 from core.callbacks import CallbackManager
 from core.Config import Config
@@ -36,11 +32,9 @@ from core.llm import EasyLLM
 from core.permissions import PermissionEngine, ApprovalMode
 from core.permissions.base import BasePermissionEngine
 from core.permissions.default import RuleBasedPermissionEngine
-from core.permissions.models import PermissionGrant
-from core.permissions.grants import PermissionGrantLedger
 from core.session import SessionRestoreReport
 from metamessage import (
-    AgentMetaMessageHistoryPort,
+    ContextMetaMessageHistoryPort,
     BaseMetaMessageManager,
     MetaMessage,
     MetaMessageContext,
@@ -64,7 +58,7 @@ from Tool.ToolRegistry import ToolRegistry
 
 
 class BaseAgent(ABC):
-    """Agent identity, fixed history, and explicit optional-module composition."""
+    """Agent identity and composition of required and optional functional modules."""
 
     def __init__(
         self,
@@ -87,19 +81,15 @@ class BaseAgent(ABC):
         self.description = description
         self.config = config or Config.from_env()
         self.reasoning: dict[str, Any] | None = None
+        self._prompt_providers = {}
+        self._context_owner = object()
 
-        self.history_store = ConversationHistory(llm)
-        from context.usage import ContextUsageTracker
-        self._context_usage = ContextUsageTracker()
         self.event_bus = RuntimeEventBus()
         self.prompt_composer: BaseSystemPromptComposer = SystemPromptComposer()
         self.skill_manager: SkillManager | None = None
-        self.callback_manager = CallbackManager()
-        self.hook_manager = build_default_hook_manager()
-        self.permission_engine = RuleBasedPermissionEngine(
-            workspace_root=os.path.abspath(self.config.workspace_root or os.getcwd())
-        )
-        self.permission_grants = PermissionGrantLedger()
+        self.callback_manager: CallbackManager | None = None
+        self.hook_manager: HookManager | None = None
+        self.permission_engine: BasePermissionEngine | None = None
         self.metamessage_manager: BaseMetaMessageManager = MetaMessageManager()
 
         workspace_root = os.path.abspath(self.config.workspace_root or os.getcwd())
@@ -111,7 +101,9 @@ class BaseAgent(ABC):
         )
 
         self.tool_registry: ToolRegistry | None = None
-        self.context_manager: ContextManager | None = None
+        self.context_manager: BaseContextManager = ContextManager()
+        self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
+        self.register_prompt_provider("context", self.context_manager.get_prompt_blocks)
         self.task_service: Any = None
         self.current_task_id: str | None = None
         self.memory: Any = None
@@ -135,9 +127,7 @@ class BaseAgent(ABC):
         self._closed = False
         self.last_restore_report: SessionRestoreReport | None = None
         self.last_close_report: dict[str, Any] | None = None
-        self._callback_subscription = self.event_bus.subscribe(
-            CallbackEventSubscriber(self.callback_manager)
-        )
+        self._callback_subscription = None
         self._metamessage_subscription = self.event_bus.subscribe(
             self._handle_runtime_metamessage
         )
@@ -148,7 +138,6 @@ class BaseAgent(ABC):
         self._owns_session_store = False
         for name, attribute, forkable in (
             ("permissions", "permission_engine", True), ("metamessage", "metamessage_manager", True),
-            ("permissionGrants", "permission_grants", False),
             ("skills", "skill_manager", True), ("context", "context_manager", True),
             ("memory", "memory", True), ("plan", "plan", True),
             ("tasks", "task_service", False), ("interruptions", "interrupt_controller", False),
@@ -181,7 +170,7 @@ class BaseAgent(ABC):
 
     def _bind_metamessage_manager(self) -> None:
         self.metamessage_manager.bind(
-            history_port=AgentMetaMessageHistoryPort(self.history_store),
+            history_port=ContextMetaMessageHistoryPort(self.context_manager),
             context_provider=self._metamessage_context,
         )
 
@@ -194,6 +183,7 @@ class BaseAgent(ABC):
         if not isinstance(manager, BaseMetaMessageManager):
             raise TypeError("manager must extend BaseMetaMessageManager")
         self.metamessage_manager = manager
+        self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
         self._bind_metamessage_manager()
         if self.plan is not None:
             self._bind_plan()
@@ -235,13 +225,18 @@ class BaseAgent(ABC):
             query=query,
             config=self.config,
             execution_context=self.execution_context,
-            tool_registry=self.tool_registry,
-            skill_manager=self.skill_manager,
-            memory=self.memory,
-            task_service=self.task_service,
-            plan=self.plan,
-            context_manager=self.context_manager,
+            tools_enabled=self.enable_tool,
+            providers=tuple(self._prompt_providers.values()),
         )
+
+    def register_prompt_provider(self, name: str, provider) -> None:
+        """Bind a module's public prompt contribution; None unregisters it."""
+        if provider is None:
+            self._prompt_providers.pop(name, None)
+        elif callable(provider):
+            self._prompt_providers[name] = provider
+        else:
+            raise TypeError("Prompt provider must be callable")
 
     def build_authorization_context(self):
         """Build an immutable permission context from Agent-owned runtime state."""
@@ -274,6 +269,7 @@ class BaseAgent(ABC):
         if self.tool_registry is not None and self.tool_registry is not registry:
             raise ToolRegistryError("A different ToolRegistry is already installed")
         self.tool_registry = registry
+        self.register_prompt_provider("tools", registry.get_prompt_blocks)
         self._ensure_deferred_tool_schema_tool()
         if self.task_service is not None:
             self._register_task_tools()
@@ -286,7 +282,16 @@ class BaseAgent(ABC):
     def with_context(self, context_manager: BaseContextManager) -> "BaseAgent":
         if not isinstance(context_manager, BaseContextManager):
             raise TypeError("context_manager must implement BaseContextManager")
+        if self._closed or self._invocation_lock.locked() or self._sessions.busy:
+            raise RuntimeError("Context can only be replaced on an idle, open Agent")
+        if context_manager is self.context_manager:
+            return self
+        context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
+        if self.context_manager.canonical:
+            context_manager.replace(self.context_manager.canonical)
         self.context_manager = context_manager
+        self.register_prompt_provider("context", context_manager.get_prompt_blocks)
+        self._bind_metamessage_manager()
         return self
 
     def with_permissions(
@@ -304,20 +309,25 @@ class BaseAgent(ABC):
         self._refresh_execution_context()
         return self
 
-    def with_hooks(self, hook_manager: HookManager) -> "BaseAgent":
+    def with_hooks(self, hook_manager: HookManager | None = None) -> "BaseAgent":
+        hook_manager = hook_manager if hook_manager is not None else build_default_hook_manager()
         if not isinstance(hook_manager, HookManager):
             raise TypeError("hook_manager must be HookManager")
         if hook_manager is not self.hook_manager:
             for hook in self._memory_hooks:
-                self.hook_manager.remove_hook(hook)
+                if self.hook_manager is not None:
+                    self.hook_manager.remove_hook(hook)
                 hook_manager.add_hook(hook)
             self.hook_manager = hook_manager
+        self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
         return self
 
-    def with_callbacks(self, callback_manager: CallbackManager) -> "BaseAgent":
+    def with_callbacks(self, callback_manager: CallbackManager | None = None) -> "BaseAgent":
+        callback_manager = callback_manager if callback_manager is not None else CallbackManager()
         if not isinstance(callback_manager, CallbackManager):
             raise TypeError("callback_manager must be CallbackManager")
-        self.event_bus.unsubscribe(self._callback_subscription)
+        if self._callback_subscription is not None:
+            self.event_bus.unsubscribe(self._callback_subscription)
         self.callback_manager = callback_manager
         self._callback_subscription = self.event_bus.subscribe(
             CallbackEventSubscriber(callback_manager)
@@ -352,6 +362,7 @@ class BaseAgent(ABC):
         resolved.bind_agent(self)
         resolved.install_tool()
         self.skill_manager = resolved
+        self.register_prompt_provider("skill", resolved.get_prompt_blocks)
         return self
 
     def with_plan(
@@ -368,6 +379,7 @@ class BaseAgent(ABC):
         if self.plan is not None and self.plan is not resolved:
             raise ExecutionModeError("A different Plan module is already installed")
         self.plan = resolved
+        self.register_prompt_provider("plan", resolved.get_prompt_blocks)
         if getattr(getattr(resolved, "config", None), "register_tools", False) and self.tool_registry is None:
             self.with_tool()
         self._bind_plan()
@@ -487,7 +499,9 @@ class BaseAgent(ABC):
             user_id=getattr(memory, "user_id", None),
         )))
         try:
-            tools = list(memory.get_tools())
+            retrieval_tools = list(memory.get_retrieval_tools())
+            persistence_tools = list(memory.get_persistence_tools())
+            tools = [*retrieval_tools, *persistence_tools]
             hooks = list(memory.get_hooks())
             if any(not isinstance(tool, Tool) for tool in tools):
                 raise TypeError("Memory tools must be Tool instances")
@@ -512,22 +526,28 @@ class BaseAgent(ABC):
             memory.unbind()
             raise
         self.memory = memory
+        self.register_prompt_provider("memory", memory.get_prompt_blocks)
         self._memory_emitter = emitter
         self._owns_memory = owned
         self._memory_tools = tools
+        if hooks and self.hook_manager is None:
+            self.with_hooks(HookManager())
         self._memory_hooks = hooks
         for tool in tools:
             self.tool_registry.register_tool(tool, conflict_policy="error", expose_in_deferred=True)
-        self.hook_manager.extend(hooks)
+        if hooks:
+            self.hook_manager.extend(hooks)
         return self
 
     def _detach_memory(self) -> None:
         memory = self.memory
+        self.register_prompt_provider("memory", None)
         for tool in self._memory_tools:
             if self.tool_registry is not None and self.tool_registry.get_tool(tool.name) is tool:
                 self.tool_registry.unregister_tool(tool.name)
         for hook in self._memory_hooks:
-            self.hook_manager.remove_hook(hook)
+            if self.hook_manager is not None:
+                self.hook_manager.remove_hook(hook)
         if self._memory_emitter is not None:
             self._memory_emitter.close()
         self._memory_tools = []
@@ -635,7 +655,7 @@ class BaseAgent(ABC):
         return self
 
     def with_interruptions(self, controller: Any) -> "BaseAgent":
-        from agent.components.tool_interrupt_controller import BaseToolInterruptController
+        from runtime.interruptions import BaseToolInterruptController
 
         if not isinstance(controller, BaseToolInterruptController):
             raise TypeError("controller must extend BaseToolInterruptController")
@@ -661,7 +681,7 @@ class BaseAgent(ABC):
         if not tool_name or not tool_id:
             raise ToolExecutionError("Pending interruption is missing tool_name or tool_id")
         text = str(content)
-        self.history_store.append_tool_result(text, tool_id, tool_name)
+        self.context_manager.append_tool_result(text, tool_id, tool_name)
         if ephemeral_context is not None:
             rendered = (
                 ephemeral_context
@@ -698,67 +718,6 @@ class BaseAgent(ABC):
             self.with_tool()
         self.tool_registry.register_tool(tool)
         return self
-
-    def execute_tool_result(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
-        if self.tool_registry is None:
-            raise ToolRegistryError("Tool module is not installed")
-        tool, validated, descriptor = self.tool_registry.resolve_tool_call(tool_name, arguments)
-        from core.permissions.base import BasePermissionEngine
-        if isinstance(self.permission_engine, BasePermissionEngine):
-            from core.permissions.models import AuthorizationContext, PermissionBehavior
-            request = self.tool_registry.build_permission_request(
-                tool_name,
-                validated,
-                context=self.build_authorization_context(),
-            )
-            decision = self.permission_engine.authorize(request)
-            if decision.behavior != PermissionBehavior.ALLOW:
-                return ToolResult.error(decision.reason or "Tool permission denied", error_type="permission_denied")
-        else:
-            raise TypeError("permission_engine must implement BasePermissionEngine")
-        return self.tool_registry.normalize_tool_result(tool_name, tool.run(validated))
-
-    def grant_pending_permission(self) -> PermissionGrant:
-        """Create a receipt only for the current pending request, never a blanket bypass."""
-        from copy import deepcopy
-        pending = self.get_pending_interruption()
-        if pending is None:
-            raise ValueError("No pending permission request")
-        return PermissionGrant(
-            tool_name=pending["tool_name"], arguments=deepcopy(pending.get("tool_args", {})),
-            session_id=self.session_id, request_id=pending["request_id"],
-        )
-
-    def execute_approved_tool(self, grant: PermissionGrant) -> ToolResult:
-        """Consume an exact, single-use approval after rechecking current policy and hooks."""
-        if self.tool_registry is None:
-            raise ToolRegistryError("Tool module is not installed")
-        if not isinstance(grant, PermissionGrant):
-            raise TypeError("An explicit PermissionGrant is required")
-        pending = self.get_pending_interruption()
-        if (pending is None or grant.session_id != self.session_id
-                or grant.request_id != pending.get("request_id")
-                or grant.tool_name != pending.get("tool_name")
-                or dict(grant.arguments) != pending.get("tool_args")):
-            raise ValueError("Approval does not match the pending request")
-        from agent.components.executor import DefaultAgentExecutor
-        self._refresh_execution_context()
-        services = self._services()
-        name, tool, validated, result = DefaultAgentExecutor._prepare_tool(
-            services, tool_name=grant.tool_name, arguments=dict(grant.arguments),
-        )
-        if name != grant.tool_name or validated != dict(grant.arguments):
-            raise ValueError("Tool or arguments changed after approval; approve a new request")
-        if result is not None and result.status != "needs_confirmation":
-            return result
-        self.permission_grants.consume(grant)
-        try:
-            result = self.tool_registry.normalize_tool_result(name, tool.run(validated))
-        except Exception as exc:
-            result = ToolResult.error(str(exc), error_type=exc.__class__.__name__)
-        return DefaultAgentExecutor._apply_after_tool_hook(
-            services, tool_name=name, arguments=validated, result=result,
-        )
 
     def get_provider_tools(self) -> Any:
         if self.tool_registry is None:
@@ -853,52 +812,52 @@ class BaseAgent(ABC):
         return self._stop_reason if self._stop_requested else None
 
     def add_message(self, message: Any) -> None:
-        self.history_store.add(message)
+        self.context_manager.add(message)
 
     def add_messages(self, messages: list[Any]) -> None:
-        self.history_store.add_many(messages)
+        self.context_manager.add_many(messages)
 
     def add_user_message(self, content: str) -> None:
-        self.history_store.append_query(content)
+        self.context_manager.append_query(content)
 
     def add_assistant_message(self, content: str) -> None:
-        self.history_store.append_assistant(content=content)
+        self.context_manager.append_assistant(content=content)
 
     def clear_history(self) -> None:
-        self.history_store.clear()
+        self.context_manager.clear()
 
     @property
     def history(self) -> list[Any]:
-        return self.history_store.canonical
+        return self.context_manager.canonical
 
     @history.setter
     def history(self, messages: list[Any]) -> None:
-        self.history_store.replace(messages)
+        self.context_manager.replace(messages)
 
     @property
     def replay_history(self) -> list[Any]:
-        return self.history_store.replay
+        return self.context_manager.replay
 
     def get_history(self) -> list[dict[str, Any]]:
-        return [message.to_dict() for message in self.history_store.canonical]
+        return [message.to_dict() for message in self.context_manager.canonical]
 
     def get_raw_history(self) -> list[Any]:
-        return self.history_store.replay
+        return self.context_manager.replay
 
     def get_canonical_history(self) -> list[Any]:
-        return self.history_store.canonical
+        return self.context_manager.canonical
 
     def get_history_length(self) -> int:
-        return len(self.history_store)
+        return len(self.context_manager)
 
     def rebuild_replay_history(self) -> list[Any]:
-        return self.history_store.rebuild_replay()
+        return self.context_manager.rebuild_replay()
 
     def change_model(self, llm: EasyLLM) -> None:
         if not isinstance(llm, EasyLLM):
             raise TypeError("llm must be EasyLLM")
+        self.context_manager.bind(llm, metamessages=self.metamessage_manager, owner=self._context_owner)
         self.llm = llm
-        self.history_store.change_llm(llm)
 
     def get_trace_history(self) -> list[dict[str, Any]]:
         return [event.to_dict() for event in self.event_bus.history()]
@@ -912,49 +871,17 @@ class BaseAgent(ABC):
 
     @property
     def context_usage_revision(self):
-        return (self.history_store.revision, self._context_usage.revision,
+        return (self.context_manager.revision, self.context_manager.usage_revision,
                 id(self.llm), self.llm.model, id(self.context_manager),
                 id(self.prompt_composer), self.system_prompt, self.session_id)
 
     def get_context_usage(self) -> dict[str, Any]:
-        from context.builder import ContextBuilder
-        from core.request_compiler import compile_prompt_blocks
-
-        tracker = self._context_usage
-        manager = self.context_manager or ContextManager(builder=ContextBuilder(counter=tracker.counter))
-        compiled = compile_prompt_blocks(
-            self.get_system_prompt_blocks(tracker.last_query), cache_policy=self.config.cache_policy,
+        return self.context_manager.get_usage(
+            self.get_system_prompt_blocks(self.context_manager.last_query),
+            tools=self.get_provider_tools() or None,
+            reasoning=self.reasoning,
+            cache_policy=self.config.cache_policy,
         )
-        tools = self.get_provider_tools() or None
-        request = manager.build_request_input(
-            query="", include_query=False, replay_history=self.replay_history,
-            provider_name=self.llm.provider_name, system_prompt=compiled.system_prompt,
-            system_prompt_blocks=compiled.system_prompt_blocks,
-            system_reminder_blocks=compiled.system_reminder_blocks,
-            dynamic_tail_blocks=compiled.dynamic_tail_blocks,
-            on_demand_expansion_blocks=compiled.on_demand_expansion_blocks,
-            cache_policy=compiled.cache_policy, tools=tools, reasoning=self.reasoning,
-        )
-        estimate = manager.estimate_request(
-            request, usage_tracker=tracker, llm=self.llm,
-            history_epoch=self.history_store.context_epoch,
-            tools=tools, reasoning=self.reasoning, options=tracker.last_options,
-        )
-        limit = manager.budget.max_tokens
-        return {
-            "estimatedRequestTokens": estimate.tokens,
-            "localEstimatedRequestTokens": estimate.local_tokens,
-            "request_estimate_source": estimate.source,
-            "requestEstimate": {
-                "estimatedRequestTokens": estimate.tokens, "source": estimate.source,
-                "localEstimatedRequestTokens": estimate.local_tokens, "metadata": estimate.metadata,
-            },
-            "maxTokens": limit,
-            "budget": {"maxTokens": limit, "remainingTokens": None if limit is None else max(0, limit - estimate.tokens)},
-            "canonicalMessages": len(self.history_store),
-            "replayMessages": len(self.replay_history),
-            "provider": self.llm.provider_name,
-        }
 
     def register_session_state(self, name, component, *, version=1, required=False, forkable=True):
         from core.session.persistence import SessionStateParticipant
@@ -1036,6 +963,7 @@ class BaseAgent(ABC):
         except Exception as exc:
             report["status"] = "degraded"
             report["issues"].append({"component": "memory", "error": str(exc)})
+        close_component("context", self.context_manager)
         if close_llm:
             close_component("llm", self.llm)
         self._closed = True

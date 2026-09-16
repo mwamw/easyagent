@@ -10,7 +10,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent.BasicAgent import BasicAgent
-from agent.components.tool_interrupt_controller import InMemoryToolInterruptController
+from runtime.interruptions import InMemoryToolInterruptController
 from core.Exception import ToolConfirmationRequired
 from core.llm import EasyLLM
 from Tool.BaseTool import Tool
@@ -131,7 +131,7 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.agent = BasicAgent(
             name="interruptible",
             llm=DummyLLM(ConfirmationProvider()),
-        ).with_tool(self.registry)
+        ).with_tool(self.registry).with_permissions()
 
     def test_invoke_raises_confirmation_required(self):
         with self.assertRaises(ToolConfirmationRequired) as ctx:
@@ -148,16 +148,10 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interrupt["status"], "needs_confirmation")
         self.assertEqual(self.agent.get_history_length(), 2)
 
-    def test_grant_executes_only_the_pending_request(self):
-        with self.assertRaises(ToolConfirmationRequired):
-            self.agent.invoke("execute")
-        grant = self.agent.grant_pending_permission()
-        result = self.agent.execute_approved_tool(grant)
-        self.assertEqual(result.status, "success")
-        self.assertEqual(result.to_display_string(), "should not run")
-        self.assertEqual(self.tool.run_count, 1)
-        with self.assertRaisesRegex(ValueError, "consumed"):
-            self.agent.execute_approved_tool(grant)
+    def test_agent_has_no_parallel_tool_execution_api(self):
+        self.assertFalse(hasattr(self.agent, "execute_tool_result"))
+        self.assertFalse(hasattr(self.agent, "execute_approved_tool"))
+        self.assertFalse(hasattr(self.agent, "grant_pending_permission"))
 
     async def test_astream_emits_structured_error_before_raising_interruption(self):
         events = []
@@ -177,7 +171,7 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         agent = BasicAgent(
             name="interruptible-custom",
             llm=DummyLLM(ConfirmationProvider()),
-        ).with_tool(self.registry)
+        ).with_tool(self.registry).with_permissions()
         agent.with_interruptions(controller)
 
         with self.assertRaises(ToolConfirmationRequired):

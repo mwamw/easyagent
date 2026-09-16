@@ -7,10 +7,10 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from context.window import ContextItem
-from context.formatter.plain import PlainFormatter
-from context.formatter.xml import XMLFormatter
-from context.formatter.markdown import MarkdownFormatter
+from context.default.window import ContextItem
+from context.default.formatter.plain import PlainFormatter
+from context.default.formatter.xml import XMLFormatter
+from context.default.formatter.markdown import MarkdownFormatter
 from manual_test_runner import run_manual_tests, exit_with_status
 
 

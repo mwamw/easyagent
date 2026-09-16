@@ -113,6 +113,7 @@ def clone_tool_registry_for_workspace(
                 command_timeout_ms=tool.command_timeout_ms,
                 max_background_tasks=tool.process_manager.max_background_tasks,
                 max_output_chars=tool.max_output_chars,
+                sandbox=tool.sandbox_config,
             )
             shell_tools_registered = True
             continue
@@ -311,11 +312,11 @@ class AgentTool(Tool):
                     config_copy.cache_policy = normalized_policy
 
             normalized_mode = _normalize_subagent_mode(request.mode)
-            child_engine = RuleBasedPermissionEngine(workspace_root=workspace_root, load_policies=False)
             parent_engine = getattr(self.parent_agent, "permission_engine", None)
-            if parent_engine is not None and hasattr(parent_engine, "export_state"):
-                child_engine.restore_state(deepcopy(parent_engine.export_state()))
+            child_engine = deepcopy(parent_engine) if parent_engine is not None else None
             if normalized_mode is not None:
+                if child_engine is None:
+                    child_engine = RuleBasedPermissionEngine(workspace_root=workspace_root, load_policies=False)
                 child_engine.set_approval_mode(normalized_mode)
 
             parent_execution_context = getattr(self.parent_agent, "execution_context", None)
@@ -369,7 +370,8 @@ class AgentTool(Tool):
             )
             child_agent.reasoning = getattr(self.parent_agent, "reasoning", None)
             child_agent.execution_context = child_execution_context
-            child_agent.with_permissions(engine=child_engine)
+            if child_engine is not None:
+                child_agent.with_permissions(engine=child_engine)
             parent_callbacks = getattr(self.parent_agent, "callback_manager", None)
             if parent_callbacks is not None:
                 child_agent.with_callbacks(parent_callbacks)

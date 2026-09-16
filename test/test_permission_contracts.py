@@ -2,7 +2,12 @@ from pydantic import BaseModel
 
 from core.permissions.base import BasePermissionEngine
 from core.permissions.default import RuleBasedPermissionEngine
-from core.permissions.models import PermissionBehavior, PermissionDecision, PermissionRequest
+from core.permissions.models import (
+    PermissionBehavior,
+    PermissionDecision,
+    PermissionGrant,
+    PermissionRequest,
+)
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
 
@@ -55,3 +60,19 @@ def test_custom_permission_engine_only_needs_authorize_request():
     decision = registry.authorize_request(request, permission_engine=DenyAll())
     assert decision.behavior == PermissionBehavior.DENY
     assert decision.reason == "custom policy"
+
+
+def test_request_grant_is_consumed_and_explicit_deny_still_wins():
+    registry = ToolRegistry()
+    registry.register_tool(EchoTool())
+    request = registry.build_permission_request("Echo", {"text": "hello"})
+    engine = RuleBasedPermissionEngine(load_policies=False)
+    engine.add_rule(tool_name="Echo", behavior="ask")
+    engine.grant(PermissionGrant(tool_name="Echo", arguments={"text": "hello"}))
+
+    assert engine.authorize(request).behavior == PermissionBehavior.ALLOW
+    assert engine.authorize(request).behavior == PermissionBehavior.ASK
+
+    engine.grant(PermissionGrant(tool_name="Echo", arguments={"text": "hello"}))
+    engine.add_rule(tool_name="Echo", behavior="deny")
+    assert engine.authorize(request).behavior == PermissionBehavior.DENY

@@ -120,13 +120,14 @@ class PermissionAndTaskTests(unittest.TestCase):
     def test_plan_mode_blocks_high_risk_tool(self):
         registry = ToolRegistry()
         registry.register_tool(MutatingTool())
-        agent = BasicAgent("assistant", self.llm).with_tool(registry).with_plan(
+        agent = BasicAgent("assistant", self.llm).with_tool(registry).with_permissions().with_plan(
             config=PlanModeConfig(register_tools=False)
         )
         agent.enter_plan_mode(allowed_actions=["read"])
-        result = agent.execute_tool_result("MutatingTool", {})
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "permission_denied")
+        request = registry.build_permission_request(
+            "MutatingTool", {}, context=agent.build_authorization_context()
+        )
+        self.assertEqual(agent.permission_engine.authorize(request).behavior, PermissionBehavior.DENY)
 
     def test_async_tool_execution_respects_permission_engine(self):
         registry = ToolRegistry()

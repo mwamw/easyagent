@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Iterator
 
-from agent.components.executor import (
+from executor import (
     AgentExecutionServices,
     BaseAgentExecutor,
     DefaultAgentExecutor,
 )
-from agent.components.tool_interrupt_controller import InMemoryToolInterruptController
+from runtime.interruptions import InMemoryToolInterruptController
 from core.agent import BaseAgent
 from core.Config import Config
 from core.llm import EasyLLM
@@ -55,7 +55,6 @@ class BasicAgent(BaseAgent):
             agent_id=self.name,
             llm=self.llm,
             config=self.config,
-            history=self.history_store,
             prompt_composer=self.prompt_composer,
             prompt_context_factory=self.build_prompt_context,
             execution_context=self.execution_context,
@@ -72,7 +71,6 @@ class BasicAgent(BaseAgent):
             mailbox_sync=mailbox_sync,
             session_id=self.session_id,
             invocation_lock=self._invocation_lock,
-            context_usage=self._context_usage,
         )
 
     def invoke(

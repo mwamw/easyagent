@@ -174,7 +174,7 @@ def main() -> None:
     print(external_spec.to_intermediate_schema() if external_spec is not None else None)
     print()
 
-    blocked_bash_result = agent.execute_tool_result(
+    blocked_bash_result = agent.tool_registry.execute_tool_result(
         "Bash",
         {
             "command": "rm -rf /",
@@ -182,7 +182,7 @@ def main() -> None:
     )
     show_result("Bash (guardrail blocked)", blocked_bash_result)
 
-    external_result = agent.execute_tool_result("ExternalSnippet", {})
+    external_result = agent.tool_registry.execute_tool_result("ExternalSnippet", {})
     show_result("ExternalSnippet (prompt injection annotated)", external_result)
     print("=== ExternalSnippet / ephemeral_context ===")
     print(external_result.ephemeral_context)

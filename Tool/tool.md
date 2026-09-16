@@ -107,7 +107,7 @@ def add_func(a: int, b: int):
 - **`WebSearchTool`**: 在互联网上搜索信息（支持 SerpAPI 和 DuckDuckGo 后端）。
 - **`WebFetchTool`**: 抓取特定 URL 的正文。内置启发式算法，可根据 `prompt` 自动提取网页中最相关的段落。
 
-### 3.4 记忆管理工具 (`memorytool.py`)
+### 3.4 V2 记忆管理工具 (`memory/V2/tools.py`)
 - **`AddMemoryTool` / `SearchMemoryTool`**: 允许 Agent 自主维护长期知识。支持四种记忆类型：`working`（任务约束）、`episodic`（经历）、`semantic`（事实）、`perceptual`（多模态感知）。
 
 ### 3.5 实用工具

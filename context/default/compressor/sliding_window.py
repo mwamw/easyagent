@@ -5,8 +5,8 @@
 适合对话历史的简单截断。
 """
 from typing import List
-from context.window import ContextItem
-from context.compressor.base import BaseCompressor
+from context.default.window import ContextItem
+from context.default.compressor.base import BaseCompressor
 
 
 class SlidingWindowCompressor(BaseCompressor):

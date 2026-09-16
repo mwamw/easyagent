@@ -89,7 +89,7 @@ S4Code 界面的 checkpoint 只回溯会话上下文，不撤销文件或外部�
 - [Prompt Composer](../../agent/components/prompt_composer.py)：基类 `compose()` 在启用模块说明时合并 Memory Blocks，自定义类通常只实现 `build()`。
 - [请求准备](../../agent/components/request_preparer.py)：默认管线运行公开 `before_context` Hook、处理注入、组装提示词与上下文，进行压缩和最终预算检查。
 - [Tool 契约](../../Tool/BaseTool.py)：参数、`run` / `arun` 与结果类型；默认 `arun()` 不自动把阻塞 I/O 变成非阻塞。
-- [历史压缩契约](../../context/compressor/history.py)与 [ContextManager](../../context/manager.py)：压缩器处理管理器选定的片段，近期轮次由管理器保留；用户不能假定输入是完整会话。
+- [历史压缩契约](../../context/default/compressor/history.py)与 [ContextManager](../../context/default/manager.py)：压缩器处理管理器选定的片段，近期轮次由管理器保留；用户不能假定输入是完整会话。
 - [SessionPersistence](../../core/session/persistence.py)与 [Store 契约](../../core/session/store.py)：显式收集、保存与恢复状态，应用后端必须履行记录格式和版本一致性约定。
 
 七段代码从正文提取后运行离线接口检查：使用内存仓库和假模型响应，核对参数校验、模块说明合并、Memory 工具/Hook 注册、异步注入与回收、压缩器输出、Store 版本冲突及会话恢复。此检查只证明示例按当前接口可接入，不是开发效率、任务能力或生产安全实验；摘要算法、数据库与领域工具仍由应用实现。

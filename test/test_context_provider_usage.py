@@ -11,7 +11,7 @@ from easyagent import BasicAgent
 from easyagent.context import ContextBuilder, ContextManager, TokenBudget, BaseHistoryCompactor, ContextBudgetExceeded
 from easyagent.hooks import BaseHook, HookManager
 from easyagent.prompting import PromptBlock, SystemPromptComposer
-from context.usage import ContextUsageTracker
+from context.default.usage import ContextUsageTracker
 from core.cache_policy import CacheableBlock
 from core.history import CanonicalBlock, CanonicalMessage
 from core.providers import AnthropicNativeProvider, create_codec
@@ -206,7 +206,7 @@ def test_history_restore_clear_and_model_change_do_not_reuse_stale_usage():
         agent.invoke("question")
         assert agent.get_context_usage()["request_estimate_source"].startswith("provider_usage")
         if change == "restore":
-            agent.history_store.restore_state(agent.history_store.export_state())
+            agent.context_manager.restore_state(agent.context_manager.export_state())
         elif change == "clear":
             agent.clear_history()
         else:
@@ -221,11 +221,13 @@ def test_empty_tool_registry_matches_the_request_usage_signature():
     assert agent.get_context_usage()["request_estimate_source"] == "provider_usage_plus_delta_estimate"
 
 
-def test_shared_llm_and_context_do_not_share_agent_usage_anchors():
+def test_shared_llm_has_agent_owned_context_and_usage_anchors():
     llm, manager = SessionLLM(), context()
     one = agent_with([{"usage": api_usage()}], manager, llm)
     one.invoke("question")
-    two = agent_with([{"usage": api_usage(300)}], manager, llm)
+    with pytest.raises(RuntimeError, match="cannot be shared"):
+        BasicAgent("invalid-sharing", llm).with_context(manager)
+    two = agent_with([{"usage": api_usage(300)}], context(), llm)
     two.invoke("question")
     assert one.get_context_usage()["estimatedRequestTokens"] == 110
     assert two.get_context_usage()["estimatedRequestTokens"] == 310

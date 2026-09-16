@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from agent.BasicAgent import BasicAgent
-from agent.components.prompt_composer import SystemPromptComposer
+from prompt.composer import SystemPromptComposer
 from core.Config import Config
 from core.cache_policy import CacheableBlock, PromptCachePolicy
 from core.llm import EasyLLM

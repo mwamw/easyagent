@@ -7,8 +7,8 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from context.token.counter import TokenCounter
-from context.token.budget import TokenBudget
+from context.default.token.counter import TokenCounter
+from context.default.token.budget import TokenBudget
 from manual_test_runner import run_manual_tests, exit_with_status
 
 

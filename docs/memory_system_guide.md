@@ -3,7 +3,8 @@
 ## 框架契约
 
 BaseMemory 表示一个完整记忆机制，不要求统一 CRUD、分类或存储。
-Memory 可以提供 get_prompt_blocks、get_tools、get_hooks；这些能力均可为空。
+Memory 明确提供 get_prompt_blocks、get_retrieval_tools、get_persistence_tools；
+自动召回可通过 get_hooks 提供。
 bind/unbind 和 services 由基类提供；同一有状态实例只能绑定一个 Agent。
 
 ```python
@@ -11,16 +12,20 @@ from easyagent.memory import BaseMemory
 from easyagent.prompting import PromptBlock
 
 class ApplicationMemory(BaseMemory):
-    def __init__(self, tools):
-        self.tools = list(tools)
+    def __init__(self, retrieval_tools=(), persistence_tools=()):
+        self.retrieval_tools = list(retrieval_tools)
+        self.persistence_tools = list(persistence_tools)
 
     def get_prompt_blocks(self, context):
         return [PromptBlock("memory.application", "Use the supplied memory tools when prior knowledge is needed.")]
 
-    def get_tools(self):
-        return self.tools
+    def get_retrieval_tools(self):
+        return self.retrieval_tools
 
-agent.with_memory(ApplicationMemory(memory_tools))
+    def get_persistence_tools(self):
+        return self.persistence_tools
+
+agent.with_memory(ApplicationMemory(retrieval_tools, persistence_tools))
 ```
 
 机制说明使用 PromptBlock，不需要 MemoryDescriptor。
@@ -62,7 +67,8 @@ agent.with_memory(LayeredMemory(), owned=True)
 它复用现有 V2 多层算法，默认只有 working memory，默认不自动召回。
 模型通过六个内置记忆工具读写。分类、MemoryItem、重要性和遗忘策略
 属于这一方案，不是 BaseMemory 的强制契约。
-内部 MemoryManage 和 V2 文件名保留，但不再作为 Agent 的安装接口。
+V2 的 `MemoryManage` 本身直接实现 `BaseMemory`；公共 `LayeredMemory` 名称只是
+同一实现的导出名称，不再存在额外适配类。
 
 会话保存可包含 working memory；不会复制外部向量库、图数据库。
 记忆工具使用当前 Agent 的 session_id，不再自行生成另一套会话 ID。

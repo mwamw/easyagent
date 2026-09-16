@@ -5,9 +5,9 @@
 参考：RAPTOR (递归摘要)、LLMLingua (提示压缩)
 """
 from typing import List, Any, Optional
-from context.window import ContextItem
-from context.compressor.base import BaseCompressor
-from context.token.counter import TokenCounter
+from context.default.window import ContextItem
+from context.default.compressor.base import BaseCompressor
+from context.default.token.counter import TokenCounter
 import logging
 
 logger = logging.getLogger(__name__)

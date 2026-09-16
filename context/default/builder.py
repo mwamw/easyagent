@@ -3,11 +3,11 @@
 from copy import deepcopy
 from typing import Any, Iterable
 
-from context.window import ContextItem, ContextWindow
-from context.compressor.history import RuleBasedHistoryCompactor
-from context.formatter.plain import PlainFormatter
-from context.token.counter import TokenCounter
-from context.token.budget import ContextBudgetExceeded, TokenBudget
+from context.default.window import ContextItem, ContextWindow
+from context.default.compressor.history import RuleBasedHistoryCompactor
+from context.default.formatter.plain import PlainFormatter
+from context.default.token.counter import TokenCounter
+from context.default.token.budget import ContextBudgetExceeded, TokenBudget
 from core.providers import create_codec
 from core.request_input import ReplayRequestInput
 

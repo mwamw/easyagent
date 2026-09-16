@@ -205,8 +205,9 @@ from easyagent.memory import BaseMemory
 from easyagent.prompting import PromptBlock
 
 class EvidenceMemory(BaseMemory):
-    def __init__(self, tools):
-        self.tools = list(tools)
+    def __init__(self, retrieval_tools=(), persistence_tools=()):
+        self.retrieval_tools = list(retrieval_tools)
+        self.persistence_tools = list(persistence_tools)
 
     def get_prompt_blocks(self, context):
         return [PromptBlock(
@@ -215,8 +216,11 @@ class EvidenceMemory(BaseMemory):
             "Save reusable findings with their source references.",
         )]
 
-    def get_tools(self):
-        return self.tools
+    def get_retrieval_tools(self):
+        return self.retrieval_tools
+
+    def get_persistence_tools(self):
+        return self.persistence_tools
 
 # 安装：agent.with_memory(EvidenceMemory(memory_tools))
 ```

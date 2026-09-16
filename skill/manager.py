@@ -240,6 +240,11 @@ class SkillManager:
             "</skill>\n</system-reminder>"
         )
 
+    def get_prompt_blocks(self, context):
+        from prompt import PromptBlock
+        listing = self.build_skill_listing_prompt()
+        return [PromptBlock("skill_listing", listing, placement="system_reminder", order=100)] if listing else []
+
     def invoke(
         self,
         name: str,
@@ -326,7 +331,7 @@ class SkillManager:
             parameters["subagent_type"] = manifest.agent
         if manifest.model:
             parameters["model"] = manifest.model
-        result = self._agent.execute_tool_result("Agent", parameters)
+        result = registry.execute_tool_result("Agent", parameters)
         if result.status != "success":
             raise RuntimeError(result.to_display_string())
         data = dict(result.structured_data or {})
@@ -482,6 +487,7 @@ class SkillManager:
         with self._lock:
             self._active_keys.clear()
         if self._agent is not None:
+            self._agent.register_prompt_provider("skill", None)
             if self._event_subscription:
                 self._agent.event_bus.unsubscribe(self._event_subscription)
         self._event_subscription = None

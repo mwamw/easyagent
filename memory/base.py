@@ -2,24 +2,33 @@
 
 from __future__ import annotations
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Callable, Protocol, Sequence, TYPE_CHECKING
 from core.scope import RuntimeScope
 
 
 if TYPE_CHECKING:
     from core.hooks import BaseHook
     from prompt import PromptBlock
+    from prompt.base import PromptBuildContext
     from Tool.BaseTool import Tool
-    from metamessage.emitter import MetaMessageEmitter
+    from metamessage.models import MetaMessage
+
+
+class MetaMessageEmitterPort(Protocol):
+    """The only dynamic-message capability exposed to a Memory module."""
+
+    def emit(self, message: "MetaMessage") -> "MetaMessage": ...
+    def register(self, message: "MetaMessage") -> "MetaMessage": ...
+    def subscribe(self, event_name: str, factory: Callable) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class MemoryServices:
     """Borrowed public services; memory decides whether to inject content."""
 
-    metamessages: MetaMessageEmitter
+    metamessages: MetaMessageEmitterPort
     scope_provider: Callable[[], RuntimeScope]
 
     @property
@@ -28,7 +37,12 @@ class MemoryServices:
 
 
 class BaseMemory(ABC):
-    """Optional instructions/tools/hooks; no required CRUD, taxonomy, or backend."""
+    """Agent-facing contract for a complete, replaceable memory mechanism.
+
+    Concrete memory systems decide their storage model and retrieval algorithm.
+    The framework only requires them to explain their mechanism to the model,
+    expose retrieval/persistence capabilities, and participate in lifecycle.
+    """
 
     def bind(self, services: MemoryServices) -> None:
         if getattr(self, "_memory_services", None) is not None:
@@ -45,17 +59,44 @@ class BaseMemory(ABC):
     def unbind(self) -> None:
         self._memory_services = None
 
-    def get_prompt_blocks(self, context: Any) -> list[PromptBlock]:
-        return []
+    @abstractmethod
+    def get_prompt_blocks(
+        self,
+        context: "PromptBuildContext",
+    ) -> Sequence["PromptBlock"]:
+        """Describe when and how the model should use this memory system."""
+        raise NotImplementedError
 
-    def get_tools(self) -> list[Tool]:
-        return []
+    @abstractmethod
+    def get_retrieval_tools(self) -> Sequence["Tool"]:
+        """Return tools that read, search, or locate memory."""
+        raise NotImplementedError
 
-    def get_hooks(self) -> list[BaseHook]:
-        return []
+    @abstractmethod
+    def get_persistence_tools(self) -> Sequence["Tool"]:
+        """Return tools that save, update, remove, or maintain memory."""
+        raise NotImplementedError
+
+    def get_hooks(self) -> Sequence["BaseHook"]:
+        """Optional automatic recall/extraction hooks."""
+        return ()
+
+    def export_state(self) -> dict[str, object] | None:
+        """Return session-owned state; external long-term stores need not be copied."""
+        return None
+
+    def validate_state(self, state: dict[str, object] | None) -> None:
+        if state is not None:
+            raise ValueError(f"{type(self).__name__} does not accept session state")
+
+    def restore_state(self, state: dict[str, object] | None) -> None:
+        self.validate_state(state)
+
+    def reset_session_state(self) -> None:
+        """Reset only state scoped to the current Agent session."""
 
     def close(self) -> None:
-        pass
+        """Release resources owned by this memory implementation."""
 
     async def aclose(self) -> None:
         self.close()

@@ -91,6 +91,8 @@ def build_agent(workspace: Path) -> BasicAgent:
         )
         .with_prompt(prompt)
         .with_tool(registry)
+        .with_permissions()
+        .with_hooks()
         .with_context(ContextManager(max_tokens=16_000))
         .with_plan(config=PlanModeConfig(register_tools=True))
         .with_task_service(tasks)

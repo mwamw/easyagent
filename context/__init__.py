@@ -1,13 +1,22 @@
-"Request assembly, total input budgets, and replaceable compression."
+"""Context framework contracts and built-in implementation exports."""
 
 # 核心
-from .window import ContextItem, ContextWindow
-from .builder import ContextBuilder
-from .manager import ContextManager
+from .history import ConversationHistory
+from .models import (
+    ContextCompactionResult,
+    ContextUsage,
+    ModelRequestOptions,
+    ModelUsage,
+    ProviderReplayHistory,
+    ToolDefinitions,
+)
+from .default.window import ContextItem, ContextWindow
+from .default.builder import ContextBuilder
+from .default.manager import ContextManager
 
 # Token
-from .token.counter import TokenCounter
-from .token.budget import TokenBudget
+from .default.token.counter import TokenCounter
+from .default.token.budget import TokenBudget
 
 # 来源
 
@@ -16,18 +25,18 @@ from .token.budget import TokenBudget
 
 
 # 压缩器
-from .compressor.base import BaseCompressor
-from .compressor.sliding_window import SlidingWindowCompressor
-from .compressor.token_budget import TokenBudgetCompressor
-from .compressor.selective import SelectiveCompressor
-from .compressor.summarization import SummarizationCompressor
-from .compressor.history import BaseHistoryCompactor, RuleBasedHistoryCompactor, LLMHistoryCompactor, HistoryCompactor
+from .default.compressor.base import BaseCompressor
+from .default.compressor.sliding_window import SlidingWindowCompressor
+from .default.compressor.token_budget import TokenBudgetCompressor
+from .default.compressor.selective import SelectiveCompressor
+from .default.compressor.summarization import SummarizationCompressor
+from .default.compressor.history import BaseHistoryCompactor, RuleBasedHistoryCompactor, LLMHistoryCompactor, HistoryCompactor
 
 # 格式化器
-from .formatter.base import BaseFormatter
-from .formatter.plain import PlainFormatter
-from .formatter.xml import XMLFormatter
-from .formatter.markdown import MarkdownFormatter
+from .default.formatter.base import BaseFormatter
+from .default.formatter.plain import PlainFormatter
+from .default.formatter.xml import XMLFormatter
+from .default.formatter.markdown import MarkdownFormatter
 
 __all__ = [
     # 核心
@@ -35,6 +44,13 @@ __all__ = [
     "ContextWindow",
     "ContextBuilder",
     "ContextManager",
+    "ConversationHistory",
+    "ContextCompactionResult",
+    "ContextUsage",
+    "ModelRequestOptions",
+    "ModelUsage",
+    "ProviderReplayHistory",
+    "ToolDefinitions",
     # Token
     "TokenCounter",
     "TokenBudget",
@@ -61,6 +77,5 @@ __all__ = [
 ]
 
 from .base import BaseContextManager
-from .manager import HistoryCompactionResult
-from .token.budget import ContextBudgetExceeded
-__all__ += ["BaseContextManager", "HistoryCompactionResult", "ContextBudgetExceeded"]
+from .default.token.budget import ContextBudgetExceeded
+__all__ += ["BaseContextManager", "ContextBudgetExceeded"]

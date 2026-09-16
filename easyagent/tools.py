@@ -10,6 +10,10 @@ from Tool import (
     ToolVisibilityScope,
 )
 from Tool.builtin import (
+    BashSandboxConfig,
+    BashSandboxMode,
+    SandboxNetworkMode,
+    SandboxStatus,
     register_config_tool,
     register_notebook_edit_tool,
     register_search_tool,
@@ -33,6 +37,10 @@ from Tool.builtin import (
 from plan import register_enter_plan_mode_tool, register_exit_plan_mode_tool
 
 __all__ = [
+    "BashSandboxConfig",
+    "BashSandboxMode",
+    "SandboxNetworkMode",
+    "SandboxStatus",
     "register_config_tool",
     "register_notebook_edit_tool",
     "register_search_tool",

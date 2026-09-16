@@ -34,7 +34,7 @@ from memory.V2.WorkingMemory import WorkingMemory
 from memory.V2.EpisodicMemory import EpisodicMemory
 from memory.V2.PerceptualMemory import PerceptualMemory
 from memory.V2.SemanticMemory import SemanticMemory
-from Tool.builtin.memorytool import register_memory_tools
+from memory.V2.tools import register_memory_tools
 from core.llm import EasyLLM
 from agent.BasicAgent import BasicAgent
 from Tool.ToolRegistry import ToolRegistry

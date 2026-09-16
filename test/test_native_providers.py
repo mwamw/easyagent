@@ -20,7 +20,7 @@ from core.providers import (
     provider_requires_base_url,
 )
 from core.request_input import ReplayRequestInput
-from context.token.counter import TokenCounter
+from context.default.token.counter import TokenCounter
 
 
 class _FakeGoogleModels:

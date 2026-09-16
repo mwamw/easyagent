@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 from uuid import uuid4
 
 
@@ -89,6 +89,11 @@ class ProcessManager:
         self.max_background_tasks = max_background_tasks
         self._tasks: Dict[str, _ManagedBackgroundTask] = {}
         self._lock = threading.Lock()
+        self._cleanup_callbacks: list[Callable[[], None]] = []
+
+    def register_cleanup(self, callback: Callable[[], None]) -> None:
+        if callback not in self._cleanup_callbacks:
+            self._cleanup_callbacks.append(callback)
 
     def run(
         self,
@@ -219,6 +224,9 @@ class ProcessManager:
         for snapshot in self.list_tasks():
             if snapshot.status == "running":
                 self.stop(snapshot.task_id, kill=True)
+        callbacks, self._cleanup_callbacks = self._cleanup_callbacks, []
+        for callback in reversed(callbacks):
+            callback()
 
     def _get_managed_task(self, task_id: str) -> _ManagedBackgroundTask:
         task = self._tasks.get(task_id)

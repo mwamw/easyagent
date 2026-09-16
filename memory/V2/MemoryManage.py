@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
+from memory.base import BaseMemory
 
 try:
     from .BaseMemory import BaseMemoryLayer, ForgetType, MemoryConfig, MemoryItem
@@ -12,6 +13,9 @@ except ImportError:
     from WorkingMemory import WorkingMemory
 
 if TYPE_CHECKING:
+    from prompt import PromptBlock
+    from prompt.base import PromptBuildContext
+    from Tool.BaseTool import Tool
     try:
         from .EpisodicMemory import EpisodicMemory
         from .PerceptualMemory import PerceptualMemory
@@ -24,10 +28,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class MemoryManage:
+class MemoryManage(BaseMemory):
+    """Complete V2 layered-memory implementation of the framework contract."""
+
     def __init__(
         self,
-        config: MemoryConfig,
+        config: Optional[MemoryConfig] = None,
         user_id: str = "default_user",
         enable_working: bool = True,
         working_memory: Optional[WorkingMemory] = None,
@@ -43,30 +49,116 @@ class MemoryManage:
         self._owned_resources = []
         self.memory_types: Dict[str, BaseMemoryLayer] = {}
 
-        if enable_working:
-            self.memory_types["working"] = working_memory or WorkingMemory(self.config)
+        try:
+            if enable_working:
+                self.memory_types["working"] = working_memory or WorkingMemory(self.config)
 
-        if enable_episodic:
-            self.memory_types["episodic"] = episodic_memory or self._build_default_episodic_memory()
+            if enable_episodic:
+                self.memory_types["episodic"] = episodic_memory or self._build_default_episodic_memory()
 
-        if enable_semantic:
-            if semantic_memory is None:
-                raise ValueError(
-                    "启用 semantic memory 时必须显式提供 semantic_memory，"
-                    "避免在 MemoryManage 初始化阶段自动创建 LLM、Neo4j 和 Qdrant 依赖。"
-                )
-            self.memory_types["semantic"] = semantic_memory
+            if enable_semantic:
+                if semantic_memory is None:
+                    raise ValueError(
+                        "启用 semantic memory 时必须显式提供 semantic_memory，"
+                        "避免在 MemoryManage 初始化阶段自动创建 LLM、Neo4j 和 Qdrant 依赖。"
+                    )
+                self.memory_types["semantic"] = semantic_memory
 
-        if enable_perceptual:
-            if perceptual_memory is None:
-                raise ValueError(
-                    "启用 perceptual memory 时必须显式提供 perceptual_memory，"
-                    "避免在 MemoryManage 初始化阶段自动创建多模态持久层依赖。"
-                )
-            self.memory_types["perceptual"] = perceptual_memory
+            if enable_perceptual:
+                if perceptual_memory is None:
+                    raise ValueError(
+                        "启用 perceptual memory 时必须显式提供 perceptual_memory，"
+                        "避免在 MemoryManage 初始化阶段自动创建多模态持久层依赖。"
+                    )
+                self.memory_types["perceptual"] = perceptual_memory
+        except BaseException:
+            self.close()
+            raise
 
         logger.info("MemoryManage init success")
         logger.info("MemoryManage init success, memory types: %s", self.memory_types.keys())
+
+    def get_prompt_blocks(self, context: "PromptBuildContext") -> list["PromptBlock"]:
+        from prompt import PromptBlock, build_memory_prompt_section
+
+        return [PromptBlock(
+            "memory.layered.rules",
+            build_memory_prompt_section(
+                supported_memory_types=list(self.memory_types),
+                include_working_memory=True,
+                language="en",
+            ),
+            placement="system_reminder",
+            order=140,
+        )]
+
+    def get_retrieval_tools(self) -> list["Tool"]:
+        from .tools import build_retrieval_tools
+
+        return build_retrieval_tools(
+            self,
+            session_id_provider=lambda: self.services.scope.session_id,
+        )
+
+    def get_persistence_tools(self) -> list["Tool"]:
+        from .tools import build_persistence_tools
+
+        return build_persistence_tools(
+            self,
+            session_id_provider=lambda: self.services.scope.session_id,
+        )
+
+    def export_state(self) -> dict[str, object]:
+        working = self.memory_types.get("working")
+        return {
+            "user_id": self.user_id,
+            "working": [
+                item.model_dump(mode="json")
+                for item in working.get_all_memories()
+            ] if working else [],
+        }
+
+    def validate_state(self, state: dict[str, object] | None) -> None:
+        from .BaseMemory import MemoryItem
+
+        if not isinstance(state, dict):
+            raise TypeError("V2 memory state must be a dictionary")
+        if state.get("user_id") != self.user_id:
+            raise ValueError("Cannot restore memory owned by another user")
+        working = state.get("working", [])
+        if not isinstance(working, list):
+            raise TypeError("V2 working-memory state must be a list")
+        for item in working:
+            MemoryItem.model_validate(item)
+
+    def reset_session_state(self) -> None:
+        working = self.memory_types.get("working")
+        if working is not None:
+            working.clear_memory()
+
+    def restore_state(self, state: dict[str, object] | None) -> None:
+        from .BaseMemory import MemoryItem
+
+        self.validate_state(state)
+        assert state is not None
+        working = self.memory_types.get("working")
+        if working is not None:
+            working.clear_memory()
+            for item in state.get("working", []):
+                working.add_memory(MemoryItem.model_validate(item))
+
+    def close(self) -> None:
+        errors = []
+        for resource in reversed(getattr(self, "_owned_resources", [])):
+            try:
+                close = getattr(resource, "close", None)
+                if callable(close):
+                    close()
+            except Exception as exc:
+                errors.append(str(exc))
+        self._owned_resources = []
+        if errors:
+            raise RuntimeError("Memory resource cleanup failed: " + "; ".join(errors))
 
     @classmethod
     def from_env(
