@@ -6,7 +6,8 @@ from typing import Any, Literal, Type
 from pydantic import BaseModel
 
 from .BaseTool import Tool, ToolResult, ToolSpec
-from core.permissions import PermissionBehavior, PermissionContext, PermissionEngine
+from core.permissions.base import BasePermissionEngine
+from core.permissions.models import AuthorizationContext, PermissionRequest, ToolPermissionDescriptor
 
 
 ToolVisibility = Literal["resident", "runtime", "turn"]
@@ -15,6 +16,7 @@ from core.Exception import ToolNotFoundError, ToolRegistryError
 class ToolRegistry:
     def __init__(self, *, conflict_policy: ToolConflictPolicy = "replace"):
         self.tools: dict[str, Tool] = {}
+        self._permission_descriptors: dict[str, ToolPermissionDescriptor] = {}
         self._tool_visibility: dict[str, ToolVisibility] = {}
         self._runtime_surfaces: dict[str, dict[str, Any]] = {}
         self._deferred_expanded_tool_names: set[str] = set()
@@ -26,6 +28,7 @@ class ToolRegistry:
         *,
         visibility: ToolVisibility = "resident",
         expose_in_deferred: bool | None = None,
+        permission_descriptor: ToolPermissionDescriptor | None = None,
         conflict_policy: ToolConflictPolicy | None = None,
     ):
         policy = conflict_policy or self.conflict_policy
@@ -36,6 +39,12 @@ class ToolRegistry:
             if policy == "error":
                 raise ToolRegistryError(f"Tool '{tool.name}' 已存在，当前冲突策略禁止覆盖。")
         self.tools[tool.name] = tool
+        if permission_descriptor is not None:
+            if permission_descriptor.tool_name != tool.name:
+                raise ToolRegistryError(
+                    f"Permission descriptor name '{permission_descriptor.tool_name}' does not match tool '{tool.name}'."
+                )
+            self._permission_descriptors[tool.name] = permission_descriptor
         self._tool_visibility[tool.name] = visibility
         tool.spec.visibility_scope = visibility
         if expose_in_deferred is not None:
@@ -126,6 +135,44 @@ class ToolRegistry:
         tool = self.get_tool(name)
         return tool.get_spec() if tool else None
 
+    def get_permission_descriptor(self, name: str) -> ToolPermissionDescriptor | None:
+        tool = self.get_tool(name)
+        if tool is None:
+            return None
+        return self._permission_descriptors.get(name) or tool.get_permission_descriptor()
+
+    def resolve_tool_call(self, name: str, parameters: dict[str, Any]):
+        """Resolve and validate a model call without authorizing or executing it."""
+        tool, validated = self.validate_tool_call(name, parameters)
+        descriptor = self.get_permission_descriptor(tool.name)
+        if descriptor is None:
+            raise ToolRegistryError(f"Tool '{tool.name}' has no permission descriptor")
+        return tool, validated, descriptor
+
+    def build_permission_request(
+        self,
+        name: str,
+        parameters: dict[str, Any],
+        *,
+        context: AuthorizationContext | None = None,
+    ) -> PermissionRequest:
+        tool, validated, descriptor = self.resolve_tool_call(name, parameters)
+        return PermissionRequest(
+            tool_name=tool.name,
+            arguments=validated,
+            descriptor=descriptor,
+            context=context or AuthorizationContext(),
+        )
+
+    def authorize_request(
+        self,
+        request: PermissionRequest,
+        *,
+        permission_engine: BasePermissionEngine,
+    ):
+        """Authorize a normalized request through the new framework contract."""
+        return permission_engine.authorize(request)
+
     def get_tools_description(self) -> list[dict[str, Any]]:
         return self.list_tool_descriptors(stable=True, include_parameters=True)
 
@@ -138,10 +185,18 @@ class ToolRegistry:
         include_internal: bool = False,
     ) -> list[dict[str, Any]]:
         descriptors: list[dict[str, Any]] = []
-        for spec in self.list_tool_specs(scope=scope, stable=stable):
+        for tool in self.get_visible_tools(scope=scope, stable=stable):
+            spec = tool.get_spec()
             if not include_internal and spec.metadata.get("internal_tool"):
                 continue
             descriptor = spec.to_description_payload()
+            permission = tool.get_permission_descriptor()
+            descriptor.update({
+                "requires_confirmation": permission.requires_confirmation,
+                "risk_categories": list(permission.risk_categories),
+                "side_effect_level": permission.side_effect_level,
+                "resource_scope": list(permission.resources),
+            })
             if not include_parameters:
                 descriptor.pop("parameters", None)
             descriptors.append(descriptor)
@@ -175,56 +230,6 @@ class ToolRegistry:
         validated = tool.validate_parameters(parameters)
         return tool, validated
 
-    def authorize_tool_call(
-        self,
-        tool: Tool,
-        parameters: dict[str, Any],
-        *,
-        permission_context: PermissionContext | None = None,
-        permission_engine: PermissionEngine | None = None,
-    ) -> ToolResult | None:
-        spec = tool.get_spec()
-        effective_engine = permission_engine or (PermissionEngine() if permission_context is not None else None)
-        if effective_engine is not None:
-            decision = effective_engine.authorize(tool, parameters, permission_context)
-            if decision.behavior == PermissionBehavior.DENY:
-                return ToolResult.error(
-                    decision.reason,
-                    error_type="permission_denied",
-                    metadata={
-                        "tool_name": tool.name,
-                        "parameters": parameters,
-                        "permission_behavior": decision.behavior.value,
-                        "permission_reason": decision.reason,
-                        "matched_rule_source": decision.matched_rule_source,
-                        "risk_categories": list(decision.risk_categories),
-                    },
-                )
-            if decision.behavior == PermissionBehavior.ASK:
-                return ToolResult.needs_confirmation(
-                    decision.reason,
-                    metadata={
-                        "tool_name": tool.name,
-                        "parameters": parameters,
-                        "permission_behavior": decision.behavior.value,
-                        "permission_reason": decision.reason,
-                        "matched_rule_source": decision.matched_rule_source,
-                        "risk_categories": list(decision.risk_categories),
-                        "requires_confirmation": True,
-                    },
-                )
-            return None
-        if spec.requires_confirmation:
-            return ToolResult.needs_confirmation(
-                f"工具 '{tool.name}' 需要用户确认后才能执行。",
-                metadata={
-                    "tool_name": tool.name,
-                    "parameters": parameters,
-                    "requires_confirmation": True,
-                },
-            )
-        return None
-
     def normalize_tool_result(self, name: str, raw_result: Any) -> ToolResult:
         if isinstance(raw_result, ToolResult):
             return raw_result
@@ -241,54 +246,9 @@ class ToolRegistry:
         self,
         name: str,
         parameters: dict[str, Any],
-        *,
-        permission_context: PermissionContext | None = None,
-        permission_engine: PermissionEngine | None = None,
     ) -> ToolResult:
         try:
             tool, validated = self.validate_tool_call(name, parameters)
-            auth_result = self.authorize_tool_call(
-                tool,
-                validated,
-                permission_context=permission_context,
-                permission_engine=permission_engine,
-            )
-            if auth_result is not None:
-                self._enrich_tool_result(tool, auth_result)
-                return auth_result
-            raw_result = tool.run(validated)
-            result = self.normalize_tool_result(name, raw_result)
-            self._enrich_tool_result(tool, result)
-        except ToolNotFoundError as e:
-            result = ToolResult.error(str(e), error_type="tool_not_found")
-            raise e
-        return result
-
-    def execute_confirmed_tool_result(
-        self,
-        name: str,
-        parameters: dict[str, Any],
-        *,
-        permission_context: PermissionContext | None = None,
-        permission_engine: PermissionEngine | None = None,
-    ) -> ToolResult:
-        """Execute a previously-confirmed tool call.
-
-        This bypasses confirmation-only interruptions (`requires_confirmation`
-        and permission `ASK`) but still honors hard permission denials and all
-        normal validation/runtime errors.
-        """
-        try:
-            tool, validated = self.validate_tool_call(name, parameters)
-            auth_result = self.authorize_tool_call(
-                tool,
-                validated,
-                permission_context=permission_context,
-                permission_engine=permission_engine,
-            )
-            if auth_result is not None and auth_result.status != "needs_confirmation":
-                self._enrich_tool_result(tool, auth_result)
-                return auth_result
             raw_result = tool.run(validated)
             result = self.normalize_tool_result(name, raw_result)
             self._enrich_tool_result(tool, result)
@@ -303,14 +263,15 @@ class ToolRegistry:
         metadata.setdefault("tool_name", tool.name)
         metadata.setdefault("tool_visibility", self.get_tool_visibility(tool.name))
         metadata.setdefault("tool_source", spec.source)
-        metadata.setdefault("side_effect_level", spec.side_effect_level)
-        metadata.setdefault("resource_scope", list(spec.resource_scope))
+        permission = tool.get_permission_descriptor()
+        metadata.setdefault("side_effect_level", permission.side_effect_level)
+        metadata.setdefault("resource_scope", list(permission.resources))
         metadata.setdefault("visibility_scope", spec.visibility_scope)
         source_identifier = spec.metadata.get("source_identifier")
         if source_identifier:
             metadata.setdefault("source_identifier", source_identifier)
-        if spec.risk_categories:
-            metadata.setdefault("risk_categories", list(spec.risk_categories))
+        if permission.risk_categories:
+            metadata.setdefault("risk_categories", list(permission.risk_categories))
         result.metadata = metadata
 
     def execute_tool(self, name: str, parameters: dict):
@@ -385,6 +346,7 @@ class ToolRegistry:
         if name in self.tools:
             del self.tools[name]
             self._tool_visibility.pop(name, None)
+            self._permission_descriptors.pop(name, None)
         else:
             print(f"Tool {name} not found")
 

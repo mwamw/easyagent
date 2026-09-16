@@ -63,6 +63,7 @@ class ClaudeCompatDelegatingTool(ClaudeCompatTool):
     ):
         self.delegate = delegate
         spec = delegate.get_spec()
+        permission = delegate.get_permission_descriptor()
         merged_metadata = dict(metadata or {})
         merged_metadata.setdefault("delegate_tool_name", delegate.name)
         super().__init__(
@@ -70,14 +71,15 @@ class ClaudeCompatDelegatingTool(ClaudeCompatTool):
             description=description or spec.description,
             parameters=parameters or spec.parameters_model,
             guidance=guidance or spec.guidance,
-            read_only=spec.read_only,
-            destructive=spec.destructive,
-            requires_confirmation=spec.requires_confirmation,
+            read_only=permission.side_effect_level == "none",
+            destructive=permission.side_effect_level == "high",
+            requires_confirmation=permission.requires_confirmation,
             supports_parallel=spec.supports_parallel,
             output_mode=spec.output_mode,
             tags=["claude_compat", *spec.tags],
             metadata=merged_metadata,
         )
+        self._permission_descriptor = permission
 
     def run(self, parameters: dict) -> Any:
         return self.delegate.run(parameters)

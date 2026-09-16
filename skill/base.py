@@ -24,7 +24,7 @@ class SkillManifest(BaseModel):
     when_to_use: str = ""
     directory: str
     file_path: str
-    allowed_tools: list[str] = Field(default_factory=list)
+    recommended_tools: list[str] = Field(default_factory=list)
     argument_hint: str = ""
     context: SkillExecutionContext = "inline"
     agent: str | None = None

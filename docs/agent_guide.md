@@ -83,9 +83,9 @@ agent.with_context(ContextManager(max_tokens=16000))
 ### Permission 和 Hook
 
 ```python
-from easyagent import HookManager, PermissionContext, PermissionEngine
+from easyagent import HookManager, RuleBasedPermissionEngine
 
-agent.with_permissions(PermissionEngine(), PermissionContext())
+agent.with_permissions(RuleBasedPermissionEngine())
 agent.with_hooks(HookManager())
 ```
 
@@ -101,7 +101,12 @@ agent.enter_plan_mode()
 agent.exit_plan_mode()
 ```
 
-Plan 通过 MetaMessage 记录进入和退出规则，通过 PermissionContext 切换执行权限。
+Plan 通过 MetaMessage 记录进入和退出指令，并更新现有 ExecutionContext 的执行模式。
+Agent 的 `build_authorization_context()` 将当前 `runtime_mode` 和审批状态传给权限引擎；
+Executor 不自行解释 Plan 权限。默认引擎限制 Plan 下的写操作，自定义引擎可以实现自己的规则。
+
+`agent.exit_plan_mode()` 和 `agent.plan.exit()` 只退出 Plan，不改变审批模式或权限规则。
+要调整审批模式，应显式调用 `agent.set_permission_mode(...)`，而不是给退出 Plan 传参。
 
 ### Task
 

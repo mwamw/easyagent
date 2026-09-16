@@ -9,7 +9,6 @@ from pydantic import BaseModel
 from agent import BasicAgent
 from core.history import coerce_canonical_message
 from core.llm import EasyLLM
-from core.permissions import PermissionBehavior, PermissionRule
 from runtime import RuntimeEventType
 from skill import SkillManager, SkillTool, discover_skill_files, load_skill_body, load_skill_manifest
 from Tool import Tool
@@ -205,31 +204,24 @@ def test_manifest_is_indexed_without_loading_body(tmp_path: Path):
     assert load_skill_body(manifest, "src/app.py") == "SECRET SKILL BODY"
 
 
-def test_allowed_tools_parser_preserves_parenthesized_rules(tmp_path: Path):
+def test_recommended_tools_parser_preserves_parenthesized_rules(tmp_path: Path):
     directory = write_skill(
         tmp_path,
         "git-review",
-        extra_frontmatter="allowed-tools: Bash(git status:*) FileRead, Grep",
+        extra_frontmatter="recommended-tools: Bash(git status:*) FileRead, Grep",
     )
     manifest = load_skill_manifest(directory / "SKILL.md")
-    assert manifest.allowed_tools == ["Bash(git status:*)", "FileRead", "Grep"]
+    assert manifest.recommended_tools == ["Bash(git status:*)", "FileRead", "Grep"]
 
 
-def test_unsupported_allowed_tool_matcher_fails_during_indexing(tmp_path: Path):
-    write_skill(tmp_path, "unsafe", extra_frontmatter="allowed-tools: Custom(scope:*)")
+def test_skill_recommendations_do_not_validate_or_authorize(tmp_path: Path):
+    directory = write_skill(tmp_path, "unsafe", extra_frontmatter="recommended-tools: Custom(scope:*)")
+    manifest = load_skill_manifest(directory / "SKILL.md")
+    assert manifest.recommended_tools == ["Custom(scope:*)"]
 
-    with pytest.raises(ValueError, match="Unsupported allowed-tools matcher"):
-        SkillManager().add_directories([tmp_path])
 
-
-def test_allowed_tool_prefixes_are_normalized_without_widening_access():
-    bash = SkillManager._permission_rule("Bash(git status:*)")
-    path = SkillManager._permission_rule("FileRead(src/**)")
-    domain = SkillManager._permission_rule("WebFetch(domain:*.example.com)")
-
-    assert bash.matcher == {"command_prefixes": ["git status"]}
-    assert path.matcher == {"path_prefixes": ["src/"]}
-    assert domain.matcher == {"hosts": ["example.com"]}
+def test_skill_has_no_permission_rule_builder():
+    assert not hasattr(SkillManager, "_permission_rule")
 
 
 def test_inline_skill_rejects_fork_only_agent_and_model_fields(tmp_path: Path):
@@ -417,21 +409,20 @@ def test_executor_injects_skill_between_tool_result_and_next_llm_request(tmp_pat
 
 
 def test_skill_body_and_permissions_are_reclaimed_on_agent_terminal_event(tmp_path: Path):
-    write_skill(tmp_path, "review", extra_frontmatter="allowed-tools: echo_tool")
+    write_skill(tmp_path, "review", extra_frontmatter="recommended-tools: echo_tool")
     agent = BasicAgent("agent", StubLLM()).add_tool(EchoTool()).with_skill(tmp_path)
     agent.add_permission_rule(
-        PermissionRule(tool_name="echo_tool", behavior=PermissionBehavior.ASK),
-        source="session",
+        {"tool_name": "echo_tool", "behavior": "ask"}, source="session"
     )
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED)
     result = agent.execute_tool_result("skill_tool", {"skill": "review"})
     assert result.status == "success"
-    assert "skill:review" in agent.permission_context.store.sources
+    assert not any(rule["source"] == "skill:review" for rule in agent.permission_engine.rules())
     agent.metamessage_manager.flush()
     assert any(message.metadata.get("source") == "skill" for message in agent.history)
 
     publish(agent, RuntimeEventType.AGENT_INVOKE_COMPLETED)
-    assert "skill:review" not in agent.permission_context.store.sources
+    assert not any(rule["source"] == "skill:review" for rule in agent.permission_engine.rules())
     assert not any(message.metadata.get("source") == "skill" for message in agent.history)
 
 
@@ -470,7 +461,7 @@ def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
             "context: fork\n"
             "agent: reviewer\n"
             "model: specialist-model\n"
-            "allowed-tools: Agent"
+            "recommended-tools: Agent"
         ),
         body="Review $ARGUMENTS deeply.",
     )
@@ -486,8 +477,8 @@ def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
     assert result.structured_data["agentId"] == "agent-child"
     assert result.structured_data["outputFile"] == "/tmp/agent-child.md"
     assert result.structured_data["result"] == "fork result"
-    assert result.structured_data["allowedTools"] == ["Agent"]
-    assert "skill:deep-review" not in agent.permission_context.store.sources
+    assert result.structured_data["recommendedTools"] == ["Agent"]
+    assert not any(rule["source"] == "skill:deep-review" for rule in agent.permission_engine.rules())
     assert fork_tool.last_parameters["subagent_type"] == "reviewer"
     assert fork_tool.last_parameters["model"] == "specialist-model"
     assert "Review src/core.py deeply." in fork_tool.last_parameters["prompt"]

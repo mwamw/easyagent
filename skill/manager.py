@@ -10,7 +10,6 @@ from typing import Any, Iterable
 
 from pathspec import GitIgnoreSpec
 
-from core.permissions import PermissionBehavior, PermissionRule
 from metamessage import MetaMessage, MetaMessageLifecycle
 from runtime import RuntimeEvent, RuntimeEventType
 
@@ -18,7 +17,6 @@ from .base import SkillManifest
 from .folder_loader import discover_skill_files, load_skill_body, load_skill_manifest
 
 
-_TOOL_RULE_PATTERN = re.compile(r"^(?P<name>[^()]+?)(?:\((?P<rule>.*)\))?$")
 _TERMINAL_EVENTS = {
     RuntimeEventType.AGENT_INVOKE_COMPLETED,
     RuntimeEventType.AGENT_INVOKE_FAILED,
@@ -60,7 +58,6 @@ class SkillManager:
         self._skills: dict[str, SkillManifest] = {}
         self._activated_path_skills: set[str] = set()
         self._active_keys: set[str] = set()
-        self._permission_sources: set[str] = set()
         self._event_subscription: str | None = None
         self._lock = RLock()
 
@@ -139,8 +136,6 @@ class SkillManager:
                     raise ValueError(
                         f"Skill '{manifest.name}' may declare agent/model only with context: fork"
                     )
-                for allowed_tool in manifest.allowed_tools:
-                    self._permission_rule(allowed_tool)
                 candidates.append(manifest)
 
         with self._lock:
@@ -216,78 +211,19 @@ class SkillManager:
         )
         return "\n".join(lines)
 
-    @staticmethod
-    def _permission_rule(value: str) -> PermissionRule:
-        match = _TOOL_RULE_PATTERN.fullmatch(value.strip())
-        if match is None:
-            raise ValueError(f"Invalid allowed-tools entry: {value}")
-        tool_name = match.group("name").strip()
-        expression = str(match.group("rule") or "").strip()
-        matcher: dict[str, Any] = {}
-        if expression:
-            prefix = expression.rstrip("*").removesuffix(":").strip()
-            if not prefix:
-                raise ValueError(
-                    f"allowed-tools matcher '{expression}' must not grant an empty prefix"
-                )
-            if tool_name.lower() == "bash":
-                if any(character in prefix for character in "*?["):
-                    raise ValueError(
-                        f"Bash matcher '{expression}' must be a command prefix"
-                    )
-                matcher["command_prefixes"] = [prefix]
-            elif expression.startswith("domain:"):
-                domain = prefix.removeprefix("domain:").removeprefix("*.")
-                if any(character in domain for character in "*?["):
-                    raise ValueError(
-                        f"Domain matcher '{expression}' must be a hostname suffix"
-                    )
-                matcher["hosts"] = [domain]
-            elif expression.startswith("path:"):
-                path_prefix = prefix.removeprefix("path:")
-                if any(character in path_prefix for character in "*?["):
-                    raise ValueError(
-                        f"Path matcher '{expression}' must be a path prefix"
-                    )
-                matcher["path_prefixes"] = [path_prefix]
-            elif tool_name.lower() in _FILESYSTEM_TOOL_NAMES:
-                if any(character in prefix for character in "*?["):
-                    raise ValueError(
-                        f"Filesystem matcher '{expression}' must be a path prefix"
-                    )
-                matcher["path_prefixes"] = [prefix]
-            else:
-                raise ValueError(
-                    f"Unsupported allowed-tools matcher '{expression}' for "
-                    f"tool '{tool_name}'. Use path:, domain:, a Bash command prefix, "
-                    "or grant the exact tool name without parentheses."
-                )
-        return PermissionRule(
-            tool_name=tool_name,
-            behavior=PermissionBehavior.ALLOW,
-            matcher=matcher,
-            description="Temporarily allowed by the active Skill",
-        )
-
-    def _activate_allowed_tools(self, manifest: SkillManifest) -> tuple[list[str], list[str]]:
-        if self._agent is None or not manifest.allowed_tools:
+    def _recommended_tools(self, manifest: SkillManifest) -> tuple[list[str], list[str]]:
+        """Return advisory tool names; this never changes authorization."""
+        if self._agent is None or not manifest.recommended_tools:
             return [], []
         registry = getattr(self._agent, "tool_registry", None)
         available: list[str] = []
         unavailable: list[str] = []
-        rules: list[PermissionRule] = []
-        for item in manifest.allowed_tools:
-            rule = self._permission_rule(item)
-            if registry is None or not registry.has_tool(rule.tool_name):
+        for item in manifest.recommended_tools:
+            tool_name = str(item).split("(", 1)[0].strip()
+            if registry is None or not registry.has_tool(tool_name):
                 unavailable.append(item)
                 continue
-            rules.append(rule)
             available.append(item)
-        if rules:
-            source = f"skill:{manifest.name}"
-            self._agent.permission_context.set_source_rules(source, rules, priority=55)
-            self._permission_sources.add(source)
-            registry.expand_deferred_tools(sorted({rule.tool_name for rule in rules}))
         return available, unavailable
 
     @staticmethod
@@ -324,25 +260,16 @@ class SkillManager:
             raise RuntimeError("SkillManager is not bound to an Agent")
         body = load_skill_body(manifest, args)
         if manifest.context == "fork":
-            allowed, unavailable = self._activate_allowed_tools(manifest)
-            try:
-                return self._invoke_fork(
-                    manifest,
-                    body,
-                    args,
-                    allowed=allowed,
-                    unavailable=unavailable,
-                )
-            finally:
-                source = f"skill:{manifest.name}"
-                self._agent.permission_context.clear_rules(source=source)
-                self._permission_sources.discard(source)
+            recommended, unavailable = self._recommended_tools(manifest)
+            return self._invoke_fork(
+                manifest, body, args, recommended=recommended, unavailable=unavailable,
+            )
 
         key = f"{manifest.name}:{sha256(str(args or '').encode('utf-8')).hexdigest()[:16]}"
         with self._lock:
             already_active = key in self._active_keys
             self._active_keys.add(key)
-        allowed, unavailable = self._activate_allowed_tools(manifest)
+        recommended, unavailable = self._recommended_tools(manifest)
         if not already_active:
             self._agent.emit_metamessage(
                 MetaMessage(
@@ -356,7 +283,7 @@ class SkillManager:
                         "skillPath": manifest.file_path,
                         "skillDirectory": manifest.directory,
                         "arguments": str(args or ""),
-                        "allowedTools": allowed,
+                        "recommendedTools": recommended,
                     },
                 )
             )
@@ -368,8 +295,8 @@ class SkillManager:
             "alreadyActive": already_active,
             "instructionSource": manifest.file_path,
             "skillDirectory": manifest.directory,
-            "allowedTools": allowed,
-            "unavailableTools": unavailable,
+            "recommendedTools": recommended,
+            "unavailableRecommendedTools": unavailable,
             "model": manifest.model,
         }
 
@@ -379,7 +306,7 @@ class SkillManager:
         body: str,
         args: str,
         *,
-        allowed: list[str],
+        recommended: list[str],
         unavailable: list[str],
     ) -> dict[str, Any]:
         if self._agent is None:
@@ -409,8 +336,8 @@ class SkillManager:
             "status": "forked",
             "instructionSource": manifest.file_path,
             "skillDirectory": manifest.directory,
-            "allowedTools": allowed,
-            "unavailableTools": unavailable,
+            "recommendedTools": recommended,
+            "unavailableRecommendedTools": unavailable,
             "model": manifest.model,
             "agentId": data.get("agentId"),
             "outputFile": data.get("outputFile"),
@@ -516,12 +443,7 @@ class SkillManager:
         if event.type not in _TERMINAL_EVENTS:
             return
         with self._lock:
-            sources = list(self._permission_sources)
-            self._permission_sources.clear()
             self._active_keys.clear()
-        if self._agent is not None:
-            for source in sources:
-                self._agent.permission_context.clear_rules(source=source)
 
     def export_state(self) -> dict[str, Any]:
         with self._lock:
@@ -558,12 +480,8 @@ class SkillManager:
 
     def close(self) -> dict[str, Any]:
         with self._lock:
-            sources = list(self._permission_sources)
-            self._permission_sources.clear()
             self._active_keys.clear()
         if self._agent is not None:
-            for source in sources:
-                self._agent.permission_context.clear_rules(source=source)
             if self._event_subscription:
                 self._agent.event_bus.unsubscribe(self._event_subscription)
         self._event_subscription = None

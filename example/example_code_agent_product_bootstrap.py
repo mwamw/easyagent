@@ -15,7 +15,7 @@ from easyagent import BasicAgent, Config, EasyLLM, InMemoryObservabilityStore
 from easyagent.callbacks import CallbackManager, StreamingCallback
 from easyagent.guardrails import build_default_hook_manager
 from easyagent.hooks import BaseHook, HookDecision, HookManager
-from easyagent.permissions import PermissionContext, PermissionMode
+from easyagent.permissions import ApprovalMode, RuleBasedPermissionEngine
 from easyagent.prompting import PromptBlock, SystemPromptComposer
 from easyagent.tools import (
     ToolRegistry,
@@ -91,7 +91,7 @@ def build_code_agent(workspace_root: str) -> BasicAgent:
     )
     agent.with_tool(registry)
     agent.with_prompt(ProductPromptComposer("EasyAgent Demo IDE"))
-    agent.with_permissions(context=PermissionContext(mode=PermissionMode.ASK))
+    agent.with_permissions(engine=RuleBasedPermissionEngine(approval_mode=ApprovalMode.ASK_FOR_APPROVAL))
     agent.with_callbacks(callback_manager)
     agent.with_hooks(hook_manager)
     agent.with_observability(store=InMemoryObservabilityStore())

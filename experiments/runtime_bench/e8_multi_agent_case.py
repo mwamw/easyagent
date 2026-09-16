@@ -6,7 +6,7 @@ from common import (
     CaseResult,
     append_jsonl,
     build_mock_registry,
-    build_permission_context,
+    build_permission_engine,
     create_llm,
     default_arg_parser,
     ensure_results_dir,
@@ -33,7 +33,7 @@ def make_runtime() -> AgentRuntimeManager:
             ),
             config=Config(tool_schema_mode="deferred"),
         ).with_tool(build_mock_registry()).with_permissions(
-            context=build_permission_context()
+            engine=build_permission_engine()
         )
 
     runtime = AgentRuntimeManager(agent_factory=factory, team_manager=team_manager)

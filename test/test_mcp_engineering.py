@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import BasicAgent
 from core.llm import EasyLLM
-from core.permissions import PermissionBehavior, PermissionContext, PermissionRule
+from core.permissions import PermissionBehavior, PermissionEngine
 from Emcp import MCPPolicyContext, MCPPolicyRule
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_tools
@@ -174,7 +174,7 @@ class TestMCPEngineering(unittest.TestCase):
         self.assertIsNotNone(tool_spec)
         self.assertEqual(tool_spec.metadata["source_identifier"], "mcp://alpha/tools/echo")
         self.assertEqual(tool_spec.source, "mcp")
-        self.assertEqual(tool_spec.risk_categories, ["mcp"])
+        self.assertEqual(registry.get_tool("echo").get_permission_descriptor().risk_categories, ("mcp",))
 
         resource_spec = registry.get_tool_spec("alpha_list_mcp_resources")
         self.assertIsNotNone(resource_spec)
@@ -217,26 +217,14 @@ class TestMCPEngineering(unittest.TestCase):
             server_source="alpha",
             client=FakeMCPClient(),
         )
-        permission_context = PermissionContext(
-            rules=[
-                PermissionRule(
-                    tool_name="echo",
-                    behavior=PermissionBehavior.DENY,
-                    matcher={"mcp_servers": ["alpha"]},
-                    description="alpha server is blocked",
-                )
-            ]
-        )
-
-        result = registry.execute_tool_result(
-            "echo",
-            {"text": "hello"},
-            permission_context=permission_context,
-        )
-
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "permission_denied")
-        self.assertIn("alpha server is blocked", result.to_display_string())
+        engine = PermissionEngine(load_policies=False)
+        engine.add_rule(tool_name="echo", behavior="deny",
+                        matcher={"mcp_servers": ["alpha"]},
+                        description="alpha server is blocked")
+        request = registry.build_permission_request("echo", {"text": "hello"})
+        decision = engine.authorize(request)
+        self.assertEqual(decision.behavior, PermissionBehavior.DENY)
+        self.assertIn("alpha server is blocked", decision.reason)
 
     def test_agent_close_reports_mcp_runtime_component(self):
         manager = MCPToolManager(

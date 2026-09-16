@@ -1,23 +1,33 @@
 """Permission primitives for EasyAgent."""
 
-from .context import PermissionContext
-from .engine import PermissionEngine
-from .store import PermissionStore
-from .types import (
+from .base import BasePermissionEngine
+from .models import (
+    ApprovalMode,
+    AuthorizationContext,
     PermissionBehavior,
     PermissionDecision,
-    PermissionMode,
-    PermissionRule,
-    RiskCategory,
+    PermissionRequest,
+    PermissionGrant,
+    ToolPermissionDescriptor,
 )
+from .default import RuleBasedPermissionEngine
+from .default.policy import PolicyRule, PolicySet
+from .grants import PermissionGrantLedger
+
+PermissionEngine = RuleBasedPermissionEngine
 
 __all__ = [
     "PermissionBehavior",
-    "PermissionContext",
     "PermissionDecision",
     "PermissionEngine",
-    "PermissionMode",
-    "PermissionRule",
-    "PermissionStore",
-    "RiskCategory",
+    "ApprovalMode",
+    "AuthorizationContext",
+    "PermissionRequest",
+    "PermissionGrant",
+    "ToolPermissionDescriptor",
+    "BasePermissionEngine",
+    "RuleBasedPermissionEngine",
+    "PolicyRule",
+    "PolicySet",
+    "PermissionGrantLedger",
 ]

@@ -33,7 +33,11 @@ from core.Exception import (
 from core.guardrails import build_default_hook_manager
 from core.hooks import HookManager
 from core.llm import EasyLLM
-from core.permissions import PermissionContext, PermissionEngine, PermissionMode, PermissionRule
+from core.permissions import PermissionEngine, ApprovalMode
+from core.permissions.base import BasePermissionEngine
+from core.permissions.default import RuleBasedPermissionEngine
+from core.permissions.models import PermissionGrant
+from core.permissions.grants import PermissionGrantLedger
 from core.session import SessionRestoreReport
 from metamessage import (
     AgentMetaMessageHistoryPort,
@@ -92,8 +96,10 @@ class BaseAgent(ABC):
         self.skill_manager: SkillManager | None = None
         self.callback_manager = CallbackManager()
         self.hook_manager = build_default_hook_manager()
-        self.permission_engine = PermissionEngine()
-        self.permission_context = PermissionContext()
+        self.permission_engine = RuleBasedPermissionEngine(
+            workspace_root=os.path.abspath(self.config.workspace_root or os.getcwd())
+        )
+        self.permission_grants = PermissionGrantLedger()
         self.metamessage_manager: BaseMetaMessageManager = MetaMessageManager()
 
         workspace_root = os.path.abspath(self.config.workspace_root or os.getcwd())
@@ -141,7 +147,8 @@ class BaseAgent(ABC):
         self._sessions = SessionPersistence(self)
         self._owns_session_store = False
         for name, attribute, forkable in (
-            ("permissions", "permission_context", True), ("metamessage", "metamessage_manager", True),
+            ("permissions", "permission_engine", True), ("metamessage", "metamessage_manager", True),
+            ("permissionGrants", "permission_grants", False),
             ("skills", "skill_manager", True), ("context", "context_manager", True),
             ("memory", "memory", True), ("plan", "plan", True),
             ("tasks", "task_service", False), ("interruptions", "interrupt_controller", False),
@@ -166,7 +173,9 @@ class BaseAgent(ABC):
     def _metamessage_context(self) -> MetaMessageContext:
         return MetaMessageContext(
             execution_mode=self.get_execution_mode().value,
-            permission_mode=self.permission_context.mode.value,
+            permission_mode=getattr(self.permission_engine, "approval_mode", "ask_for_approval").value
+            if hasattr(getattr(self.permission_engine, "approval_mode", None), "value")
+            else str(getattr(self.permission_engine, "approval_mode", "ask_for_approval")),
             current_task_id=self.current_task_id,
         )
 
@@ -194,8 +203,13 @@ class BaseAgent(ABC):
 
     def _refresh_execution_context(self) -> None:
         self.execution_context.execution_mode = self.get_execution_mode().value
-        self.execution_context.permission_mode = self.permission_context.mode.value
+        approval_mode = getattr(self.permission_engine, "approval_mode", "ask_for_approval")
+        self.execution_context.permission_mode = getattr(approval_mode, "value", str(approval_mode))
         self.execution_context.current_task_id = self.current_task_id
+        if self.plan is not None and self.get_execution_mode() == ExecutionMode.PLAN:
+            self.execution_context.metadata["planAllowedActions"] = list(self.plan.state.allowed_actions)
+        else:
+            self.execution_context.metadata.pop("planAllowedActions", None)
         self.execution_context.mcp_servers = tuple(
             sorted(
                 {
@@ -229,6 +243,24 @@ class BaseAgent(ABC):
             context_manager=self.context_manager,
         )
 
+    def build_authorization_context(self):
+        """Build an immutable permission context from Agent-owned runtime state."""
+        from core.permissions.models import AuthorizationContext
+
+        mode = getattr(self.permission_engine, "approval_mode", ApprovalMode.ASK_FOR_APPROVAL)
+        return AuthorizationContext(
+            agent_id=self.name,
+            session_id=self.session_id,
+            workspace_root=self.execution_context.workspace_root,
+            runtime_mode=self.execution_context.execution_mode or "execute",
+            plan_allowed_actions=tuple(
+                getattr(getattr(self.plan, "state", None), "allowed_actions", ())
+                if self.get_execution_mode() == ExecutionMode.PLAN
+                else ()
+            ),
+            approval_mode=mode if isinstance(mode, ApprovalMode) else ApprovalMode(str(mode)),
+        )
+
     def with_prompt(self, composer: BaseSystemPromptComposer) -> "BaseAgent":
         if not isinstance(composer, BaseSystemPromptComposer):
             raise TypeError("composer must extend BaseSystemPromptComposer")
@@ -259,17 +291,14 @@ class BaseAgent(ABC):
 
     def with_permissions(
         self,
-        engine: PermissionEngine | None = None,
-        context: PermissionContext | None = None,
+        engine: BasePermissionEngine | PermissionEngine | None = None,
     ) -> "BaseAgent":
-        resolved_engine = engine or PermissionEngine()
-        resolved_context = context or PermissionContext()
-        if not isinstance(resolved_engine, PermissionEngine):
-            raise TypeError("engine must be PermissionEngine")
-        if not isinstance(resolved_context, PermissionContext):
-            raise TypeError("context must be PermissionContext")
+        resolved_engine = engine or RuleBasedPermissionEngine(
+            workspace_root=self.execution_context.workspace_root
+        )
+        if not isinstance(resolved_engine, BasePermissionEngine) and not isinstance(resolved_engine, PermissionEngine):
+            raise TypeError("engine must implement BasePermissionEngine")
         self.permission_engine = resolved_engine
-        self.permission_context = resolved_context
         if self.plan is not None:
             self._bind_plan()
         self._refresh_execution_context()
@@ -350,7 +379,6 @@ class BaseAgent(ABC):
         if self.plan is None:
             return
         self.plan.bind(
-            permission_context=self.permission_context,
             metamessage_manager=self.metamessage_manager,
             tool_registry=self.tool_registry,
             runtime_refresher=self._refresh_execution_context,
@@ -674,11 +702,62 @@ class BaseAgent(ABC):
     def execute_tool_result(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
         if self.tool_registry is None:
             raise ToolRegistryError("Tool module is not installed")
-        return self.tool_registry.execute_tool_result(
-            tool_name,
-            arguments,
-            permission_context=self.permission_context,
-            permission_engine=self.permission_engine,
+        tool, validated, descriptor = self.tool_registry.resolve_tool_call(tool_name, arguments)
+        from core.permissions.base import BasePermissionEngine
+        if isinstance(self.permission_engine, BasePermissionEngine):
+            from core.permissions.models import AuthorizationContext, PermissionBehavior
+            request = self.tool_registry.build_permission_request(
+                tool_name,
+                validated,
+                context=self.build_authorization_context(),
+            )
+            decision = self.permission_engine.authorize(request)
+            if decision.behavior != PermissionBehavior.ALLOW:
+                return ToolResult.error(decision.reason or "Tool permission denied", error_type="permission_denied")
+        else:
+            raise TypeError("permission_engine must implement BasePermissionEngine")
+        return self.tool_registry.normalize_tool_result(tool_name, tool.run(validated))
+
+    def grant_pending_permission(self) -> PermissionGrant:
+        """Create a receipt only for the current pending request, never a blanket bypass."""
+        from copy import deepcopy
+        pending = self.get_pending_interruption()
+        if pending is None:
+            raise ValueError("No pending permission request")
+        return PermissionGrant(
+            tool_name=pending["tool_name"], arguments=deepcopy(pending.get("tool_args", {})),
+            session_id=self.session_id, request_id=pending["request_id"],
+        )
+
+    def execute_approved_tool(self, grant: PermissionGrant) -> ToolResult:
+        """Consume an exact, single-use approval after rechecking current policy and hooks."""
+        if self.tool_registry is None:
+            raise ToolRegistryError("Tool module is not installed")
+        if not isinstance(grant, PermissionGrant):
+            raise TypeError("An explicit PermissionGrant is required")
+        pending = self.get_pending_interruption()
+        if (pending is None or grant.session_id != self.session_id
+                or grant.request_id != pending.get("request_id")
+                or grant.tool_name != pending.get("tool_name")
+                or dict(grant.arguments) != pending.get("tool_args")):
+            raise ValueError("Approval does not match the pending request")
+        from agent.components.executor import DefaultAgentExecutor
+        self._refresh_execution_context()
+        services = self._services()
+        name, tool, validated, result = DefaultAgentExecutor._prepare_tool(
+            services, tool_name=grant.tool_name, arguments=dict(grant.arguments),
+        )
+        if name != grant.tool_name or validated != dict(grant.arguments):
+            raise ValueError("Tool or arguments changed after approval; approve a new request")
+        if result is not None and result.status != "needs_confirmation":
+            return result
+        self.permission_grants.consume(grant)
+        try:
+            result = self.tool_registry.normalize_tool_result(name, tool.run(validated))
+        except Exception as exc:
+            result = ToolResult.error(str(exc), error_type=exc.__class__.__name__)
+        return DefaultAgentExecutor._apply_after_tool_hook(
+            services, tool_name=name, arguments=validated, result=result,
         )
 
     def get_provider_tools(self) -> Any:
@@ -698,26 +777,41 @@ class BaseAgent(ABC):
     def get_enhanced_prompt(self, query: str = "") -> str:
         return self.get_system_prompt_template(query).render_system()
 
-    def set_permission_mode(self, mode: PermissionMode | str) -> None:
-        resolved = PermissionMode(mode)
-        if resolved == PermissionMode.PLAN:
-            if self.plan is None:
-                self.with_plan()
-            self.plan.enter()
-        elif self.plan is not None and self.get_execution_mode() == ExecutionMode.PLAN:
-            self.plan.exit(permission_mode=resolved)
-        else:
-            self.permission_context.set_mode(resolved)
+    def set_permission_mode(self, mode: ApprovalMode | str) -> None:
+        if isinstance(self.permission_engine, BasePermissionEngine):
+            mapping = {
+                "default": ApprovalMode.ASK_FOR_APPROVAL,
+                "accept_edits": ApprovalMode.AUTO_APPROVE_SAFE,
+                "dont_ask": ApprovalMode.FULL_ACCESS,
+                "bypass": ApprovalMode.FULL_ACCESS,
+            }
+            normalized = mode.value if isinstance(mode, ApprovalMode) else str(mode)
+            setter = getattr(self.permission_engine, "set_approval_mode", None)
+            if callable(setter):
+                resolved = mapping.get(normalized)
+                if resolved is None:
+                    resolved = ApprovalMode(normalized)
+                setter(resolved)
+            self._refresh_execution_context()
+            return
+        raise TypeError("permission_engine must implement BasePermissionEngine")
         self._refresh_execution_context()
 
     def add_permission_rule(
         self,
-        rule: PermissionRule,
+        rule: Any,
         *,
         source: str | None = None,
         priority: int | None = None,
     ) -> None:
-        self.permission_context.add_rule(rule, source=source, priority=priority)
+        payload = rule if isinstance(rule, dict) else rule.model_dump(mode="python")
+        self.permission_engine.add_rule(
+            tool_name=payload.get("tool_name", "*"),
+            behavior=payload.get("behavior", "ask"),
+            matcher=payload.get("matcher", {}),
+            source=source or payload.get("source", "session"),
+            description=payload.get("description", ""),
+        )
 
     def enter_plan_mode(self, *, allowed_actions: list[str] | None = None) -> None:
         if self.plan is None:
@@ -729,10 +823,10 @@ class BaseAgent(ABC):
             raise ExecutionModeError("Plan module is not installed")
         self.plan.request_exit(allowed_actions=allowed_actions)
 
-    def exit_plan_mode(self, *, permission_mode: PermissionMode | str = PermissionMode.DEFAULT) -> None:
+    def exit_plan_mode(self) -> None:
         if self.plan is None:
             raise ExecutionModeError("Plan module is not installed")
-        self.plan.exit(permission_mode=permission_mode)
+        self.plan.exit()
 
     def get_execution_mode(self) -> ExecutionMode:
         return self.plan.mode if self.plan is not None else ExecutionMode.EXECUTE

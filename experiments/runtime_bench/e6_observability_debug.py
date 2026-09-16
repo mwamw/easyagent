@@ -7,7 +7,7 @@ from common import (
     CaseResult,
     append_jsonl,
     build_mock_registry,
-    build_permission_context,
+    build_permission_engine,
     default_arg_parser,
     ensure_results_dir,
     result_to_dict,
@@ -56,7 +56,7 @@ def run_case(case: BenchCase) -> CaseResult:
     outcome = run_agent_task(
         case.task,
         registry=build_mock_registry(),
-        permission_context=build_permission_context(),
+        permission_engine=build_permission_engine(),
         max_iter=6,
         observability=True,
         system_prompt="You are running an observability benchmark. Use the requested benchmark tool exactly.",

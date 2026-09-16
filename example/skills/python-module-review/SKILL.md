@@ -4,7 +4,7 @@ description: Review Python module boundaries, state ownership, and lifecycle beh
 when_to_use: Use after inspecting Python files under the EasyAgent skill package.
 argument-hint: A Python file or module that has already been inspected.
 paths: "skill/*.py"
-allowed-tools: FileRead, Glob, Grep
+recommended-tools: FileRead, Glob, Grep
 ---
 # Python Module Review
 

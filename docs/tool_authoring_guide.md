@@ -188,7 +188,7 @@ class AddTool(Tool):
 #### `expose_in_deferred`
 
 - 表示 deferred schema 模式下是否默认暴露该工具。
-- Skill 的 `allowed-tools` 可以在当前 invoke 中临时展开未默认暴露的工具。
+- Skill 的 `recommended-tools` 只提供建议，不改变 Deferred Schema 可见性或工具权限。
 
 ### 3.5 风险标签与产品元信息
 

@@ -257,10 +257,11 @@ class HookAndProtocolTests(unittest.TestCase):
         self.assertIsNotNone(spec)
         assert spec is not None
         self.assertEqual(spec.visibility_scope, "runtime")
-        self.assertEqual(spec.side_effect_level, "none")
-        self.assertEqual(spec.resource_scope, ["external"])
+        permission = runtime_registry.get_tool("ExternalSnippet").get_permission_descriptor()
+        self.assertEqual(permission.side_effect_level, "none")
+        self.assertEqual(list(permission.resources), ["external"])
         self.assertEqual(spec.to_description_payload()["visibility_scope"], "runtime")
-        self.assertEqual(spec.to_intermediate_schema()["resource_scope"], ["external"])
+        self.assertNotIn("resource_scope", spec.to_intermediate_schema())
 
     def test_runtime_event_captures_tool_ephemeral_context(self):
         registry = ToolRegistry()

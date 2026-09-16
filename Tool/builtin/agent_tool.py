@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+from copy import deepcopy
 from typing import Any, Callable, Iterable, Optional
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeAgentInput
 from ..runtime import SubagentManager, SubagentRequest, WorktreeManager
-from core.permissions import PermissionContext, PermissionMode
+from core.permissions import ApprovalMode
+from core.permissions.default import RuleBasedPermissionEngine
 from core.cache_policy import PromptCachePolicy, build_cache_signature
 from core.request_compiler import compile_prompt_blocks
 from runtime import AgentRuntimeManager, ExecutionContext
@@ -68,17 +70,16 @@ def _can_read_output_file(registry: Optional[ToolRegistry]) -> bool:
     return registry.has_tool("FileRead") or registry.has_tool("Bash")
 
 
-def _normalize_subagent_mode(raw_mode: Optional[str]) -> Optional[PermissionMode]:
+def _normalize_subagent_mode(raw_mode: Optional[str]) -> Optional[ApprovalMode]:
     mapping = {
-        "default": PermissionMode.DEFAULT,
-        "plan": PermissionMode.PLAN,
-        "dontAsk": PermissionMode.DONT_ASK,
-        "acceptEdits": PermissionMode.ACCEPT_EDITS,
-        "bypassPermissions": PermissionMode.BYPASS,
+        "default": ApprovalMode.ASK_FOR_APPROVAL,
+        "dontAsk": ApprovalMode.FULL_ACCESS,
+        "acceptEdits": ApprovalMode.AUTO_APPROVE_SAFE,
+        "bypassPermissions": ApprovalMode.FULL_ACCESS,
     }
     if raw_mode is None:
         return None
-    return mapping.get(raw_mode, PermissionMode.DEFAULT)
+    return mapping.get(raw_mode, ApprovalMode.ASK_FOR_APPROVAL)
 
 
 def clone_tool_registry_for_workspace(
@@ -309,16 +310,13 @@ class AgentTool(Tool):
                     normalized_policy.mode = "skip_write"
                     config_copy.cache_policy = normalized_policy
 
-            parent_permission_context = getattr(self.parent_agent, "permission_context", None)
-            if parent_permission_context is not None and hasattr(parent_permission_context, "model_copy"):
-                permission_context = parent_permission_context.model_copy(deep=True)
-            elif parent_permission_context is not None:
-                permission_context = PermissionContext.model_validate(parent_permission_context.model_dump(mode="python"))
-            else:
-                permission_context = PermissionContext()
             normalized_mode = _normalize_subagent_mode(request.mode)
+            child_engine = RuleBasedPermissionEngine(workspace_root=workspace_root, load_policies=False)
+            parent_engine = getattr(self.parent_agent, "permission_engine", None)
+            if parent_engine is not None and hasattr(parent_engine, "export_state"):
+                child_engine.restore_state(deepcopy(parent_engine.export_state()))
             if normalized_mode is not None:
-                permission_context.set_mode(normalized_mode)
+                child_engine.set_approval_mode(normalized_mode)
 
             parent_execution_context = getattr(self.parent_agent, "execution_context", None)
             if parent_execution_context is not None and hasattr(parent_execution_context, "copy_for_workspace"):
@@ -327,7 +325,7 @@ class AgentTool(Tool):
                     allowed_roots=allowed_roots,
                     worktree_path=request.worktree_path,
                     worktree_branch=request.worktree_branch,
-                    execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                    execution_mode=None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
                     current_task_id=delegated_task_id,
                     metadata=self._delegation_context_metadata(),
@@ -339,7 +337,7 @@ class AgentTool(Tool):
                     allowed_roots=allowed_roots,
                     worktree_path=request.worktree_path,
                     worktree_branch=request.worktree_branch,
-                    execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                    execution_mode=None,
                     permission_mode=normalized_mode.value if normalized_mode is not None else None,
                     current_task_id=delegated_task_id,
                     metadata=self._delegation_context_metadata(),
@@ -371,10 +369,7 @@ class AgentTool(Tool):
             )
             child_agent.reasoning = getattr(self.parent_agent, "reasoning", None)
             child_agent.execution_context = child_execution_context
-            child_agent.with_permissions(
-                getattr(self.parent_agent, "permission_engine", None),
-                permission_context,
-            )
+            child_agent.with_permissions(engine=child_engine)
             parent_callbacks = getattr(self.parent_agent, "callback_manager", None)
             if parent_callbacks is not None:
                 child_agent.with_callbacks(parent_callbacks)
@@ -389,11 +384,6 @@ class AgentTool(Tool):
             parent_task_service = getattr(self.parent_agent, "task_service", None)
             if parent_task_service is not None:
                 child_agent.with_task_service(parent_task_service)
-            if normalized_mode == PermissionMode.PLAN:
-                from plan import PlanModeConfig
-
-                child_agent.with_plan(config=PlanModeConfig(register_tools=False))
-                child_agent.plan.enter()
             if bool(getattr(config_copy, "subagent_inherit_cache_safe_params", True)):
                 child_execution_context.metadata.setdefault(
                     "cacheSafeParams",
@@ -465,7 +455,7 @@ class AgentTool(Tool):
                 allowed_roots=allowed_roots,
                 worktree_path=request.worktree_path,
                 worktree_branch=request.worktree_branch,
-                execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                execution_mode=None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
                 current_task_id=delegated_task_id,
                 metadata=self._delegation_context_metadata(),
@@ -477,7 +467,7 @@ class AgentTool(Tool):
                 allowed_roots=allowed_roots,
                 worktree_path=request.worktree_path,
                 worktree_branch=request.worktree_branch,
-                execution_mode="plan" if normalized_mode == PermissionMode.PLAN else None,
+                execution_mode=None,
                 permission_mode=normalized_mode.value if normalized_mode is not None else None,
                 current_task_id=delegated_task_id,
                 metadata=self._delegation_context_metadata(),
@@ -485,7 +475,7 @@ class AgentTool(Tool):
         return ExecutionContext(
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
-            execution_mode="plan" if normalized_mode == PermissionMode.PLAN else "execute",
+            execution_mode="execute",
             permission_mode=normalized_mode.value if normalized_mode is not None else "default",
             current_task_id=delegated_task_id,
             worktree_path=request.worktree_path,

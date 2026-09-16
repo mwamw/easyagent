@@ -34,7 +34,7 @@ Execution:
 - Instructions remain active only for the current Agent invocation; load the skill again in a later invocation when needed.
 - A skill configured with context: fork delegates its task to Agent instead.
 - Use the returned skill directory to resolve supporting scripts, references, and assets. Do not guess instructions that have not been loaded.
-- Skill-scoped tool permissions cannot override a denial or expose unavailable tools."""
+- Tool recommendations are guidance only and do not grant permissions or expose tools. All tool calls remain subject to the Agent's authorization policy."""
 
 
 class SkillToolInput(BaseModel):
@@ -63,7 +63,7 @@ class SkillTool(Tool):
             source="builtin",
             tags=["skill", "progressive-disclosure"],
             side_effect_level="none",
-            resource_scope=["agent_history", "permissions", "tools"],
+            resource_scope=["agent_history"],
             expose_in_deferred=True,
         )
 

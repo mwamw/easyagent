@@ -43,7 +43,7 @@ agent.with_skill("./team-skills").with_skill("./project-skills")
 - 在需要时创建 `ToolRegistry`
 - 安装唯一的模型入口 `skill_tool`
 - 把 Skill listing 加入系统提示词的 `system_reminder`
-- 订阅 RuntimeEvent，自动管理条件发现、临时权限和正文回收
+- 订阅 RuntimeEvent，自动管理条件发现和正文回收；不修改权限策略
 
 没有调用 `with_skill` 时，Agent 不创建 SkillManager，也不暴露 `skill_tool`。
 
@@ -65,7 +65,7 @@ name: repository-review
 description: Inspect a repository change and produce an evidence-based review.
 when_to_use: Use when the user asks for a code or patch review.
 argument-hint: A file path, module, commit, or review objective.
-allowed-tools: FileRead, Glob, Grep, List
+recommended-tools: FileRead, Glob, Grep, List
 ---
 
 # Repository Review
@@ -84,7 +84,7 @@ The Skill directory is `${SKILL_DIR}`.
 | `description` | 是 | listing 中的简短能力描述 |
 | `when_to_use` | 否 | 模型应主动调用 Skill 的条件和示例 |
 | `argument-hint` | 否 | `args` 的格式提示 |
-| `allowed-tools` | 否 | Skill 激活期间临时允许并展开的工具规则 |
+| `recommended-tools` | 否 | 工具使用建议，不授权工具，也不展开工具 Schema |
 | `context` | 否 | `inline` 或 `fork`，默认 `inline` |
 | `agent` | 否 | fork Skill 使用的 subagent 类型，只允许配合 `context: fork` |
 | `model` | 否 | fork Skill 使用的模型，只允许配合 `context: fork` |
@@ -112,11 +112,11 @@ The Skill directory is `${SKILL_DIR}`.
 2. PromptComposer 只生成 `<available_skills>`，此时 request 中没有 Skill 正文。
 3. LLM 返回 `skill_tool` 调用。
 4. SkillManager 校验名称、可见性和模型调用权限，然后延迟读取 `SKILL.md` 正文。
-5. SkillManager 替换参数，激活 `allowed-tools`，并把完整正文排入 `INVOCATION` MetaMessage 队列。
+5. SkillManager 替换参数，返回工具建议，并把完整正文排入 `INVOCATION` MetaMessage 队列。
 6. Executor 先把 Assistant tool call 和 `skill_tool` ToolResult 写入 history。
 7. 构建下一次 LLM request 时，MetaMessageManager 执行 `flush()`，把 Skill 正文作为 user-role 消息追加在 ToolResult 后面。
-8. 后续 LLM 调用可以使用正文和临时展开的工具。
-9. Agent 完成、失败或中断时发布终态事件，框架删除 Skill 正文、清理临时权限和 invocation 去重状态。
+8. 后续 LLM 调用可以使用正文；每次工具调用仍须经过正常授权。
+9. Agent 完成、失败或中断时发布终态事件，框架删除 Skill 正文并清理 invocation 去重状态，不改变权限策略。
 
 模型看到的关键顺序始终是：
 
@@ -168,26 +168,20 @@ activated = agent.skill_manager.activate_for_paths(["src/domain/model.py"])
 
 更推荐自定义文件工具带上 `filesystem` 或 `notebook` tag，并通过标准 RuntimeEvent 执行链路自动触发。
 
-## 7. `allowed-tools`
+## 7. `recommended-tools`
 
 示例：
 
 ```yaml
-allowed-tools: FileRead, Grep, Bash(git status:*), FileEdit(path:src/)
+recommended-tools: FileRead, Grep, Bash(git status:*)
 ```
 
-激活 inline Skill 时，SkillManager 会：
+SkillManager 返回已安装工具的建议条目；不可用的条目进入 `unavailableRecommendedTools`。
+括号内的文本只是建议，不被解释成授权规则。Skill 不注册工具、不展开 Deferred Schema，
+不调用权限引擎的规则管理接口。旧 `allowed-tools` 不具有任何授权效果，应迁移为 `recommended-tools`。
 
-- 验证工具确实存在，不存在的条目进入 `unavailableTools`
-- 为存在的工具建立来源为 `skill:<name>` 的临时 ALLOW 规则
-- 在 deferred schema 模式中展开对应工具
-- 在 Agent invoke 终态事件中清理临时规则
-
-支持的限定规则是 Bash 命令前缀、`path:` 路径前缀、`domain:` 主机范围，以及文件工具的路径前缀。无法解释的限定规则在索引阶段直接报错，不会静默退化成整工具放行。
-
-系统、项目、会话和用户显式规则优先于 Skill 临时规则，因此已有 DENY 不会被 Skill 绕过。
-
-fork Skill 会在创建子 Agent 前短暂激活规则，使子 Agent 的 PermissionContext 继承这些规则；fork 返回后父 Agent 立即清理该来源。
+inline 和 fork Skill 均不能绕过 ASK 或 DENY；fork 委派调用仍通过 Agent 的正常工具授权入口。
+激活、结束、失败、中断、恢复和关闭 Skill 都不修改既有权限规则。
 
 ## 8. Inline 与 Fork
 
@@ -213,8 +207,8 @@ fork Skill 必须先通过 `agent.with_multi_agent()` 提供 `Agent` 工具。Sk
   "agentId": "agent_...",
   "outputFile": "/workspace/.easyagent-agents/agent_....md",
   "result": "...",
-  "allowedTools": ["FileRead", "Grep"],
-  "unavailableTools": []
+  "recommendedTools": ["FileRead", "Grep"],
+  "unavailableRecommendedTools": []
 }
 ```
 
@@ -229,8 +223,8 @@ inline 成功结果会明确告诉模型正文将在下一次 request 出现，�
 - `alreadyActive`
 - `instructionSource`
 - `skillDirectory`
-- `allowedTools`
-- `unavailableTools`
+- `recommendedTools`
+- `unavailableRecommendedTools`
 
 同一 invoke 内相同 Skill 与相同 `args` 会返回 `alreadyActive=true`，不会重复注入正文。错误类型包括：
 
@@ -261,6 +255,6 @@ agent.with_skill(manager=manager)
 
 SessionSnapshotV3 保存 Skill 根目录、全部 manifest 快照和已经激活的条件 Skill 名称。恢复时重新读取当前磁盘目录，以磁盘内容为事实源，并通过 `SessionRestoreReport` 报告缺失目录或 Skill。
 
-不会持久化的内容包括当前 invoke 的正文、临时权限、请求级消息和 invoke 去重键。`agent.close()` 会取消事件订阅并清理残留 Skill 权限来源。
+不会持久化的内容包括当前 invoke 的正文、请求级消息和 invoke 去重键。`agent.close()` 会取消事件订阅并清理 Skill 本地状态；Skill 不创建或清理权限来源。
 
 完整真实 LLM 示例见 `example/example_skill_runtime.py`，对应 Skill 见 `example/skills/repository-review/SKILL.md`。示例使用本地 OpenAI-compatible 服务，需由使用者自行启动服务后手动执行。

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Optional
 
-from core.permissions import PermissionBehavior, PermissionRule, RiskCategory
 
 
 MCPPolicyEffect = Literal["allow", "deny"]
@@ -166,25 +165,20 @@ class MCPPolicyContext:
             )
         return MCPPolicyDecision(allowed=True, reason="MCP policy 默认允许访问。")
 
-    def to_permission_rules(self) -> list[PermissionRule]:
-        converted: list[PermissionRule] = []
+    def to_permission_rules(self) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
         for rule in self.rules:
-            behavior = (
-                PermissionBehavior.ALLOW
-                if rule.effect == "allow"
-                else PermissionBehavior.DENY
-            )
             converted.append(
-                PermissionRule(
-                    tool_name="*",
-                    behavior=behavior,
-                    matcher={
-                        "risk_categories": [RiskCategory.MCP.value],
+                {
+                    "tool_name": "*",
+                    "behavior": "allow" if rule.effect == "allow" else "deny",
+                    "matcher": {
+                        "risk_categories": ["mcp"],
                         "mcp_servers": list(rule.server_names),
                     },
-                    source="mcp_policy",
-                    description=rule.reason or None,
-                )
+                    "source": "mcp_policy",
+                    "description": rule.reason or "",
+                }
             )
         return converted
 

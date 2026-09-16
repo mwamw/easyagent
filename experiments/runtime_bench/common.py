@@ -23,11 +23,8 @@ from easyagent import BasicAgent, Config, EasyLLM
 from easyagent.observability import InMemoryObservabilityStore
 from easyagent.permissions import (
     PermissionBehavior,
-    PermissionContext,
-    PermissionEngine,
-    PermissionMode,
-    PermissionRule,
-    RiskCategory,
+    RuleBasedPermissionEngine,
+    ApprovalMode,
 )
 from easyagent.tools import Tool, ToolRegistry, ToolResult
 from core.Exception import ToolConfirmationRequired, ToolInterruption
@@ -142,7 +139,7 @@ class MockFileReadTool(Tool):
             parameters=TextParams,
             read_only=True,
             source="benchmark",
-            risk_categories=[RiskCategory.FILESYSTEM_READ.value],
+            risk_categories=["filesystem_read"],
             side_effect_level="none",
             expose_in_deferred=True,
         )
@@ -159,7 +156,7 @@ class MockFileWriteTool(Tool):
             parameters=TextParams,
             read_only=False,
             source="benchmark",
-            risk_categories=[RiskCategory.FILESYSTEM_WRITE.value],
+            risk_categories=["filesystem_write"],
             side_effect_level="medium",
             expose_in_deferred=False,
         )
@@ -181,9 +178,7 @@ class MockBashTool(Tool):
             requires_confirmation=True,
             source="benchmark",
             risk_categories=[
-                RiskCategory.SHELL.value,
-                RiskCategory.PROCESS.value,
-                RiskCategory.SIDE_EFFECT.value,
+                "shell", "process", "side_effect",
             ],
             side_effect_level="high",
             expose_in_deferred=False,
@@ -204,7 +199,7 @@ class MockWebTool(Tool):
             parameters=UrlParams,
             read_only=True,
             source="benchmark",
-            risk_categories=[RiskCategory.NETWORK.value],
+            risk_categories=["network"],
             side_effect_level="low",
             expose_in_deferred=True,
         )
@@ -221,7 +216,7 @@ class MockMCPTool(Tool):
             parameters=MCPParams,
             read_only=False,
             source="benchmark",
-            risk_categories=[RiskCategory.MCP.value, RiskCategory.SIDE_EFFECT.value],
+            risk_categories=["mcp", "side_effect"],
             side_effect_level="medium",
             metadata={"mcp_server": "mock_server"},
             expose_in_deferred=False,
@@ -268,62 +263,26 @@ def build_mock_registry(*, generated_tools: int = 0, deferred_expose_every: int 
     return registry
 
 
-def build_permission_context(mode: PermissionMode | str = PermissionMode.DEFAULT) -> PermissionContext:
-    context = PermissionContext(mode=PermissionMode(mode))
-    context.set_source_rules(
-        "benchmark",
-        [
-            PermissionRule(
-                tool_name="MockFileRead",
-                behavior=PermissionBehavior.DENY,
-                matcher={"path_prefixes": ["/", "../", "~/.ssh", ".env"]},
-                description="Deny reads outside the allowed workspace or sensitive files.",
-            ),
-            PermissionRule(
-                tool_name="MockFileWrite",
-                behavior=PermissionBehavior.DENY,
-                matcher={"path_prefixes": ["/", "../", ".env"]},
-                description="Deny writes outside the allowed workspace or sensitive files.",
-            ),
-            PermissionRule(
-                tool_name="MockFileWrite",
-                behavior=PermissionBehavior.ASK,
-                matcher={"risk_categories": [RiskCategory.FILESYSTEM_WRITE.value]},
-                description="File writes require confirmation.",
-            ),
-            PermissionRule(
-                tool_name="MockBash",
-                behavior=PermissionBehavior.DENY,
-                matcher={"command_prefixes": ["rm ", "rm -", "sudo ", "chmod ", "curl "]},
-                description="Deny destructive or exfiltration-like shell commands.",
-            ),
-            PermissionRule(
-                tool_name="MockBash",
-                behavior=PermissionBehavior.ASK,
-                matcher={"risk_categories": [RiskCategory.SHELL.value]},
-                description="Shell commands require confirmation.",
-            ),
-            PermissionRule(
-                tool_name="MockWebFetch",
-                behavior=PermissionBehavior.DENY,
-                matcher={"hosts": ["evil.example", "pastebin.com"]},
-                description="Deny risky hosts.",
-            ),
-            PermissionRule(
-                tool_name="MockMCPTool",
-                behavior=PermissionBehavior.ASK,
-                matcher={"mcp_servers": ["mock_server"]},
-                description="MCP side effects require confirmation.",
-            ),
-        ],
-    )
-    return context
+def build_permission_engine(mode: ApprovalMode | str = ApprovalMode.ASK_FOR_APPROVAL) -> RuleBasedPermissionEngine:
+    engine = RuleBasedPermissionEngine(approval_mode=ApprovalMode(mode), load_policies=False)
+    rules = [
+        ("MockFileRead", "deny", {"path_prefixes": ["/", "../", "~/.ssh", ".env"]}, "Deny sensitive reads."),
+        ("MockFileWrite", "deny", {"path_prefixes": ["/", "../", ".env"]}, "Deny unsafe writes."),
+        ("MockFileWrite", "ask", {"risk_categories": ["filesystem_write"]}, "File writes require confirmation."),
+        ("MockBash", "deny", {"command_prefixes": ["rm ", "rm -", "sudo ", "chmod ", "curl "]}, "Deny unsafe shell commands."),
+        ("MockBash", "ask", {"risk_categories": ["shell"]}, "Shell commands require confirmation."),
+        ("MockWebFetch", "deny", {"hosts": ["evil.example", "pastebin.com"]}, "Deny risky hosts."),
+        ("MockMCPTool", "ask", {"mcp_servers": ["mock_server"]}, "MCP side effects require confirmation."),
+    ]
+    for tool_name, behavior, matcher, description in rules:
+        engine.add_rule(tool_name=tool_name, behavior=behavior, matcher=matcher, source="benchmark", description=description)
+    return engine
 
 
 def make_easyagent(
     *,
     registry: Optional[ToolRegistry] = None,
-    permission_context: Optional[PermissionContext] = None,
+    permission_engine: Optional[RuleBasedPermissionEngine] = None,
     config: Optional[Config] = None,
     system_prompt: Optional[str] = None,
 ) -> BasicAgent:
@@ -336,8 +295,7 @@ def make_easyagent(
         config=config or Config(tool_schema_mode=os.getenv("EA_TOOL_SCHEMA_MODE", "full")),
     )
     return agent.with_tool(registry).with_permissions(
-        PermissionEngine(),
-        permission_context or build_permission_context(),
+        engine=permission_engine or build_permission_engine(),
     )
 
 
@@ -425,7 +383,7 @@ def run_agent_task(
     task: str,
     *,
     registry: Optional[ToolRegistry] = None,
-    permission_context: Optional[PermissionContext] = None,
+    permission_engine: Optional[RuleBasedPermissionEngine] = None,
     config: Optional[Config] = None,
     system_prompt: Optional[str] = None,
     max_iter: int = 8,
@@ -435,7 +393,7 @@ def run_agent_task(
 ) -> dict[str, Any]:
     agent = make_easyagent(
         registry=registry,
-        permission_context=permission_context,
+        permission_engine=permission_engine,
         config=config,
         system_prompt=system_prompt,
     )

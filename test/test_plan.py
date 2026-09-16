@@ -11,7 +11,7 @@ from agent.BasicAgent import BasicAgent
 from core.Exception import ExecutionModeError
 from core.history import coerce_canonical_message
 from core.llm import EasyLLM
-from core.permissions import PermissionMode
+from core.permissions import ApprovalMode
 from plan import ExecutionMode, PlanModeConfig, PlanModeManager
 
 
@@ -60,7 +60,7 @@ def test_with_plan_installs_bound_module_and_tools_without_entering():
 
     assert isinstance(agent.plan, PlanModeManager)
     assert agent.get_execution_mode() == ExecutionMode.EXECUTE
-    assert agent.permission_context.mode == PermissionMode.DEFAULT
+    assert agent.permission_engine.approval_mode == ApprovalMode.ASK_FOR_APPROVAL
     assert agent.tool_registry is not None
     assert agent.tool_registry.get_tool("EnterPlanMode").plan_manager is agent.plan
     assert agent.tool_registry.get_tool("ExitPlanMode").plan_manager is agent.plan
@@ -78,13 +78,13 @@ def test_plan_enter_and_exit_use_configured_permanent_metamessages():
 
     agent.plan.enter()
     assert agent.plan.is_active
-    assert agent.permission_context.mode == PermissionMode.PLAN
+    assert agent.permission_engine.approval_mode == ApprovalMode.ASK_FOR_APPROVAL
     assert agent.execution_context.execution_mode == "plan"
     agent.metamessage_manager.flush()
 
-    agent.plan.exit(permission_mode=PermissionMode.ACCEPT_EDITS)
+    agent.plan.exit()
     assert not agent.plan.is_active
-    assert agent.permission_context.mode == PermissionMode.ACCEPT_EDITS
+    assert agent.permission_engine.approval_mode == ApprovalMode.ASK_FOR_APPROVAL
     assert agent.execution_context.execution_mode == "execute"
     agent.metamessage_manager.flush()
 

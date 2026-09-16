@@ -1,23 +1,33 @@
 """Stable public permission exports."""
 
 from core.permissions import (
+    ApprovalMode,
+    AuthorizationContext,
+    BasePermissionEngine,
     PermissionBehavior,
-    PermissionContext,
     PermissionDecision,
     PermissionEngine,
-    PermissionMode,
-    PermissionRule,
-    PermissionStore,
-    RiskCategory,
+    PermissionGrant,
+    PermissionRequest,
+    RuleBasedPermissionEngine,
+    PolicyRule,
+    PolicySet,
+    PermissionGrantLedger,
+    ToolPermissionDescriptor,
 )
 
 __all__ = [
     "PermissionBehavior",
-    "PermissionContext",
+    "ApprovalMode",
+    "AuthorizationContext",
+    "BasePermissionEngine",
     "PermissionDecision",
     "PermissionEngine",
-    "PermissionMode",
-    "PermissionRule",
-    "PermissionStore",
-    "RiskCategory",
+    "RuleBasedPermissionEngine",
+    "PolicyRule",
+    "PolicySet",
+    "PermissionGrantLedger",
+    "PermissionGrant",
+    "PermissionRequest",
+    "ToolPermissionDescriptor",
 ]

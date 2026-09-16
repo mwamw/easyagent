@@ -181,7 +181,7 @@ def load_skill_manifest(file_path: str | os.PathLike[str]) -> SkillManifest:
         "name",
         "description",
         "when_to_use",
-        "allowed-tools",
+        "recommended-tools",
         "argument-hint",
         "context",
         "agent",
@@ -195,8 +195,8 @@ def load_skill_manifest(file_path: str | os.PathLike[str]) -> SkillManifest:
         when_to_use=payload.get("when_to_use", ""),
         directory=str(path.parent),
         file_path=str(path),
-        allowed_tools=_string_list(
-            payload.get("allowed-tools"),
+        recommended_tools=_string_list(
+            payload.get("recommended-tools"),
             tool_entries=True,
         ),
         argument_hint=str(payload.get("argument-hint", "") or "").strip(),

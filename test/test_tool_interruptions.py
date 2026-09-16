@@ -148,11 +148,16 @@ class ToolInterruptionTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(interrupt["status"], "needs_confirmation")
         self.assertEqual(self.agent.get_history_length(), 2)
 
-    def test_execute_confirmed_tool_result_bypasses_confirmation_short_circuit(self):
-        result = self.registry.execute_confirmed_tool_result("dangerous", {})
+    def test_grant_executes_only_the_pending_request(self):
+        with self.assertRaises(ToolConfirmationRequired):
+            self.agent.invoke("execute")
+        grant = self.agent.grant_pending_permission()
+        result = self.agent.execute_approved_tool(grant)
         self.assertEqual(result.status, "success")
         self.assertEqual(result.to_display_string(), "should not run")
         self.assertEqual(self.tool.run_count, 1)
+        with self.assertRaisesRegex(ValueError, "consumed"):
+            self.agent.execute_approved_tool(grant)
 
     async def test_astream_emits_structured_error_before_raising_interruption(self):
         events = []

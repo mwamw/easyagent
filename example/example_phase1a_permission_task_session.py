@@ -12,7 +12,6 @@ from pathlib import Path
 from agent import BasicAgent
 from core.Config import Config
 from core.llm import EasyLLM
-from core.permissions import PermissionBehavior, PermissionRule
 from task import SQLiteTaskStore, TaskService
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import (
@@ -123,40 +122,16 @@ def build_agent() -> BasicAgent:
         ),
     ).with_tool(registry).with_task_service(task_service)
 
-    agent.set_permission_rules(
-        "workspace_allow",
-        [
-            PermissionRule(
-                tool_name="FileWrite",
-                behavior=PermissionBehavior.ALLOW,
-                matcher={"path_prefixes": [str(WORKSPACE)]},
-                description="工作区内的文件写入允许直接执行。",
-            ),
-            PermissionRule(
-                tool_name="FileEdit",
-                behavior=PermissionBehavior.ALLOW,
-                matcher={"path_prefixes": [str(WORKSPACE)]},
-                description="工作区内的文件编辑允许直接执行。",
-            ),
-        ],
-        priority=10,
-    )
-    agent.set_permission_rules(
-        "session_guard",
-        [
-            PermissionRule(
-                tool_name="FileWrite",
-                behavior=PermissionBehavior.ASK,
-                description="默认文件写入需要确认。",
-            ),
-            PermissionRule(
-                tool_name="FileEdit",
-                behavior=PermissionBehavior.ASK,
-                description="默认文件编辑需要确认。",
-            ),
-        ],
-        priority=50,
-    )
+    for tool_name in ("FileWrite", "FileEdit"):
+        agent.permission_engine.add_rule(
+            tool_name=tool_name, behavior="allow",
+            matcher={"path_prefixes": [str(WORKSPACE)]}, source="workspace",
+            description="工作区内的文件修改允许直接执行。",
+        )
+        agent.permission_engine.add_rule(
+            tool_name=tool_name, behavior="ask", source="session",
+            description="默认文件修改需要确认。",
+        )
     return agent
 
 

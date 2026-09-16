@@ -62,7 +62,7 @@ class BasicAgent(BaseAgent):
             event_bus=self.event_bus,
             metamessage_manager=self.metamessage_manager,
             permission_engine=self.permission_engine,
-            permission_context=self.permission_context,
+            authorization_context_factory=self.build_authorization_context,
             hook_manager=self.hook_manager,
             tool_registry=self.tool_registry,
             context_manager=self.context_manager,

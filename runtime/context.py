@@ -53,14 +53,14 @@ class ExecutionContext:
             or (getattr(config, "get_allowed_roots", lambda: [])() if config is not None else None),
             resolved_workspace,
         )
-        permission_context = getattr(agent, "permission_context", None)
+        permission_engine = getattr(agent, "permission_engine", None)
         get_execution_mode = getattr(agent, "get_execution_mode", None)
         current_mode = get_execution_mode() if callable(get_execution_mode) else None
         mode_value = execution_mode or getattr(current_mode, "value", current_mode) or "execute"
         permission_value = (
             permission_mode
-            or getattr(getattr(permission_context, "mode", None), "value", None)
-            or "default"
+            or getattr(getattr(permission_engine, "approval_mode", None), "value", None)
+            or "ask_for_approval"
         )
         task_id = current_task_id if current_task_id is not None else getattr(agent, "current_task_id", None)
         merged_metadata = dict(getattr(getattr(agent, "execution_context", None), "metadata", {}) or {})

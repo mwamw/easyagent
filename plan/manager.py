@@ -1,4 +1,4 @@
-"""Standalone plan-mode module built on permission and meta-message modules."""
+"""Plan execution state and model reminders; authorization belongs to the engine."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from core.Exception import ExecutionModeError
-from core.permissions import PermissionContext, PermissionMode
 from metamessage import BaseMetaMessageManager, MetaMessage, MetaMessageLifecycle
 from Tool.ToolRegistry import ToolRegistry
 
@@ -23,7 +22,6 @@ class BasePlanMode(ABC):
     def bind(
         self,
         *,
-        permission_context: PermissionContext,
         metamessage_manager: BaseMetaMessageManager,
         tool_registry: ToolRegistry | None,
         runtime_refresher: Callable[[], None],
@@ -35,7 +33,7 @@ class BasePlanMode(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def exit(self, *, permission_mode: PermissionMode | str = PermissionMode.DEFAULT) -> None:
+    def exit(self) -> None:
         raise NotImplementedError
 
 
@@ -45,7 +43,6 @@ class PlanModeManager(BasePlanMode):
     def __init__(self, config: PlanModeConfig | None = None):
         self.config = config or PlanModeConfig()
         self._controller = ModeController()
-        self._permission_context: PermissionContext | None = None
         self._metamessage_manager: BaseMetaMessageManager | None = None
         self._tool_registry: ToolRegistry | None = None
         self._runtime_refresher: Callable[[], None] = lambda: None
@@ -65,27 +62,23 @@ class PlanModeManager(BasePlanMode):
     def bind(
         self,
         *,
-        permission_context: PermissionContext,
         metamessage_manager: BaseMetaMessageManager,
         tool_registry: ToolRegistry | None,
         runtime_refresher: Callable[[], None],
     ) -> "PlanModeManager":
-        if not isinstance(permission_context, PermissionContext):
-            raise TypeError("permission_context must be PermissionContext")
         if not isinstance(metamessage_manager, BaseMetaMessageManager):
             raise TypeError("metamessage_manager must be BaseMetaMessageManager")
         if tool_registry is not None and not isinstance(tool_registry, ToolRegistry):
             raise TypeError("tool_registry must be ToolRegistry or None")
-        self._permission_context = permission_context
         self._metamessage_manager = metamessage_manager
         self._tool_registry = tool_registry
         self._runtime_refresher = runtime_refresher
         return self
 
-    def _require_bound(self) -> tuple[PermissionContext, BaseMetaMessageManager]:
-        if self._permission_context is None or self._metamessage_manager is None:
+    def _require_bound(self) -> BaseMetaMessageManager:
+        if self._metamessage_manager is None:
             raise ExecutionModeError("PlanModeManager 尚未绑定运行时依赖。")
-        return self._permission_context, self._metamessage_manager
+        return self._metamessage_manager
 
     def install_tools(self) -> None:
         if not self.config.register_tools:
@@ -117,7 +110,7 @@ class PlanModeManager(BasePlanMode):
             raise ExecutionModeError("ToolRegistry 中的 ExitPlanMode 名称已被占用。")
 
     def enter(self, *, allowed_actions: list[str] | None = None) -> None:
-        permission_context, metamessages = self._require_bound()
+        metamessages = self._require_bound()
         if self.is_active:
             if allowed_actions is not None:
                 self.state.allowed_actions = list(allowed_actions)
@@ -125,7 +118,6 @@ class PlanModeManager(BasePlanMode):
             return
         actions = list(allowed_actions) if allowed_actions is not None else list(self.config.allowed_actions)
         self._controller.enter(allowed_actions=actions)
-        permission_context.set_mode(PermissionMode.PLAN)
         metamessages.emit(
             MetaMessage(
                 name="plan_mode_enter",
@@ -141,10 +133,9 @@ class PlanModeManager(BasePlanMode):
             raise ExecutionModeError("当前 Agent 不在 plan 模式。")
         self._controller.request_exit(allowed_actions=allowed_actions)
 
-    def exit(self, *, permission_mode: PermissionMode | str = PermissionMode.DEFAULT) -> None:
-        permission_context, metamessages = self._require_bound()
+    def exit(self) -> None:
+        metamessages = self._require_bound()
         self._controller.exit()
-        permission_context.set_mode(permission_mode)
         metamessages.emit(
             MetaMessage(
                 name="plan_mode_exit",

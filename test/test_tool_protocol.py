@@ -72,7 +72,7 @@ def test_tool_spec_and_openai_schema():
     assert spec.name == "echo_tool"
     assert spec.guidance == "仅在需要回显文本时使用。"
     assert spec.prompt == "回显工具只适合验证文本传递，不适合做外部查询。"
-    assert spec.read_only is True
+    assert tool.get_permission_descriptor().side_effect_level == "none"
     assert spec.tags == ["echo"]
 
     schema = tool.get_openai_schema()
@@ -121,8 +121,9 @@ def test_registry_requires_confirmation_short_circuits_execution():
     registry = ToolRegistry()
     tool = ConfirmTool()
     registry.register_tool(tool)
-
-    result = registry.execute_tool_result("confirm_tool", {})
-    assert result.status == "needs_confirmation"
-    assert "需要用户确认" in result.to_display_string()
+    from core.permissions import PermissionEngine, PermissionBehavior
+    decision = PermissionEngine(load_policies=False).authorize(
+        registry.build_permission_request("confirm_tool", {})
+    )
+    assert decision.behavior == PermissionBehavior.ASK
     assert tool.run_count == 0

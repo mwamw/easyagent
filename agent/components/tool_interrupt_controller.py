@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional
+from uuid import uuid4
+from copy import deepcopy
 
 from Tool.BaseTool import ToolResult
 from core.Exception import ToolConfirmationRequired, ToolInterruption
@@ -71,12 +73,14 @@ class InMemoryToolInterruptController(BaseToolInterruptController):
     def restore_state(self, state: Optional[dict[str, Any]]) -> None:
         state = state or {}
         payload = state.get("last_tool_interrupt")
-        self._last_interrupt = dict(payload) if isinstance(payload, dict) else None
+        self._last_interrupt = deepcopy(payload) if isinstance(payload, dict) else None
+        if self._last_interrupt is not None:
+            self._last_interrupt.setdefault("request_id", uuid4().hex)
 
     def get_last_interrupt(self) -> Optional[dict[str, Any]]:
         if self._last_interrupt is None:
             return None
-        return dict(self._last_interrupt)
+        return deepcopy(self._last_interrupt)
 
     def clear_last_interrupt(self) -> None:
         self._last_interrupt = None
@@ -91,6 +95,7 @@ class InMemoryToolInterruptController(BaseToolInterruptController):
         tool_result: ToolResult,
     ) -> dict[str, Any]:
         return {
+            "request_id": uuid4().hex,
             "message": tool_result.to_display_string(),
             "tool_name": tool_name,
             "tool_args": dict(tool_args),

@@ -16,7 +16,7 @@ from common import (
     now_ms,
 )
 from easyagent import BasicAgent, Config
-from easyagent.permissions import PermissionContext, PermissionMode
+from easyagent.permissions import RuleBasedPermissionEngine, ApprovalMode
 from easyagent.tools import ToolRegistry, register_file_edit_tool, register_filesystem_tools, register_shell_tools
 
 
@@ -83,7 +83,11 @@ def build_agent(workspace: Path, *, tool_schema_mode: str, permission_mode: str)
         system_prompt="You are a local code agent. Make minimal edits and run targeted tests.",
     )
     return agent.with_tool(registry).with_permissions(
-        context=PermissionContext(mode=PermissionMode(permission_mode))
+        engine=RuleBasedPermissionEngine(
+            approval_mode={"default": ApprovalMode.ASK_FOR_APPROVAL, "accept_edits": ApprovalMode.AUTO_APPROVE_SAFE,
+                           "dont_ask": ApprovalMode.FULL_ACCESS, "bypass": ApprovalMode.FULL_ACCESS}[permission_mode],
+            load_policies=False,
+        )
     )
 
 

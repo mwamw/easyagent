@@ -37,21 +37,22 @@ class ToolSchemaTool(Tool):
         expanded_specs = self._registry.expand_deferred_tools(tool_names)
         return {
             "expandedToolNames": [spec.name for spec in expanded_specs],
-            "toolDescriptors": [
-                {
-                    "name": spec.name,
-                    "description": spec.description,
-                    "tags": list(spec.tags),
-                    "read_only": spec.read_only,
-                    "requires_confirmation": spec.requires_confirmation,
-                    "visibility_scope": spec.visibility_scope,
-                }
-                for spec in expanded_specs
-            ],
+            "toolDescriptors": [self._descriptor(spec) for spec in expanded_specs],
             "message": (
                 "Tool schemas have been loaded for the current invocation. You may call these tools "
                 "in subsequent model responses in this invocation; load them again in a new invocation if needed."
             ),
+        }
+
+    def _descriptor(self, spec):
+        tool = self._registry.get_tool(spec.name)
+        permission = tool.get_permission_descriptor() if tool else None
+        return {
+            "name": spec.name,
+            "description": spec.description,
+            "tags": list(spec.tags),
+            "requires_confirmation": bool(permission and permission.requires_confirmation),
+            "visibility_scope": spec.visibility_scope,
         }
 
 

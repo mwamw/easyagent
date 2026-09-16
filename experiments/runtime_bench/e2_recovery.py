@@ -8,7 +8,7 @@ from common import (
     CaseResult,
     append_jsonl,
     build_mock_registry,
-    build_permission_context,
+    build_permission_engine,
     create_llm,
     default_arg_parser,
     ensure_results_dir,
@@ -21,7 +21,7 @@ from common import (
 )
 from core.Exception import ToolConfirmationRequired, ToolInterruption
 from easyagent import BasicAgent, Config
-from easyagent.permissions import PermissionContext, PermissionMode
+from easyagent.permissions import RuleBasedPermissionEngine, ApprovalMode
 
 
 def build_cases() -> list[BenchCase]:
@@ -52,11 +52,11 @@ def build_cases() -> list[BenchCase]:
     return cases
 
 
-def _run_until_interrupt(case: BenchCase, *, permission_context: PermissionContext):
+def _run_until_interrupt(case: BenchCase, *, permission_engine: RuleBasedPermissionEngine):
     registry = build_mock_registry()
     agent = make_easyagent(
         registry=registry,
-        permission_context=permission_context,
+        permission_engine=permission_engine,
         config=Config(tool_schema_mode="deferred", interrupt_on_confirmation=True),
         system_prompt="You are running a recovery benchmark. Use the requested benchmark tool exactly.",
     )
@@ -74,10 +74,10 @@ def _run_until_interrupt(case: BenchCase, *, permission_context: PermissionConte
 
 def run_case(case: BenchCase, *, use_snapshot: bool) -> CaseResult:
     start = now_ms()
-    context = build_permission_context()
+    context = build_permission_engine()
     agent, registry, initial_output, interruption, initial_error = _run_until_interrupt(
         case,
-        permission_context=context,
+        permission_engine=context,
     )
     initial_trace = trace_summary(agent)
 
@@ -101,7 +101,7 @@ def run_case(case: BenchCase, *, use_snapshot: bool) -> CaseResult:
                     llm=create_llm(),
                     store=store_path,
                     tool_registry=registry,
-                    permission_context=context,
+                    permission_engine=context,
                 )
                 pending_restored = restored.has_pending_tool_interrupt()
                 restored.resolve_last_tool_interrupt(
@@ -117,10 +117,10 @@ def run_case(case: BenchCase, *, use_snapshot: bool) -> CaseResult:
                 resumed_trace = trace_summary(restored)
                 observed = "resumed"
         else:
-            bypass_context = PermissionContext(mode=PermissionMode.BYPASS)
+            bypass_context = RuleBasedPermissionEngine(approval_mode=ApprovalMode.FULL_ACCESS, load_policies=False)
             restarted_agent = make_easyagent(
                 registry=build_mock_registry(),
-                permission_context=bypass_context,
+                permission_engine=bypass_context,
                 config=Config(tool_schema_mode="deferred", interrupt_on_confirmation=True),
                 system_prompt="You are running a restart baseline. Use the requested benchmark tool exactly.",
             )

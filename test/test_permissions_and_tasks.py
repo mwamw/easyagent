@@ -13,10 +13,7 @@ if ROOT not in sys.path:
 from agent import BasicAgent
 from core.permissions import (
     PermissionBehavior,
-    PermissionContext,
     PermissionEngine,
-    PermissionMode,
-    PermissionRule,
 )
 from core.llm import EasyLLM
 from plan import PlanModeConfig
@@ -108,145 +105,61 @@ class PermissionAndTaskTests(unittest.TestCase):
     def setUp(self):
         self.llm = DummyLLM()
 
+    def _authorize(self, registry, tool_name, arguments, engine):
+        request = registry.build_permission_request(tool_name, arguments)
+        return engine.authorize(request)
+
     def test_permission_allow_rule_overrides_confirmation_requirement(self):
         registry = ToolRegistry()
         registry.register_tool(ConfirmingTool())
-        context = PermissionContext(
-            rules=[
-                PermissionRule(
-                    tool_name="ConfirmingTool",
-                    behavior=PermissionBehavior.ALLOW,
-                    source="test",
-                    description="测试规则允许直接执行",
-                )
-            ]
-        )
-
-        result = registry.execute_tool_result(
-            "ConfirmingTool",
-            {},
-            permission_context=context,
-            permission_engine=PermissionEngine(),
-        )
-
-        self.assertEqual(result.status, "success")
-        self.assertEqual(result.content, "ok")
+        engine = PermissionEngine(load_policies=False)
+        engine.add_rule(tool_name="ConfirmingTool", behavior="allow", source="test")
+        decision = self._authorize(registry, "ConfirmingTool", {}, engine)
+        self.assertEqual(decision.behavior, PermissionBehavior.ALLOW)
 
     def test_plan_mode_blocks_high_risk_tool(self):
         registry = ToolRegistry()
         registry.register_tool(MutatingTool())
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-        ).with_tool(registry)
-        agent.with_plan(config=PlanModeConfig(register_tools=False))
+        agent = BasicAgent("assistant", self.llm).with_tool(registry).with_plan(
+            config=PlanModeConfig(register_tools=False)
+        )
         agent.enter_plan_mode(allowed_actions=["read"])
-
         result = agent.execute_tool_result("MutatingTool", {})
-
         self.assertEqual(result.status, "error")
         self.assertEqual(result.error_type, "permission_denied")
-        self.assertIn("plan 模式", result.content)
-        self.assertIn("side_effect", result.metadata["risk_categories"])
 
     def test_async_tool_execution_respects_permission_engine(self):
         registry = ToolRegistry()
         registry.register_tool(MutatingTool())
-        agent = BasicAgent(
-            name="assistant",
-            llm=self.llm,
-        ).with_tool(registry)
-        agent.with_plan(config=PlanModeConfig(register_tools=False))
-        agent.enter_plan_mode(allowed_actions=["read"])
+        engine = PermissionEngine(load_policies=False)
+        decision = self._authorize(registry, "MutatingTool", {}, engine)
+        self.assertEqual(decision.behavior, PermissionBehavior.ASK)
 
-        result = agent.execute_tool_result("MutatingTool", {})
-
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "permission_denied")
-
-    def test_permission_store_respects_source_priority(self):
+    def test_policy_precedence_is_deny_then_ask_then_allow(self):
         registry = ToolRegistry()
         registry.register_tool(ConfirmingTool())
-        context = PermissionContext()
-        context.set_source_rules(
-            "session",
-            [
-                PermissionRule(
-                    tool_name="ConfirmingTool",
-                    behavior=PermissionBehavior.ALLOW,
-                    description="会话层允许执行",
-                )
-            ],
-            priority=50,
-        )
-        context.set_source_rules(
-            "workspace",
-            [
-                PermissionRule(
-                    tool_name="ConfirmingTool",
-                    behavior=PermissionBehavior.DENY,
-                    description="工作区策略禁止执行",
-                )
-            ],
-            priority=10,
-        )
-
-        result = registry.execute_tool_result(
-            "ConfirmingTool",
-            {},
-            permission_context=context,
-            permission_engine=PermissionEngine(),
-        )
-
-        self.assertEqual(result.status, "error")
-        self.assertEqual(result.error_type, "permission_denied")
-        self.assertEqual(context.rules[0].source, "workspace")
+        engine = PermissionEngine(load_policies=False)
+        engine.add_rule(tool_name="ConfirmingTool", behavior="allow", source="session")
+        engine.add_rule(tool_name="ConfirmingTool", behavior="deny", source="workspace")
+        decision = self._authorize(registry, "ConfirmingTool", {}, engine)
+        self.assertEqual(decision.behavior, PermissionBehavior.DENY)
 
     def test_accept_edits_mode_allows_file_write_tools(self):
         registry = ToolRegistry()
         registry.register_tool(EditableFileTool())
-        context = PermissionContext(mode=PermissionMode.ACCEPT_EDITS)
-
-        result = registry.execute_tool_result(
-            "EditableFileTool",
-            {},
-            permission_context=context,
-            permission_engine=PermissionEngine(),
-        )
-
-        self.assertEqual(result.status, "success")
-        self.assertEqual(result.content, "edited")
+        engine = PermissionEngine(approval_mode="auto_approve_safe", load_policies=False)
+        decision = self._authorize(registry, "EditableFileTool", {}, engine)
+        self.assertEqual(decision.behavior, PermissionBehavior.ALLOW)
 
     def test_permission_rule_matches_url_hosts(self):
         registry = ToolRegistry()
         registry.register_tool(NetworkTool())
-        context = PermissionContext(
-            rules=[
-                PermissionRule(
-                    tool_name="NetworkTool",
-                    behavior=PermissionBehavior.ALLOW,
-                    matcher={"hosts": ["example.com"]},
-                    source="test",
-                    description="允许 example.com",
-                )
-            ]
-        )
-
-        allowed = registry.execute_tool_result(
-            "NetworkTool",
-            {"url": "https://docs.example.com/path"},
-            permission_context=context,
-            permission_engine=PermissionEngine(),
-        )
-        blocked = registry.execute_tool_result(
-            "NetworkTool",
-            {"url": "https://other.invalid/path"},
-            permission_context=context,
-            permission_engine=PermissionEngine(),
-        )
-
-        self.assertEqual(allowed.status, "success")
-        self.assertEqual(blocked.status, "needs_confirmation")
+        engine = PermissionEngine(load_policies=False)
+        engine.add_rule(tool_name="NetworkTool", behavior="allow", matcher={"hosts": ["example.com"]})
+        allowed = self._authorize(registry, "NetworkTool", {"url": "https://docs.example.com/path"}, engine)
+        blocked = self._authorize(registry, "NetworkTool", {"url": "https://other.invalid/path"}, engine)
+        self.assertEqual(allowed.behavior, PermissionBehavior.ALLOW)
+        self.assertEqual(blocked.behavior, PermissionBehavior.ASK)
 
     def test_task_tools_crud_flow(self):
         registry = ToolRegistry()

@@ -7,7 +7,7 @@ from common import (
     CaseResult,
     append_jsonl,
     build_mock_registry,
-    build_permission_context,
+    build_permission_engine,
     default_arg_parser,
     ensure_results_dir,
     result_to_dict,
@@ -53,12 +53,12 @@ def build_cases() -> list[BenchCase]:
 
 def run_case(case: BenchCase) -> CaseResult:
     registry = build_mock_registry()
-    context = build_permission_context()
+    context = build_permission_engine()
     start = now_ms()
     outcome = run_agent_task(
         case.task,
         registry=registry,
-        permission_context=context,
+        permission_engine=context,
         max_iter=6,
         system_prompt=(
             "You are running a permission benchmark. Follow the requested benchmark tool call exactly. "

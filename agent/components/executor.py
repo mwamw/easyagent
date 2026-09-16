@@ -15,7 +15,9 @@ from core.Exception import AgentStopRequested, HookExecutionError, ToolInterrupt
 from core.history import CanonicalMessage
 from core.hooks import HookManager
 from core.llm import EasyLLM
-from core.permissions import PermissionContext, PermissionEngine
+from core.permissions import PermissionEngine
+from core.permissions.base import BasePermissionEngine
+from core.permissions.models import AuthorizationContext, PermissionBehavior
 from core.request_compiler import compile_prompt_blocks
 from core.request_input import ReplayRequestInput
 from context.manager import ContextManager
@@ -64,8 +66,8 @@ class AgentExecutionServices:
     execution_context: ExecutionContext
     event_bus: RuntimeEventBus
     metamessage_manager: BaseMetaMessageManager
-    permission_engine: PermissionEngine
-    permission_context: PermissionContext
+    permission_engine: BasePermissionEngine | PermissionEngine
+    authorization_context_factory: Callable[[], AuthorizationContext]
     hook_manager: HookManager
     tool_registry: ToolRegistry | None = None
     context_manager: ContextManager | None = None
@@ -357,6 +359,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 "tool_name": tool_name,
                 "tool_args": dict(arguments),
                 "tool_spec": tool_spec,
+                "tool_permission": services.tool_registry.get_permission_descriptor(tool_name) if services.tool_registry else None,
                 "tool_result": result,
             }
         )
@@ -414,13 +417,30 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         arguments = dict(hook.payload.get("tool_args", arguments))
         try:
             tool, validated = registry.validate_tool_call(tool_name, arguments)
-            authorization = registry.authorize_tool_call(
-                tool,
-                validated,
-                permission_context=services.permission_context,
-                permission_engine=services.permission_engine,
-            )
-            return tool_name, tool, validated, authorization
+            # The new framework contract is deliberately stable: the loop
+            # only passes a normalized PermissionRequest.  Policy files,
+            # approval modes and other implementation details stay inside
+            # the permission engine.
+            if isinstance(services.permission_engine, BasePermissionEngine):
+                request = registry.build_permission_request(
+                    tool_name,
+                    validated,
+                    context=services.authorization_context_factory(),
+                )
+                decision = services.permission_engine.authorize(request)
+                if decision.behavior == PermissionBehavior.DENY:
+                    return tool_name, tool, validated, ToolResult.error(
+                        decision.reason or f"Permission denied for tool '{tool_name}'.",
+                        error_type="permission_denied",
+                        metadata={"permission_behavior": decision.behavior.value, **dict(decision.metadata)},
+                    )
+                if decision.behavior == PermissionBehavior.ASK:
+                    return tool_name, tool, validated, ToolResult.needs_confirmation(
+                        decision.reason or f"Tool '{tool_name}' requires approval.",
+                        metadata={"permission_behavior": decision.behavior.value, **dict(decision.metadata)},
+                    )
+                return tool_name, tool, validated, None
+            return tool_name, tool, validated, None
         except Exception as exc:
             return tool_name, None, arguments, ToolResult.error(
                 str(exc),

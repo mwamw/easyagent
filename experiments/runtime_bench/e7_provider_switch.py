@@ -7,7 +7,7 @@ from common import (
     CaseResult,
     append_jsonl,
     build_mock_registry,
-    build_permission_context,
+    build_permission_engine,
     default_arg_parser,
     ensure_results_dir,
     load_env,
@@ -42,7 +42,7 @@ def run_provider(provider: str, *, invoke: bool) -> CaseResult:
             name=f"provider_{provider}",
             llm=llm,
             config=Config(tool_schema_mode="deferred"),
-        ).with_tool(registry).with_permissions(context=build_permission_context())
+        ).with_tool(registry).with_permissions(engine=build_permission_engine())
         tool_payload = agent.get_provider_tools()
         output = None
         if invoke:

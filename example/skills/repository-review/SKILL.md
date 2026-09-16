@@ -3,7 +3,7 @@ name: repository-review
 description: Inspect a repository change and produce an evidence-based code review.
 when_to_use: Use when the user asks to review code, a patch, or a repository implementation.
 argument-hint: A file path, module name, commit, or review objective.
-allowed-tools: FileRead, Glob, Grep, List
+recommended-tools: FileRead, Glob, Grep, List
 ---
 # Repository Review
 

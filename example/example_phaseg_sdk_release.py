@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from easyagent import BasicAgent, EasyLLM, PermissionBehavior, PermissionContext, PermissionRule, ToolRegistry
+from easyagent import BasicAgent, EasyLLM, RuleBasedPermissionEngine, ToolRegistry
 from easyagent.session import SQLiteSessionStore
 from easyagent.tools import register_task_tools
 from easyagent.tasks import InMemoryTaskStore, TaskService
@@ -28,20 +28,9 @@ def build_agent(workspace_root: str) -> BasicAgent:
     task_service = TaskService(InMemoryTaskStore())
     register_task_tools(registry, service=task_service)
 
-    permission_context = PermissionContext(
-        rules=[
-            PermissionRule(
-                tool_name="TaskCreate",
-                behavior=PermissionBehavior.ALLOW,
-                description="允许直接创建结构化任务。",
-            ),
-            PermissionRule(
-                tool_name="TaskUpdate",
-                behavior=PermissionBehavior.ALLOW,
-                description="允许直接更新结构化任务。",
-            ),
-        ]
-    )
+    permission_engine = RuleBasedPermissionEngine(load_policies=False)
+    permission_engine.add_rule(tool_name="TaskCreate", behavior="allow", description="允许直接创建结构化任务。")
+    permission_engine.add_rule(tool_name="TaskUpdate", behavior="allow", description="允许直接更新结构化任务。")
 
     return BasicAgent(
         name="phaseg-sdk-agent",
@@ -51,7 +40,7 @@ def build_agent(workspace_root: str) -> BasicAgent:
             "如果当前问题需要拆解工作，请优先用结构化 task tools。"
         ),
     ).with_tool(registry).with_task_service(task_service).with_permissions(
-        context=permission_context,
+        engine=permission_engine,
     )
 
 

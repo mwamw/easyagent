@@ -203,10 +203,9 @@ def make_baseline_functions(policy: str) -> dict[str, Callable[..., str]]:
             return None
         registry = build_mock_registry()
         tool, validated = registry.validate_tool_call(tool_name, kwargs)
-        from common import build_permission_context
-        from easyagent.permissions import PermissionEngine
-
-        decision = PermissionEngine().authorize(tool, validated, build_permission_context())
+        from common import build_permission_engine
+        engine = build_permission_engine()
+        decision = engine.authorize(registry.build_permission_request(tool_name, validated))
         if decision.behavior.value == "deny":
             return f"permission_denied:{decision.reason}"
         if decision.behavior.value == "ask":

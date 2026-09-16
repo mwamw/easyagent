@@ -98,6 +98,9 @@ class PromptInjectionGuardrail(BaseHook):
     def after_tool_use(self, payload: dict[str, Any]) -> HookDecision | None:
         tool_spec = payload.get("tool_spec")
         resource_scope = list(getattr(tool_spec, "resource_scope", []) or [])
+        if not resource_scope:
+            permission = payload.get("tool_permission")
+            resource_scope = list(getattr(permission, "resources", []) or [])
         if not any(scope in {"network", "external", "mcp"} for scope in resource_scope):
             return None
 

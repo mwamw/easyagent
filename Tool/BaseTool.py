@@ -21,18 +21,12 @@ class ToolSpec:
     description: str
     parameters_model: Type[BaseModel]
     guidance: str = ""
-    read_only: bool = False
-    destructive: bool = False
-    requires_confirmation: bool = False
     supports_parallel: bool = True
     output_mode: ToolOutputMode = "text"
     source: str = "custom"
     ephemeral: bool = False
     prompt: str = ""
     tags: list[str] = field(default_factory=list)
-    risk_categories: list[str] = field(default_factory=list)
-    side_effect_level: ToolSideEffectLevel = "none"
-    resource_scope: list[str] = field(default_factory=list)
     visibility_scope: ToolVisibilityScope = "resident"
     expose_in_deferred: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -115,18 +109,12 @@ class ToolSpec:
             "name": self.name,
             "description": self.description,
             "guidance": self.guidance,
-            "read_only": self.read_only,
-            "destructive": self.destructive,
-            "requires_confirmation": self.requires_confirmation,
             "supports_parallel": self.supports_parallel,
             "output_mode": self.output_mode,
             "source": self.source,
             "ephemeral": self.ephemeral,
             "has_prompt": bool(self.prompt.strip()),
             "tags": list(self.tags),
-            "risk_categories": list(self.risk_categories),
-            "side_effect_level": self.side_effect_level,
-            "resource_scope": list(self.resource_scope),
             "visibility_scope": self.visibility_scope,
             "expose_in_deferred": self.expose_in_deferred,
             "parameters": self.parameter_schema(),
@@ -143,9 +131,6 @@ class ToolSpec:
             "source": self.source,
             "ephemeral": self.ephemeral,
             "tags": list(self.tags),
-            "risk_categories": list(self.risk_categories),
-            "side_effect_level": self.side_effect_level,
-            "resource_scope": list(self.resource_scope),
             "visibility_scope": self.visibility_scope,
             "expose_in_deferred": self.expose_in_deferred,
             "metadata": dict(self.metadata),
@@ -266,20 +251,24 @@ class Tool(ABC):
             description=description,
             parameters_model=parameters,
             guidance=guidance,
-            read_only=read_only,
-            destructive=destructive,
-            requires_confirmation=requires_confirmation,
             supports_parallel=supports_parallel,
             output_mode=output_mode,
             source=source,
             ephemeral=ephemeral,
             prompt=prompt,
             tags=list(tags or []),
-            risk_categories=list(risk_categories or []),
-            side_effect_level=resolved_side_effect_level,
-            resource_scope=list(resource_scope or []),
             visibility_scope=visibility_scope,
             expose_in_deferred=expose_in_deferred,
+            metadata=dict(metadata or {}),
+        )
+        from core.permissions.models import ToolPermissionDescriptor
+        self._permission_descriptor = ToolPermissionDescriptor(
+            tool_name=name,
+            capabilities=tuple(resource_scope or ()),
+            resources=tuple(resource_scope or ()),
+            risk_categories=tuple(risk_categories or ()),
+            side_effect_level=resolved_side_effect_level,
+            requires_confirmation=requires_confirmation,
             metadata=dict(metadata or {}),
         )
         self.name = self.spec.name
@@ -307,22 +296,27 @@ class Tool(ABC):
             description=self.spec.description,
             parameters_model=self.spec.parameters_model,
             guidance=self.spec.guidance,
-            read_only=self.spec.read_only,
-            destructive=self.spec.destructive,
-            requires_confirmation=self.spec.requires_confirmation,
             supports_parallel=self.spec.supports_parallel,
             output_mode=self.spec.output_mode,
             source=self.spec.source,
             ephemeral=self.spec.ephemeral,
             prompt=self.spec.prompt,
             tags=list(self.spec.tags),
-            risk_categories=list(self.spec.risk_categories),
-            side_effect_level=self.spec.side_effect_level,
-            resource_scope=list(self.spec.resource_scope),
             visibility_scope=self.spec.visibility_scope,
             expose_in_deferred=self.spec.expose_in_deferred,
             metadata=dict(self.spec.metadata),
         )
+
+    def get_permission_descriptor(self):
+        """Return framework-level permission metadata for this Tool.
+
+        The descriptor is deliberately separate from ToolSpec. Permission
+        engines may replace how this metadata is interpreted without changing
+        the model-facing tool schema.
+        """
+        from core.permissions.models import ToolPermissionDescriptor
+
+        return self._permission_descriptor
 
     def validate_parameters(self, parameters: dict) -> dict[str, Any]:
         validated = self.parameters.model_validate(parameters)
