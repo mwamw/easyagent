@@ -4,71 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-from dataclasses import dataclass
 import time
 from typing import Any, Optional
 from uuid import uuid4
+from .base import BaseWorktreeManager
+from .models import GitWorktreeInfo, GitWorktreeSession
 
 
-@dataclass(slots=True)
-class GitWorktreeInfo:
-    path: str
-    branch: Optional[str]
-    head: Optional[str]
-    bare: bool = False
-    detached: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": self.path,
-            "branch": self.branch,
-            "head": self.head,
-            "bare": self.bare,
-            "detached": self.detached,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any] | None) -> "GitWorktreeInfo":
-        data = dict(payload or {})
-        return cls(
-            path=os.path.abspath(str(data.get("path") or "")),
-            branch=data.get("branch"),
-            head=data.get("head"),
-            bare=bool(data.get("bare", False)),
-            detached=bool(data.get("detached", False)),
-        )
-
-
-@dataclass(slots=True)
-class GitWorktreeSession:
-    original_cwd: str
-    worktree: GitWorktreeInfo
-    base_head: Optional[str]
-    created_at: float
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "originalCwd": self.original_cwd,
-            "worktree": self.worktree.to_dict(),
-            "baseHead": self.base_head,
-            "createdAt": self.created_at,
-        }
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any] | None) -> "GitWorktreeSession" | None:
-        data = dict(payload or {})
-        worktree_payload = data.get("worktree")
-        if not worktree_payload:
-            return None
-        return cls(
-            original_cwd=os.path.abspath(str(data.get("originalCwd") or os.getcwd())),
-            worktree=GitWorktreeInfo.from_dict(worktree_payload),
-            base_head=data.get("baseHead"),
-            created_at=float(data.get("createdAt") or time.time()),
-        )
-
-
-class WorktreeManager:
+class WorktreeManager(BaseWorktreeManager):
     def __init__(
         self,
         repo_root: str,

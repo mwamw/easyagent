@@ -12,6 +12,30 @@ ModelRequestOptions: TypeAlias = dict[str, object]
 ProviderReplayHistory: TypeAlias = list[object]
 
 
+class ContextBudgetUsage(TypedDict):
+    maxTokens: int | None
+    remainingTokens: int | None
+
+
+class ContextRequestEstimate(TypedDict):
+    estimatedRequestTokens: int
+    source: str
+    localEstimatedRequestTokens: int | None
+    metadata: dict[str, object]
+
+
+class ContextUsageReport(TypedDict):
+    estimatedRequestTokens: int
+    localEstimatedRequestTokens: int | None
+    request_estimate_source: str
+    requestEstimate: ContextRequestEstimate
+    maxTokens: int | None
+    budget: ContextBudgetUsage
+    canonicalMessages: int
+    replayMessages: int
+    provider: str | None
+
+
 class ModelUsage(TypedDict, total=False):
     """Provider-neutral usage fields observed by Context after a model call."""
 

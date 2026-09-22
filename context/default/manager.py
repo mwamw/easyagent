@@ -16,6 +16,7 @@ from context.base import BaseContextManager
 from context.models import (
     ContextCompactionResult,
     ContextUsage,
+    ContextUsageReport,
 )
 from context.default.estimation import RequestEstimation
 from context.default.usage import ContextUsageTracker
@@ -188,6 +189,9 @@ class ContextManager(BaseContextManager, RequestEstimation):
     def history_epoch(self):
         return self._context_epoch
 
+    def validation_epoch(self, compaction: ContextCompactionResult | None) -> int:
+        return self.history_epoch + int(compaction is not None and compaction.was_compacted)
+
     @property
     def provider_name(self):
         return self._llm.provider_name if self._llm is not None else None
@@ -318,7 +322,7 @@ class ContextManager(BaseContextManager, RequestEstimation):
         import asyncio
         return await asyncio.to_thread(self.compact_persistent_history, *args, **kwargs)
 
-    def get_usage(self, prompt_blocks, *, tools=None, reasoning=None, cache_policy=None) -> dict[str, Any]:
+    def get_usage(self, prompt_blocks, *, tools=None, reasoning=None, cache_policy=None) -> ContextUsageReport:
         from core.request_compiler import compile_prompt_blocks
 
         tracker = self._usage

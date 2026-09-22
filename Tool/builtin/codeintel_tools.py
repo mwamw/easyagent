@@ -7,7 +7,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from codeintel import CodeIntelManager, LSPCodeIntelProvider
+from codeintel import BaseCodeIntel, CodeIntelManager, LSPCodeIntelProvider
+from runtime.agent import AgentRuntime
 from Tool.runtime import PathResolutionError
 
 from ..BaseTool import Tool, ToolResult
@@ -122,21 +123,20 @@ class CodeIntelPrewarmWorkspaceInput(BaseModel):
 
 def _build_codeintel_manager(
     *,
-    manager: Optional[CodeIntelManager] = None,
+    manager: Optional[BaseCodeIntel] = None,
     provider: Optional[Any] = None,
-    parent_agent: Any | None = None,
+    runtime: AgentRuntime | None = None,
     workspace_root: Optional[str] = None,
     allowed_roots: Optional[tuple[str, ...]] = None,
-) -> CodeIntelManager:
+) -> BaseCodeIntel:
     if manager is not None:
-        bind_parent = getattr(manager, "bind_parent_agent", None)
-        if callable(bind_parent):
-            bind_parent(parent_agent)
+        if runtime is not None:
+            manager.bind(runtime)
         return manager
     resolved_provider = provider or LSPCodeIntelProvider()
     return CodeIntelManager(
         provider=resolved_provider,
-        parent_agent=parent_agent,
+        runtime=runtime,
         workspace_root=workspace_root,
         allowed_roots=allowed_roots,
     )
@@ -174,7 +174,7 @@ class _CodeIntelTool(Tool):
         name: str,
         description: str,
         parameters: type[BaseModel],
-        manager: CodeIntelManager,
+        manager: BaseCodeIntel,
         guidance: str,
         prompt: str,
     ):
@@ -219,7 +219,7 @@ class _CodeIntelTool(Tool):
 
 
 class CodeIntelStatusTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="CodeIntelStatus",
             description="Checks workspace code intelligence availability, server configuration, and fallback options.",
@@ -246,7 +246,7 @@ class CodeIntelStatusTool(_CodeIntelTool):
 
 
 class FindDefinitionTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="FindDefinition",
             description="Finds a symbol definition at an exact source line and column.",
@@ -280,7 +280,7 @@ class FindDefinitionTool(_CodeIntelTool):
 
 
 class FindReferencesTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="FindReferences",
             description="Finds references to a symbol at an exact source line and column.",
@@ -315,7 +315,7 @@ class FindReferencesTool(_CodeIntelTool):
 
 
 class GetDocumentSymbolsTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="GetDocumentSymbols",
             description="Returns a source file's symbol tree.",
@@ -347,7 +347,7 @@ class GetDocumentSymbolsTool(_CodeIntelTool):
 
 
 class GetWorkspaceSymbolsTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="GetWorkspaceSymbols",
             description="Searches workspace symbols by name.",
@@ -373,7 +373,7 @@ class GetWorkspaceSymbolsTool(_CodeIntelTool):
 
 
 class GetDiagnosticsTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="GetDiagnostics",
             description="Reads a file's language-server diagnostics.",
@@ -405,7 +405,7 @@ class GetDiagnosticsTool(_CodeIntelTool):
 
 
 class CodeIntelCacheStatusTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="CodeIntelCacheStatus",
             description="Reports code intelligence cache and offline index status.",
@@ -427,7 +427,7 @@ class CodeIntelCacheStatusTool(_CodeIntelTool):
 
 
 class CodeIntelPrewarmWorkspaceTool(_CodeIntelTool):
-    def __init__(self, manager: CodeIntelManager):
+    def __init__(self, manager: BaseCodeIntel):
         super().__init__(
             name="CodeIntelPrewarmWorkspace",
             description="Prewarms the code intelligence cache and offline symbol index.",
@@ -463,17 +463,17 @@ class CodeIntelPrewarmWorkspaceTool(_CodeIntelTool):
 def register_codeintel_tools(
     registry: ToolRegistry,
     *,
-    manager: Optional[CodeIntelManager] = None,
+    manager: Optional[BaseCodeIntel] = None,
     provider: Optional[Any] = None,
-    parent_agent: Any | None = None,
+    runtime: AgentRuntime | None = None,
     workspace_root: Optional[str] = None,
     allowed_roots: Optional[tuple[str, ...]] = None,
     expose_in_deferred: bool | None = True,
-) -> CodeIntelManager:
+) -> BaseCodeIntel:
     codeintel_manager = _build_codeintel_manager(
         manager=manager,
         provider=provider,
-        parent_agent=parent_agent,
+        runtime=runtime,
         workspace_root=workspace_root,
         allowed_roots=allowed_roots,
     )

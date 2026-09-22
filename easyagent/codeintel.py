@@ -1,6 +1,7 @@
 """Stable public code intelligence exports."""
 
 from codeintel import (
+    BaseCodeIntel,
     CachedFileEntry,
     CachedQueryEntry,
     CodeIntelAvailability,
@@ -27,6 +28,7 @@ from codeintel import (
 )
 
 __all__ = [
+    "BaseCodeIntel",
     "CachedFileEntry",
     "CachedQueryEntry",
     "CodeIntelAvailability",

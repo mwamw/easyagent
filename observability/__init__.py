@@ -1,7 +1,8 @@
 """Public observability exports."""
 
 from .eval import EvalCase, EvalResult, OfflineEvalHarness
-from .manager import BaseObservabilityManager, ObservabilityManager
+from .base import BaseObservabilityManager
+from .manager import ObservabilityManager
 from .models import (
     AgentInvoke,
     AgentInvokeStats,

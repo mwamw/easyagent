@@ -12,7 +12,7 @@ from ..claude_compat.models import ClaudeTodoItem, ClaudeTodoWriteInput
 from ..runtime import TodoItemSnapshot, set_todo_items
 
 if TYPE_CHECKING:
-    from task import TaskRecord, TaskService, TaskStatus
+    from task import TaskRecord, BaseTaskService, TaskStatus
 
 TODO_WRITE_PROMPT = """Use this tool to create and manage a structured task list for your current work. This helps track progress, organize complex tasks, and demonstrate thoroughness.
 
@@ -176,7 +176,7 @@ def _sort_task_records_for_todo(records: list["TaskRecord"]) -> list["TaskRecord
 
 def _sync_with_task_service(
     *,
-    service: "TaskService",
+    service: "BaseTaskService",
     scope_key: str,
     owner: str | None,
     todos: list[TodoItemSnapshot],
@@ -296,7 +296,7 @@ class TodoWriteTool(Tool):
     def __init__(
         self,
         *,
-        service: "TaskService | None" = None,
+        service: "BaseTaskService | None" = None,
         scope_key: str = "todo_write_default",
         owner: str | None = None,
     ):
@@ -368,7 +368,7 @@ def register_todo_write_tool(
     registry: ToolRegistry,
     *,
     tool: TodoWriteTool | None = None,
-    service: "TaskService | None" = None,
+    service: "BaseTaskService | None" = None,
     scope_key: str = "todo_write_default",
     owner: str | None = None,
     expose_in_deferred: bool | None = True,

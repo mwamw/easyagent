@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Sequence, TYPE_CHECKING
+from typing import Any, Sequence, TYPE_CHECKING
 
 from core.cache_policy import PromptCachePolicy
 from core.history import CanonicalMessage, coerce_canonical_message
@@ -14,6 +14,7 @@ from .history import ConversationHistory
 from .models import (
     ContextCompactionResult,
     ContextUsage,
+    ContextUsageReport,
     ModelRequestOptions,
     ModelUsage,
     ProviderReplayHistory,
@@ -23,6 +24,7 @@ from .models import (
 if TYPE_CHECKING:
     from core.llm import EasyLLM
     from runtime.metamessage.manager import MetaMessageManager
+    from prompt.base import PromptBuildContext
 
 
 class BaseContextManager(ABC):
@@ -234,30 +236,38 @@ class BaseContextManager(ABC):
         """Generation changed by destructive history replacement, not appends."""
         return 0
 
+    def validation_epoch(self, compaction: ContextCompactionResult | None) -> int:
+        """Return this implementation's generation for validating a candidate input."""
+        return self.history_epoch
+
     @property
-    def canonical(self):
+    def canonical(self) -> list[CanonicalMessage]:
         return self._history.messages
 
     @property
-    def replay(self):
+    def replay(self) -> ProviderReplayHistory:
         return self._require_llm().canonical_to_replay_history(self.canonical)
 
-    def append_query(self, query):
+    def append_query(self, query: str) -> None:
         self._history.extend(self._require_llm().query_to_canonical(str(query)))
 
-    def append_response(self, response, *, include_reasoning=False):
+    def append_response(self, response: Any, *, include_reasoning: bool = False) -> None:
         self._history.extend(
             self._require_llm().response_to_canonical(
                 response, include_reasoning=include_reasoning
             )
         )
 
-    def append_assistant(self, **kwargs):
+    def append_assistant(self, *, content: str | None = None,
+                         tool_calls: list[dict[str, Any]] | None = None,
+                         thinking: str | None = None) -> None:
         self._history.extend(
-            self._require_llm().assistant_message_to_canonical(**kwargs)
+            self._require_llm().assistant_message_to_canonical(
+                content=content, tool_calls=tool_calls, thinking=thinking,
+            )
         )
 
-    def append_tool_result(self, content, tool_id, tool_name):
+    def append_tool_result(self, content: str, tool_id: str, tool_name: str) -> None:
         self._history.extend(
             self._require_llm().tool_result_to_canonical(
                 content, tool_id, tool_name
@@ -269,7 +279,7 @@ class BaseContextManager(ABC):
         """Expose ephemeral tool-produced context to a future model request."""
         raise NotImplementedError
 
-    def add(self, message):
+    def add(self, message: CanonicalMessage | dict[str, Any] | object) -> None:
         llm = self._require_llm()
         canonical = llm.history_entry_to_canonical(message)
         if not canonical:
@@ -279,11 +289,11 @@ class BaseContextManager(ABC):
             raise TypeError(f"Unsupported history message: {type(message).__name__}")
         self._history.extend(canonical)
 
-    def add_many(self, messages):
+    def add_many(self, messages: Sequence[CanonicalMessage | dict[str, Any] | object]) -> None:
         for message in messages:
             self.add(message)
 
-    def replace(self, messages):
+    def replace(self, messages: Sequence[CanonicalMessage | dict[str, Any] | object]) -> None:
         llm = self._require_llm()
         normalized = []
         for message in messages:
@@ -294,52 +304,70 @@ class BaseContextManager(ABC):
                 normalized.extend(llm.history_entry_to_canonical(message))
         self._history.replace(normalized)
 
-    def clear(self):
+    def clear(self) -> None:
         self._history.clear()
 
-    def rebuild_replay(self):
+    def rebuild_replay(self) -> ProviderReplayHistory:
         """Contexts without a replay cache may simply return the current projection."""
         return self.replay
 
-    def export_state(self):
+    def export_state(self) -> dict[str, Any]:
         return {
             "providerName": getattr(self._llm, "provider_name", None),
             **self._history.export_state(),
         }
 
-    def validate_state(self, state):
+    def validate_state(self, state: dict[str, Any] | None) -> None:
         self._history.validate_state(state)
 
-    def restore_state(self, state):
+    def restore_state(self, state: dict[str, Any] | None) -> None:
         self.validate_state(state)
         self._history.restore_state(state)
 
-    def get_prompt_blocks(self, context):
+    def get_prompt_blocks(self, context: "PromptBuildContext") -> Sequence[PromptBlock]:
         return []
 
-    def close(self):
+    def close(self) -> None:
         """Release Context-owned resources, never the borrowed LLM."""
 
-    def get_usage(self, prompt_blocks, *, tools=None, reasoning=None, cache_policy=None):
-        return {}
+    def get_usage(self, prompt_blocks: Sequence[PromptBlock], *, tools: ToolDefinitions = None,
+                  reasoning: dict[str, Any] | None = None,
+                  cache_policy: PromptCachePolicy | None = None) -> ContextUsageReport:
+        options = {"reasoning": reasoning}
+        request = self.build_input(prompt_blocks, tools=tools, options=options,
+                                   query=self.last_query, cache_policy=cache_policy)
+        usage = self.calculate_usage(request, tools=tools, options=options)
+        return {
+            "estimatedRequestTokens": usage.estimated_tokens,
+            "localEstimatedRequestTokens": usage.local_estimated_tokens,
+            "request_estimate_source": usage.source,
+            "requestEstimate": {"estimatedRequestTokens": usage.estimated_tokens,
+                                "source": usage.source,
+                                "localEstimatedRequestTokens": usage.local_estimated_tokens,
+                                "metadata": usage.metadata},
+            "maxTokens": usage.max_tokens,
+            "budget": {"maxTokens": usage.max_tokens, "remainingTokens": usage.remaining_tokens},
+            "canonicalMessages": len(self.canonical), "replayMessages": len(self.replay),
+            "provider": self._require_llm().provider_name,
+        }
 
     @property
-    def revision(self):
+    def revision(self) -> int:
         return self._history.revision
 
     @property
-    def last_query(self):
+    def last_query(self) -> str:
         return ""
 
     @property
-    def usage_revision(self):
+    def usage_revision(self) -> int:
         return 0
 
-    def remove_by_metadata(self, key, value):
+    def remove_by_metadata(self, key: str, value: object) -> bool:
         return self._history.remove_by_metadata(key, value)
 
-    def contains_metadata(self, key, value):
+    def contains_metadata(self, key: str, value: object) -> bool:
         return self._history.contains_metadata(key, value)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self._history)

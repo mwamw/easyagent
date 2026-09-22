@@ -7,7 +7,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from core.Exception import TaskNotFoundError
-from task import InMemoryTaskStore, TaskService, TaskStatus
+from task import BaseTaskService, InMemoryTaskStore, TaskService, TaskStatus
 
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
@@ -99,18 +99,18 @@ class TaskListParams(BaseModel):
     limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
 
 
-def _service_or_default(service: TaskService | None) -> TaskService:
+def _service_or_default(service: BaseTaskService | None) -> BaseTaskService:
     return service or TaskService(InMemoryTaskStore())
 
 
 class _TaskToolBase(Tool):
-    def __init__(self, *, service: TaskService, **kwargs):
+    def __init__(self, *, service: BaseTaskService, **kwargs):
         self.service = service
         super().__init__(**kwargs)
 
 
 class TaskCreateTool(_TaskToolBase):
-    def __init__(self, *, service: TaskService):
+    def __init__(self, *, service: BaseTaskService):
         super().__init__(
             service=service,
             name="TaskCreate",
@@ -143,7 +143,7 @@ class TaskCreateTool(_TaskToolBase):
 
 
 class TaskGetTool(_TaskToolBase):
-    def __init__(self, *, service: TaskService):
+    def __init__(self, *, service: BaseTaskService):
         super().__init__(
             service=service,
             name="TaskGet",
@@ -182,7 +182,7 @@ class TaskGetTool(_TaskToolBase):
 
 
 class TaskUpdateTool(_TaskToolBase):
-    def __init__(self, *, service: TaskService):
+    def __init__(self, *, service: BaseTaskService):
         super().__init__(
             service=service,
             name="TaskUpdate",
@@ -223,7 +223,7 @@ class TaskUpdateTool(_TaskToolBase):
 
 
 class TaskListTool(_TaskToolBase):
-    def __init__(self, *, service: TaskService):
+    def __init__(self, *, service: BaseTaskService):
         super().__init__(
             service=service,
             name="TaskList",
@@ -253,7 +253,7 @@ class TaskListTool(_TaskToolBase):
 def register_task_tools(
     registry: ToolRegistry,
     *,
-    service: TaskService | None = None,
+    service: BaseTaskService | None = None,
     expose_in_deferred: bool | None = True,
 ) -> tuple[TaskCreateTool, TaskGetTool, TaskUpdateTool, TaskListTool]:
     task_service = _service_or_default(service)

@@ -7,7 +7,7 @@ from typing import Optional
 from ..BaseTool import Tool, ToolResult
 from ..ToolRegistry import ToolRegistry
 from ..claude_compat.models import ClaudeEnterWorktreeInput, ClaudeExitWorktreeInput
-from ..runtime import WorktreeManager
+from worktree import BaseWorktreeManager
 
 
 ENTER_WORKTREE_PROMPT = """Creates and enters an isolated git worktree.
@@ -25,7 +25,7 @@ EXIT_WORKTREE_PROMPT = """Exits the active git worktree.
 
 
 class EnterWorktreeTool(Tool):
-    def __init__(self, *, worktree_manager: WorktreeManager):
+    def __init__(self, *, worktree_manager: BaseWorktreeManager):
         self.worktree_manager = worktree_manager
         super().__init__(
             name="EnterWorktree",
@@ -64,7 +64,7 @@ class EnterWorktreeTool(Tool):
 
 
 class ExitWorktreeTool(Tool):
-    def __init__(self, *, worktree_manager: WorktreeManager):
+    def __init__(self, *, worktree_manager: BaseWorktreeManager):
         self.worktree_manager = worktree_manager
         super().__init__(
             name="ExitWorktree",
@@ -101,7 +101,7 @@ class ExitWorktreeTool(Tool):
 def register_enter_worktree_tool(
     registry: ToolRegistry,
     *,
-    worktree_manager: WorktreeManager,
+    worktree_manager: BaseWorktreeManager,
     expose_in_deferred: bool | None = True,
 ) -> EnterWorktreeTool:
     tool = EnterWorktreeTool(worktree_manager=worktree_manager)
@@ -112,7 +112,7 @@ def register_enter_worktree_tool(
 def register_exit_worktree_tool(
     registry: ToolRegistry,
     *,
-    worktree_manager: WorktreeManager,
+    worktree_manager: BaseWorktreeManager,
     expose_in_deferred: bool | None = True,
 ) -> ExitWorktreeTool:
     tool = ExitWorktreeTool(worktree_manager=worktree_manager)
@@ -123,7 +123,7 @@ def register_exit_worktree_tool(
 def register_worktree_tools(
     registry: ToolRegistry,
     *,
-    worktree_manager: WorktreeManager,
+    worktree_manager: BaseWorktreeManager,
     expose_in_deferred: bool | None = True,
 ) -> tuple[EnterWorktreeTool, ExitWorktreeTool]:
     enter_tool = register_enter_worktree_tool(registry, worktree_manager=worktree_manager, expose_in_deferred=expose_in_deferred)

@@ -8,6 +8,7 @@ from .stores import (
     SQLiteSessionStore,
 )
 from .manager import SessionManager, SessionBindings, SessionStateParticipant
+from .state import SessionState, SessionStateData, RestoreReportPayload
 
 __all__ = [
     "ComponentRestoreReport",
@@ -15,4 +16,5 @@ __all__ = [
     "SessionRestoreReport",
     "BaseSessionStore", "SessionConflictError", "SQLiteSessionStore", "InMemorySessionStore",
     "SessionManager", "SessionBindings", "SessionStateParticipant",
+    "SessionState", "SessionStateData", "RestoreReportPayload",
 ]

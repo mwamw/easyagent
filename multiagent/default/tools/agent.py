@@ -14,14 +14,8 @@ from task import TaskStatus
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
 from Tool.claude_compat.models import ClaudeAgentInput
-from Tool.runtime import WorktreeManager
-from Tool.builtin.bash_tool import BashTool, register_shell_tools
+from worktree import BaseWorktreeManager
 from Tool.builtin.display_utils import format_error_display, format_structured_display
-from Tool.builtin.file_edit import FileEditTool
-from Tool.builtin.file_write import FileWriteTool
-from Tool.builtin.filesystem import FileReadTool, GlobTool, GrepTool
-from Tool.builtin.task_output import TaskOutputTool
-from Tool.builtin.task_stop import TaskStopTool
 
 
 AGENT_TOOL_PROMPT = """Launch a new agent to handle complex, multi-step tasks autonomously.
@@ -55,19 +49,6 @@ Brief the agent like a smart colleague who just walked into the room: it has not
 Terse command-style prompts produce shallow, generic work. Never delegate understanding with phrases such as "based on your findings, fix the bug". Include the concrete paths, constraints, evidence, and requested change."""
 
 
-MULTI_AGENT_TOOL_NAMES = frozenset(
-    {
-        "Agent",
-        "AgentGet",
-        "AgentList",
-        "AgentWait",
-        "AgentStop",
-        "SendMessage",
-        "TeamCreate",
-        "TeamDelete",
-    }
-)
-
 
 def _normalize_workspace_root(workspace_root: str | None) -> str:
     return os.path.abspath(workspace_root or os.getcwd())
@@ -89,82 +70,6 @@ def _normalize_subagent_mode(raw_mode: str | None) -> ApprovalMode | None:
     return mapping.get(raw_mode, ApprovalMode.ASK_FOR_APPROVAL)
 
 
-def clone_tool_registry_for_workspace(
-    registry: ToolRegistry,
-    *,
-    workspace_root: str,
-    allowed_roots: Iterable[str] | None = None,
-    cwd: str | None = None,
-) -> ToolRegistry:
-    """Clone workspace-aware tools without copying collaboration bindings."""
-
-    cloned = ToolRegistry()
-    shell_tools_registered = False
-    for name in registry.get_tool_names():
-        if name in MULTI_AGENT_TOOL_NAMES or name == "skill_tool":
-            continue
-        tool = registry.get_tool(name)
-        if tool is None:
-            continue
-        visibility = registry.get_tool_visibility(name) or "resident"
-        if isinstance(tool, BashTool):
-            if shell_tools_registered:
-                continue
-            register_shell_tools(
-                cloned,
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-                shell=tool.process_manager.shell,
-                command_timeout_ms=tool.command_timeout_ms,
-                max_background_tasks=tool.process_manager.max_background_tasks,
-                max_output_chars=tool.max_output_chars,
-                sandbox=tool.sandbox_config,
-            )
-            shell_tools_registered = True
-            continue
-        if isinstance(tool, (TaskOutputTool, TaskStopTool)):
-            continue
-        if isinstance(tool, FileReadTool):
-            cloned_tool = FileReadTool(
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-                max_output_chars=tool.max_output_chars,
-            )
-        elif isinstance(tool, GlobTool):
-            cloned_tool = GlobTool(
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-                max_results=tool.max_results,
-            )
-        elif isinstance(tool, GrepTool):
-            cloned_tool = GrepTool(
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-                rg_binary=tool.rg_binary,
-                max_head_limit=tool.max_head_limit,
-                max_output_chars=tool.max_output_chars,
-            )
-        elif isinstance(tool, FileWriteTool):
-            cloned_tool = FileWriteTool(
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-            )
-        elif isinstance(tool, FileEditTool):
-            cloned_tool = FileEditTool(
-                workspace_root=workspace_root,
-                allowed_roots=allowed_roots,
-                cwd=cwd or workspace_root,
-            )
-        else:
-            cloned_tool = tool
-        cloned.register_tool(cloned_tool, visibility=visibility)
-    return cloned
-
 
 class AgentTool(Tool):
     def __init__(
@@ -179,7 +84,7 @@ class AgentTool(Tool):
         cache_safe_params_provider: Callable[[], dict[str, Any]] | None = None,
         agent_runtime: AgentRuntimeManager | None = None,
         subagent_manager: SubagentManager | None = None,
-        worktree_manager: WorktreeManager | None = None,
+        worktree_manager: BaseWorktreeManager | None = None,
         workspace_root: str | None = None,
         allowed_roots: Iterable[str] | None = None,
         storage_dir: str | None = None,
@@ -414,7 +319,7 @@ def register_agent_tool(
     cache_safe_params_provider: Callable[[], dict[str, Any]] | None = None,
     agent_runtime: AgentRuntimeManager | None = None,
     subagent_manager: SubagentManager | None = None,
-    worktree_manager: WorktreeManager | None = None,
+    worktree_manager: BaseWorktreeManager | None = None,
     workspace_root: str | None = None,
     allowed_roots: Iterable[str] | None = None,
     storage_dir: str | None = None,
@@ -445,6 +350,5 @@ __all__ = [
     "AGENT_TOOL_PROMPT",
     "AgentTool",
     "MULTI_AGENT_TOOL_NAMES",
-    "clone_tool_registry_for_workspace",
     "register_agent_tool",
 ]

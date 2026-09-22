@@ -1,8 +1,9 @@
 """Stable public worktree exports."""
 
-from Tool.runtime import GitWorktreeInfo, GitWorktreeSession, WorktreeManager
+from worktree import BaseWorktreeManager, GitWorktreeInfo, GitWorktreeSession, WorktreeManager
 
 __all__ = [
+    "BaseWorktreeManager",
     "GitWorktreeInfo",
     "GitWorktreeSession",
     "WorktreeManager",

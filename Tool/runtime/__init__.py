@@ -20,7 +20,7 @@ from .todo_state import (
     set_todo_items,
     todo_items,
 )
-from .worktree_manager import GitWorktreeInfo, GitWorktreeSession, WorktreeManager
+from worktree import GitWorktreeInfo, GitWorktreeSession, WorktreeManager
 
 __all__ = [
     "FileVersionSnapshot",

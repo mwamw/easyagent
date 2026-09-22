@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Sequence
+from Tool.BaseTool import Tool
+from prompt.base import PromptBuildContext
+from prompt import PromptBlock
 
 from core.Exception import ExecutionModeError
 from runtime.metamessage import MetaMessageManager, MetaMessage, MetaMessageLifecycle
@@ -11,33 +14,7 @@ from runtime.agent import AgentRuntime
 from Tool.ToolRegistry import ToolRegistry
 
 from .models import ExecutionMode, PlanModeConfig, PlanModeState
-
-
-class BasePlanMode(ABC):
-    def get_prompt_blocks(self, context):
-        return []
-
-    @property
-    @abstractmethod
-    def mode(self) -> ExecutionMode:
-        raise NotImplementedError
-
-    @abstractmethod
-    def bind(
-        self,
-        *,
-        runtime: AgentRuntime,
-        tool_registry: ToolRegistry | None,
-    ) -> "BasePlanMode":
-        raise NotImplementedError
-
-    @abstractmethod
-    def enter(self, *, allowed_actions: list[str] | None = None) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def exit(self) -> None:
-        raise NotImplementedError
+from .base import BasePlanMode
 
 
 class PlanModeManager(BasePlanMode):
@@ -91,34 +68,15 @@ class PlanModeManager(BasePlanMode):
                 allowed_actions=tuple(self.state.allowed_actions),
             )
 
-    def install_tools(self) -> None:
+    def create_child(self) -> BasePlanMode:
+        return type(self)(self.config.model_copy(deep=True))
+
+    def get_tools(self) -> Sequence[Tool]:
         if not self.config.register_tools:
-            return
+            return ()
         self._require_bound()
-        if self._tool_registry is None:
-            raise ExecutionModeError("Plan 工具需要先安装 ToolRegistry。")
-        from .tools import (
-            EnterPlanModeTool,
-            ExitPlanModeTool,
-            register_enter_plan_mode_tool,
-            register_exit_plan_mode_tool,
-        )
-
-        enter_tool = self._tool_registry.get_tool("EnterPlanMode")
-        if enter_tool is None:
-            register_enter_plan_mode_tool(self._tool_registry, plan_manager=self)
-        elif isinstance(enter_tool, EnterPlanModeTool):
-            enter_tool.plan_manager = self
-        else:
-            raise ExecutionModeError("ToolRegistry 中的 EnterPlanMode 名称已被占用。")
-
-        exit_tool = self._tool_registry.get_tool("ExitPlanMode")
-        if exit_tool is None:
-            register_exit_plan_mode_tool(self._tool_registry, plan_manager=self)
-        elif isinstance(exit_tool, ExitPlanModeTool):
-            exit_tool.plan_manager = self
-        else:
-            raise ExecutionModeError("ToolRegistry 中的 ExitPlanMode 名称已被占用。")
+        from .tools import EnterPlanModeTool, ExitPlanModeTool
+        return (EnterPlanModeTool(plan_manager=self), ExitPlanModeTool(plan_manager=self))
 
     def enter(self, *, allowed_actions: list[str] | None = None) -> None:
         metamessages = self._require_bound()
@@ -173,7 +131,7 @@ class PlanModeManager(BasePlanMode):
             return message.rstrip().removesuffix("</system-reminder>") + detail + "\n</system-reminder>"
         return f"{message}\n{detail}"
 
-    def get_prompt_blocks(self, context):
+    def get_prompt_blocks(self, context: PromptBuildContext) -> Sequence[PromptBlock]:
         from prompt import PromptBlock
         if not self.is_active:
             return []

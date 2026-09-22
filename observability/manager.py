@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from abc import ABC, abstractmethod
+from .base import BaseObservabilityManager
 from datetime import datetime
 import threading
 import time
@@ -39,23 +39,6 @@ def _same_message(left: CanonicalMessage, right: CanonicalMessage) -> bool:
     return left_visible == right_visible
 
 
-class BaseObservabilityManager(ABC):
-    @abstractmethod
-    def bind(self, *, agent_id: str, event_bus: RuntimeEventBus) -> "BaseObservabilityManager":
-        raise NotImplementedError
-
-    @abstractmethod
-    def handle_runtime_event(self, event: RuntimeEvent) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def list(self) -> list[AgentInvoke]:
-        """Return completed AgentInvoke records in storage order."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def close(self) -> None:
-        raise NotImplementedError
 
 
 class ObservabilityManager(BaseObservabilityManager):
@@ -101,7 +84,7 @@ class ObservabilityManager(BaseObservabilityManager):
         return self
 
     def create_child(self, *, parent_invoke_id: str | None = None) -> "ObservabilityManager":
-        return ObservabilityManager(
+        return type(self)(
             self.store,
             parent_invoke_id=parent_invoke_id or self.active_invoke_id,
             owns_store=False,

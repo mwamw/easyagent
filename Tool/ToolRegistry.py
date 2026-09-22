@@ -19,6 +19,7 @@ class ToolRegistry:
         self.tools: dict[str, Tool] = {}
         self._permission_descriptors: dict[str, ToolPermissionDescriptor] = {}
         self._tool_visibility: dict[str, ToolVisibility] = {}
+        self._tool_deferred_exposure: dict[str, bool] = {}
         self._runtime_surfaces: dict[str, dict[str, Any]] = {}
         self._deferred_expanded_tool_names: set[str] = set()
         self.conflict_policy: ToolConflictPolicy = conflict_policy
@@ -39,17 +40,21 @@ class ToolRegistry:
                 return existing
             if policy == "error":
                 raise ToolRegistryError(f"Tool '{tool.name}' 已存在，当前冲突策略禁止覆盖。")
-        self.tools[tool.name] = tool
         if permission_descriptor is not None:
             if permission_descriptor.tool_name != tool.name:
                 raise ToolRegistryError(
                     f"Permission descriptor name '{permission_descriptor.tool_name}' does not match tool '{tool.name}'."
                 )
+        self.tools[tool.name] = tool
+        if permission_descriptor is not None:
             self._permission_descriptors[tool.name] = permission_descriptor
+        elif existing is not tool:
+            self._permission_descriptors.pop(tool.name, None)
         self._tool_visibility[tool.name] = visibility
-        tool.spec.visibility_scope = visibility
-        if expose_in_deferred is not None:
-            tool.spec.expose_in_deferred = bool(expose_in_deferred)
+        self._tool_deferred_exposure[tool.name] = (
+            tool.get_spec().expose_in_deferred
+            if expose_in_deferred is None else bool(expose_in_deferred)
+        )
         return tool
 
     def mount_runtime_tool(self, tool: Tool, *, expose_in_deferred: bool | None = None):
@@ -130,11 +135,19 @@ class ToolRegistry:
         return [self.tools[name] for name in names if name in self.tools]
 
     def list_tool_specs(self, scope: str = "all", *, stable: bool = False) -> list[ToolSpec]:
-        return [tool.get_spec() for tool in self.get_visible_tools(scope=scope, stable=stable)]
+        return [
+            spec for name in self._visible_tool_names(scope=scope, stable=stable)
+            if (spec := self.get_tool_spec(name)) is not None
+        ]
 
     def get_tool_spec(self, name: str) -> ToolSpec | None:
         tool = self.get_tool(name)
-        return tool.get_spec() if tool else None
+        if tool is None:
+            return None
+        spec = tool.get_spec()
+        spec.visibility_scope = self._tool_visibility[name]
+        spec.expose_in_deferred = self._tool_deferred_exposure[name]
+        return spec
 
     def get_permission_descriptor(self, name: str) -> ToolPermissionDescriptor | None:
         tool = self.get_tool(name)
@@ -230,11 +243,11 @@ class ToolRegistry:
     ) -> list[dict[str, Any]]:
         descriptors: list[dict[str, Any]] = []
         for tool in self.get_visible_tools(scope=scope, stable=stable):
-            spec = tool.get_spec()
+            spec = self.get_tool_spec(tool.name)
             if not include_internal and spec.metadata.get("internal_tool"):
                 continue
             descriptor = spec.to_description_payload()
-            permission = tool.get_permission_descriptor()
+            permission = self.get_permission_descriptor(tool.name)
             descriptor.update({
                 "requires_confirmation": permission.requires_confirmation,
                 "risk_categories": list(permission.risk_categories),
@@ -256,7 +269,7 @@ class ToolRegistry:
             if tool is None:
                 raise ToolNotFoundError(f"Tool {normalized} not found")
             self._deferred_expanded_tool_names.add(normalized)
-            expanded.append(tool.get_spec())
+            expanded.append(self.get_tool_spec(normalized))
         return expanded
 
     def clear_deferred_tool_expansions(self) -> None:
@@ -302,12 +315,12 @@ class ToolRegistry:
         return result
 
     def _enrich_tool_result(self, tool: Tool, result: ToolResult) -> None:
-        spec = tool.get_spec()
+        spec = self.get_tool_spec(tool.name)
         metadata = dict(result.metadata)
         metadata.setdefault("tool_name", tool.name)
         metadata.setdefault("tool_visibility", self.get_tool_visibility(tool.name))
         metadata.setdefault("tool_source", spec.source)
-        permission = tool.get_permission_descriptor()
+        permission = self.get_permission_descriptor(tool.name)
         metadata.setdefault("side_effect_level", permission.side_effect_level)
         metadata.setdefault("resource_scope", list(permission.resources))
         metadata.setdefault("visibility_scope", spec.visibility_scope)
@@ -371,7 +384,7 @@ class ToolRegistry:
             allowed_names = expanded | explicit
             filtered_tools: list[Tool] = []
             for tool in visible_tools:
-                spec = tool.get_spec()
+                spec = self.get_tool_spec(tool.name)
                 if spec.expose_in_deferred:
                     filtered_tools.append(tool)
                     continue
@@ -390,7 +403,9 @@ class ToolRegistry:
         if name in self.tools:
             del self.tools[name]
             self._tool_visibility.pop(name, None)
+            self._tool_deferred_exposure.pop(name, None)
             self._permission_descriptors.pop(name, None)
+            self._deferred_expanded_tool_names.discard(name)
         else:
             print(f"Tool {name} not found")
 
@@ -424,7 +439,7 @@ class ToolRegistry:
         """获取所有已注册工具名称。"""
         return list(self.tools.keys())
 
-    def get_tool(self, name: str):
+    def get_tool(self, name: str) -> Tool | None:
         return self.tools.get(name)
 
     def get_tool_visibility(self, name: str) -> ToolVisibility | None:

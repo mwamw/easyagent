@@ -98,7 +98,7 @@ CodeIntel 的目标是把这些能力变成统一接口。
 
 - `provider`
   - 必填。真正执行 codeintel 查询的 provider。
-- `parent_agent`
+- `runtime`（AgentRuntime，不接收整个 Agent）
   - 可选。若传入，manager 会尝试从 agent 的 `runtime`、`config` 中推断工作区。
 - `workspace_root`
   - 当前工作区根目录。

@@ -445,9 +445,7 @@ def test_executor_injects_skill_between_tool_result_and_next_llm_request(tmp_pat
 def test_skill_body_and_permissions_are_reclaimed_on_agent_terminal_event(tmp_path: Path):
     write_skill(tmp_path, "review", extra_frontmatter="recommended-tools: echo_tool")
     agent = BasicAgent("agent", StubLLM()).add_tool(EchoTool()).with_skill(tmp_path).with_permissions()
-    agent.add_permission_rule(
-        {"tool_name": "echo_tool", "behavior": "ask"}, source="session"
-    )
+    agent.permission_engine.add_rule(tool_name="echo_tool", behavior="ask", source="session")
     publish(agent, RuntimeEventType.AGENT_INVOKE_STARTED)
     result = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "review"})
     assert result.status == "success"

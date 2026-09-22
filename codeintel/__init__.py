@@ -1,6 +1,7 @@
 """Public exports for EasyAgent code intelligence."""
 
 from .cache import CachedFileEntry, CachedQueryEntry, WorkspaceCodeIntelCache
+from .base import BaseCodeIntel
 from .manager import CodeIntelManager
 from .models import (
     CodeIntelAvailability,
@@ -20,6 +21,7 @@ from .provider import CodeIntelProvider, DEFAULT_FALLBACK_TOOLS
 from .lsp import LSPClient, LSPClientError, LSPCodeIntelProvider, path_to_uri, uri_to_path
 
 __all__ = [
+    "BaseCodeIntel",
     "CachedFileEntry",
     "CachedQueryEntry",
     "CodeIntelAvailability",

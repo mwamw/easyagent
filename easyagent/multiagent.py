@@ -14,6 +14,8 @@ from multiagent.default import (
     TeamManager,
 )
 from multiagent.default.factory import DefaultSubagentFactory
+from multiagent.default.tool_binding import ChildToolFactory
+from multiagent.default.permissions import ChildPermissionFactory
 from multiagent.default.definitions import (
     AgentDefinition,
     AgentDefinitionRegistry,
@@ -29,6 +31,8 @@ __all__ = [
     "BaseMultiAgent",
     "ClaudeCodeMultiAgent",
     "CompletionRecord",
+    "ChildToolFactory",
+    "ChildPermissionFactory",
     "DefaultSubagentFactory",
     "MailboxMessage",
     "SubagentManager",

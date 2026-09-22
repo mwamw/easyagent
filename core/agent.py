@@ -7,7 +7,15 @@ from datetime import datetime
 import json
 import os
 from uuid import uuid4
-from typing import Any, AsyncIterator, Iterator
+from typing import Any, AsyncIterator, Iterator, Callable, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from memory.base import BaseMemory
+    from observability import BaseObservabilityManager, BaseObservabilityStore
+    from codeintel import CodeIntelProvider
+    from session.state import SessionState
+    from multiagent.default.tool_binding import ChildToolFactory
+    from multiagent.default.permissions import ChildPermissionFactory
 
 from executor.base import BaseAgentExecutor
 from prompt.base import BaseSystemPromptComposer, PromptBuildContext
@@ -53,6 +61,9 @@ from runtime.subscribers import CallbackEventSubscriber
 from skill.manager import SkillManager
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
+from task.base import BaseTaskService
+from codeintel.base import BaseCodeIntel
+from worktree.base import BaseWorktreeManager
 
 
 class BaseAgent(ABC):
@@ -105,18 +116,18 @@ class BaseAgent(ABC):
         self.context_manager: BaseContextManager = ContextManager()
         self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
         self.register_prompt_provider("context", self.context_manager.get_prompt_blocks)
-        self.task_service: Any = None
-        self.memory: Any = None
+        self.task_service: BaseTaskService | None = None
+        self.memory: BaseMemory | None = None
         self._memory_tools: list[Any] = []
         self._memory_hooks: list[Any] = []
         self._memory_emitter = None
         self._owns_memory = False
         self.plan: BasePlanMode | None = None
-        self.observability: Any = None
+        self.observability: BaseObservabilityManager | None = None
         self.multi_agent: BaseMultiAgent | None = None
         self.mcp_managers: list[Any] = []
-        self.codeintel_manager: Any = None
-        self.worktree_manager: Any = None
+        self.codeintel_manager: BaseCodeIntel | None = None
+        self.worktree_manager: BaseWorktreeManager | None = None
         self.executor: BaseAgentExecutor | None = None
 
         self.last_restore_report: SessionRestoreReport | None = None
@@ -210,8 +221,6 @@ class BaseAgent(ABC):
         )
 
     def _refresh_runtime(self) -> None:
-        approval_mode = getattr(self.permission_engine, "approval_mode", self.runtime.permission_mode)
-        self.runtime.permission_mode = getattr(approval_mode, "value", str(approval_mode))
         self.runtime.mcp_servers = tuple(
             sorted(
                 {
@@ -222,11 +231,9 @@ class BaseAgent(ABC):
             )
         )
         if self.worktree_manager is not None:
-            get_active_session = getattr(self.worktree_manager, "get_active_session", None)
-            session = get_active_session() if callable(get_active_session) else None
-            worktree = getattr(session, "worktree", None)
-            self.runtime.worktree_path = getattr(worktree, "path", None)
-            self.runtime.worktree_branch = getattr(worktree, "branch", None)
+            session = self.worktree_manager.get_active_session()
+            self.runtime.worktree_path = session.worktree.path if session else None
+            self.runtime.worktree_branch = session.worktree.branch if session else None
 
     def build_prompt_context(self, query: str = "") -> PromptBuildContext:
         self._refresh_runtime()
@@ -281,7 +288,6 @@ class BaseAgent(ABC):
             self._register_task_tools()
         if self.plan is not None:
             self._bind_plan()
-            getattr(self.plan, "install_tools", lambda: None)()
         self._refresh_runtime()
         return self
 
@@ -309,6 +315,7 @@ class BaseAgent(ABC):
         )
         if not isinstance(resolved_engine, BasePermissionEngine):
             raise TypeError("engine must implement BasePermissionEngine")
+        resolved_engine.bind(self.runtime)
         self.permission_engine = resolved_engine
         if self.plan is not None:
             self._bind_plan()
@@ -394,12 +401,24 @@ class BaseAgent(ABC):
             raise TypeError("plan must extend BasePlanMode")
         if self.plan is not None and self.plan is not resolved:
             raise ExecutionModeError("A different Plan module is already installed")
+        if self.plan is resolved:
+            return self
+        resolved.bind(runtime=self.runtime, tool_registry=self.tool_registry)
+        tools = tuple(resolved.get_tools())
+        names: set[str] = set()
+        for tool in tools:
+            if not isinstance(tool, Tool):
+                raise TypeError("Plan modules must contribute Tool instances")
+            if tool.name in names or (self.tool_registry is not None and self.tool_registry.has_tool(tool.name)):
+                raise ToolRegistryError(f"Plan tool {tool.name!r} conflicts with an installed or contributed tool")
+            names.add(tool.name)
+        if tools and self.tool_registry is None:
+            self.with_tool()
+            resolved.bind(runtime=self.runtime, tool_registry=self.tool_registry)
+        for tool in tools:
+            self.tool_registry.register_tool(tool, expose_in_deferred=True, conflict_policy="error")
         self.plan = resolved
         self.register_prompt_provider("plan", resolved.get_prompt_blocks)
-        if getattr(getattr(resolved, "config", None), "register_tools", False) and self.tool_registry is None:
-            self.with_tool()
-        self._bind_plan()
-        getattr(resolved, "install_tools", lambda: None)()
         self._refresh_runtime()
         return self
 
@@ -411,11 +430,9 @@ class BaseAgent(ABC):
             tool_registry=self.tool_registry,
         )
 
-    def with_task_service(self, task_service: Any) -> "BaseAgent":
-        from task import TaskService
-
-        if not isinstance(task_service, TaskService):
-            raise TypeError("task_service must be TaskService")
+    def with_task_service(self, task_service: BaseTaskService) -> "BaseAgent":
+        if not isinstance(task_service, BaseTaskService):
+            raise TypeError("task_service must implement BaseTaskService")
         self.task_service = task_service
         if self.tool_registry is None:
             self.with_tool()
@@ -439,10 +456,10 @@ class BaseAgent(ABC):
 
     def with_observability(
         self,
-        manager: Any = None,
+        manager: BaseObservabilityManager | None = None,
         *,
         path: str | None = None,
-        store: Any = None,
+        store: BaseObservabilityStore | None = None,
     ) -> "BaseAgent":
         from observability import (
             BaseObservabilityManager,
@@ -478,9 +495,13 @@ class BaseAgent(ABC):
         workspace_root: str | None = None,
         storage_dir: str | None = None,
         max_background_tasks: int | None = None,
+        child_tool_factories: Mapping[str, ChildToolFactory] | None = None,
+        child_permission_factory: ChildPermissionFactory | None = None,
     ) -> "BaseAgent":
         if self.multi_agent is not None:
             raise ValueError("MultiAgent module is already installed")
+        if module is not None and (child_tool_factories is not None or child_permission_factory is not None):
+            raise ValueError("Child factories configure the default MultiAgent implementation only")
         if self.tool_registry is None:
             self.with_tool()
         resolved = module
@@ -502,10 +523,14 @@ class BaseAgent(ABC):
                 tool_registry=self.tool_registry,
                 definitions=definitions,
                 permission_engine=self.permission_engine,
+                child_permission_factory=child_permission_factory,
+                child_tool_factories=child_tool_factories,
+                parent_bound_tools=self._memory_tools,
                 callback_manager=self.callback_manager,
                 skill_directories=skill_directories,
                 task_service=self.task_service,
                 observability=self.observability,
+                plan=self.plan,
             )
             resolved = ClaudeCodeMultiAgent(
                 agent_factory=factory,
@@ -545,7 +570,7 @@ class BaseAgent(ABC):
         self.register_prompt_provider("multiagent", resolved.get_prompt_blocks)
         return self
 
-    def with_memory(self, memory: Any, *, owned: bool = False, replace: bool = False) -> "BaseAgent":
+    def with_memory(self, memory: BaseMemory, *, owned: bool = False, replace: bool = False) -> "BaseAgent":
         from runtime.hooks import BaseHook
         from memory.base import BaseMemory, MemoryServices
         from core.scope import RuntimeScope
@@ -670,14 +695,14 @@ class BaseAgent(ABC):
         self._refresh_runtime()
         return self
 
-    def with_codeintel(self, manager: Any = None, *, provider: Any = None) -> "BaseAgent":
+    def with_codeintel(self, manager: BaseCodeIntel | None = None, *, provider: CodeIntelProvider | None = None) -> "BaseAgent":
         from codeintel import CodeIntelManager, CodeIntelProvider
         from Tool.builtin import register_codeintel_tools
 
         if manager is not None and provider is not None:
             raise ValueError("manager and provider cannot be provided together")
-        if manager is not None and not isinstance(manager, CodeIntelManager):
-            raise TypeError("manager must be CodeIntelManager")
+        if manager is not None and not isinstance(manager, BaseCodeIntel):
+            raise TypeError("manager must implement BaseCodeIntel")
         if provider is not None and not isinstance(provider, CodeIntelProvider):
             raise TypeError("provider must extend CodeIntelProvider")
         if self.tool_registry is None:
@@ -686,13 +711,13 @@ class BaseAgent(ABC):
             self.tool_registry,
             manager=manager,
             provider=provider,
-            parent_agent=self,
+            runtime=self.runtime,
             workspace_root=self.runtime.workspace_root,
             allowed_roots=self.runtime.allowed_roots,
         )
         return self
 
-    def with_worktree(self, manager: Any = None) -> "BaseAgent":
+    def with_worktree(self, manager: BaseWorktreeManager | None = None) -> "BaseAgent":
         from Tool.builtin import register_worktree_tools
         from Tool.runtime import WorktreeManager
 
@@ -706,8 +731,8 @@ class BaseAgent(ABC):
                 git_binary=self.config.git_binary,
                 original_cwd=self.runtime.workspace_root,
             )
-        if not isinstance(manager, WorktreeManager):
-            raise TypeError("manager must be WorktreeManager")
+        if not isinstance(manager, BaseWorktreeManager):
+            raise TypeError("manager must implement BaseWorktreeManager")
         if self.tool_registry is None:
             self.with_tool()
         register_worktree_tools(self.tool_registry, worktree_manager=manager)
@@ -749,20 +774,7 @@ class BaseAgent(ABC):
             raise ToolExecutionError("Pending interruption is missing tool_name or tool_id")
         text = str(content)
         self.context_manager.append_tool_result(text, tool_id, tool_name)
-        if ephemeral_context is not None:
-            rendered = (
-                ephemeral_context
-                if isinstance(ephemeral_context, str)
-                else json.dumps(ephemeral_context, ensure_ascii=False, default=str, indent=2)
-            )
-            self.metamessage_manager.emit(
-                MetaMessage(
-                    name=f"tool_context:{tool_name}",
-                    content=f"<system-reminder>\nRuntime context produced by tool `{tool_name}`:\n{rendered}\n</system-reminder>",
-                    lifecycle=MetaMessageLifecycle.INVOCATION,
-                    metadata={"source": "tool_result", "toolName": tool_name},
-                )
-            )
+        self.context_manager.append_tool_context(tool_name, ephemeral_context)
         self.interrupt_controller.clear_last_interrupt()
         return {
             "toolName": tool_name,
@@ -803,33 +815,10 @@ class BaseAgent(ABC):
     def get_enhanced_prompt(self, query: str = "") -> str:
         return self.get_system_prompt_template(query).render_system()
 
-    def set_permission_mode(self, mode: Any) -> None:
-        if isinstance(self.permission_engine, BasePermissionEngine):
-            setter = getattr(self.permission_engine, "set_approval_mode", None)
-            if callable(setter):
-                setter(mode)
-            else:
-                raise TypeError("Installed permission engine does not expose an approval-mode policy")
-            self._refresh_runtime()
-            return
-        raise TypeError("permission_engine must implement BasePermissionEngine")
-        self._refresh_runtime()
-
-    def add_permission_rule(
-        self,
-        rule: Any,
-        *,
-        source: str | None = None,
-        priority: int | None = None,
-    ) -> None:
-        payload = rule if isinstance(rule, dict) else rule.model_dump(mode="python")
-        self.permission_engine.add_rule(
-            tool_name=payload.get("tool_name", "*"),
-            behavior=payload.get("behavior", "ask"),
-            matcher=payload.get("matcher", {}),
-            source=source or payload.get("source", "session"),
-            description=payload.get("description", ""),
-        )
+    def set_permission_mode(self, mode: str) -> None:
+        if self.permission_engine is None:
+            raise TypeError("Permission module is not installed")
+        self.permission_engine.set_mode(mode)
 
     def enter_plan_mode(self, *, allowed_actions: list[str] | None = None) -> None:
         if self.plan is None:
@@ -837,7 +826,7 @@ class BaseAgent(ABC):
         self.plan.enter(allowed_actions=allowed_actions)
 
     def request_exit_plan_mode(self, *, allowed_actions: list[str] | None = None) -> None:
-        if self.plan is None or not hasattr(self.plan, "request_exit"):
+        if self.plan is None:
             raise ExecutionModeError("Plan module is not installed")
         self.plan.request_exit(allowed_actions=allowed_actions)
 
@@ -940,7 +929,8 @@ class BaseAgent(ABC):
             cache_policy=self.config.cache_policy,
         )
 
-    def register_session_state(self, name, component, *, version=1, required=False, forkable=True):
+    def register_session_state(self, name: str, component: SessionState | Callable[[], SessionState | None],
+                               *, version: int = 1, required: bool = False, forkable: bool = True) -> "BaseAgent":
         self._sessions.register(SessionStateParticipant(name, component, version, required, forkable))
         return self
 

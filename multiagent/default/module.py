@@ -11,7 +11,7 @@ from runtime import AgentRuntime, RuntimeEventBus
 from runtime.metamessage import MetaMessage, MetaMessageLifecycle, MetaMessageManager
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
-from Tool.runtime import WorktreeManager
+from worktree import BaseWorktreeManager
 
 from .agents import AgentRuntimeManager
 from .definitions import AgentDefinitionRegistry, build_default_agent_definitions
@@ -50,7 +50,7 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         max_background_tasks: int = 4,
         agent_runtime: AgentRuntimeManager | None = None,
         team_manager: TeamManager | None = None,
-        worktree_manager: WorktreeManager | None = None,
+        worktree_manager: BaseWorktreeManager | None = None,
         agent_name: str | None = None,
         task_service: Any = None,
         observability: Any = None,

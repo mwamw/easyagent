@@ -5,6 +5,7 @@ from .history import ConversationHistory
 from .models import (
     ContextCompactionResult,
     ContextUsage,
+    ContextUsageReport,
     ModelRequestOptions,
     ModelUsage,
     ProviderReplayHistory,
@@ -47,6 +48,7 @@ __all__ = [
     "ConversationHistory",
     "ContextCompactionResult",
     "ContextUsage",
+    "ContextUsageReport",
     "ModelRequestOptions",
     "ModelUsage",
     "ProviderReplayHistory",

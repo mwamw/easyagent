@@ -667,9 +667,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     options = dict(hook.payload.get("options", options))
                 services.context_manager.validate_input(
                     request_input, tools=tools, options=options,
-                    history_epoch=services.context_manager.history_epoch + int(
-                        compaction is not None and compaction.was_compacted
-                    ),
+                    history_epoch=services.context_manager.validation_epoch(compaction),
                 )
                 self._check_stop(services)
                 if compaction is not None and compaction.was_compacted:
@@ -872,9 +870,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     options = dict(hook.payload.get("options", options))
                 await services.context_manager.avalidate_input(
                     request_input, tools=tools, options=options,
-                    history_epoch=services.context_manager.history_epoch + int(
-                        compaction is not None and compaction.was_compacted
-                    ),
+                    history_epoch=services.context_manager.validation_epoch(compaction),
                 )
                 self._check_stop(services)
                 if compaction is not None and compaction.was_compacted:
@@ -1077,9 +1073,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     options = dict(hook.payload.get("options", options))
                 services.context_manager.validate_input(
                     request_input, tools=tools, options=options,
-                    history_epoch=services.context_manager.history_epoch + int(
-                        compaction is not None and compaction.was_compacted
-                    ),
+                    history_epoch=services.context_manager.validation_epoch(compaction),
                 )
                 self._check_stop(services)
                 if compaction is not None and compaction.was_compacted:
@@ -1355,9 +1349,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     options = dict(hook.payload.get("options", options))
                 await services.context_manager.avalidate_input(
                     request_input, tools=tools, options=options,
-                    history_epoch=services.context_manager.history_epoch + int(
-                        compaction is not None and compaction.was_compacted
-                    ),
+                    history_epoch=services.context_manager.validation_epoch(compaction),
                 )
                 self._check_stop(services)
                 if compaction is not None and compaction.was_compacted:

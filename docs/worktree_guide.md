@@ -167,7 +167,7 @@ Worktree 模块提供隔离工作区能力。它对 Code Agent 尤其重要，�
 常见方式：
 
 ```python
-from Tool.runtime.worktree_manager import WorktreeManager
+from easyagent.worktree import WorktreeManager
 from easyagent.tools import register_worktree_tools
 from Tool.ToolRegistry import ToolRegistry
 

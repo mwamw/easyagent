@@ -11,6 +11,7 @@ from context.base import BaseContextManager
 from prompt.base import BaseSystemPromptComposer, PromptBuildContext
 from runtime import AgentStreamEvent, AgentRuntime
 from Tool.ToolRegistry import ToolRegistry
+from Tool.BaseTool import ToolResult
 
 from runtime.invocation import AgentInvocationPhase, AgentInvocationState
 
@@ -78,11 +79,13 @@ class BaseAgentExecutor(ABC):
     ) -> AsyncIterator[AgentStreamEvent]:
         raise NotImplementedError
 
-    def execute_tool_call(self, services, state, tool_call, index=0):
+    def execute_tool_call(self, services: AgentExecutionServices, state: AgentInvocationState,
+                          tool_call: Any, index: int = 0) -> tuple[str, dict[str, Any], str, ToolResult]:
         """Execute one model-selected tool call inside the ReAct loop."""
         raise NotImplementedError("This executor does not support tool calls")
 
-    async def aexecute_tool_call(self, services, state, tool_call, index=0):
+    async def aexecute_tool_call(self, services: AgentExecutionServices, state: AgentInvocationState,
+                                 tool_call: Any, index: int = 0) -> tuple[str, dict[str, Any], str, ToolResult]:
         """Async counterpart; implementations should await native async modules."""
         import asyncio
         return await asyncio.to_thread(self.execute_tool_call, services, state, tool_call, index)

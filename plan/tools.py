@@ -11,7 +11,7 @@ from Tool.ToolRegistry import ToolRegistry
 from Tool.claude_compat.models import ClaudeExitPlanModeInput
 
 if TYPE_CHECKING:
-    from .manager import PlanModeManager
+    from .base import BasePlanMode
 
 
 ENTER_PLAN_MODE_PROMPT = """Use this tool when you are about to start a non-trivial implementation task. Getting user sign-off on your approach before writing code prevents wasted effort and ensures alignment.
@@ -71,7 +71,7 @@ def _interrupt_result(
 
 
 class EnterPlanModeTool(Tool):
-    def __init__(self, *, plan_manager: "PlanModeManager | None" = None):
+    def __init__(self, *, plan_manager: "BasePlanMode | None" = None):
         super().__init__(
             name="EnterPlanMode",
             description="Requests plan mode and interrupts execution for caller approval.",
@@ -104,7 +104,7 @@ class EnterPlanModeTool(Tool):
 
 
 class ExitPlanModeTool(Tool):
-    def __init__(self, *, plan_manager: "PlanModeManager | None" = None):
+    def __init__(self, *, plan_manager: "BasePlanMode | None" = None):
         super().__init__(
             name="ExitPlanMode",
             description="Requests plan approval and returns requested permissions to the caller.",
@@ -147,7 +147,7 @@ def register_enter_plan_mode_tool(
     registry: ToolRegistry,
     *,
     expose_in_deferred: bool | None = True,
-    plan_manager: "PlanModeManager | None" = None,
+    plan_manager: "BasePlanMode | None" = None,
 ) -> EnterPlanModeTool:
     tool = EnterPlanModeTool(plan_manager=plan_manager)
     registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
@@ -158,7 +158,7 @@ def register_exit_plan_mode_tool(
     registry: ToolRegistry,
     *,
     expose_in_deferred: bool | None = True,
-    plan_manager: "PlanModeManager | None" = None,
+    plan_manager: "BasePlanMode | None" = None,
 ) -> ExitPlanModeTool:
     tool = ExitPlanModeTool(plan_manager=plan_manager)
     registry.register_tool(tool, expose_in_deferred=expose_in_deferred)

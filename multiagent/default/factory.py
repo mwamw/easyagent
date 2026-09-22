@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from core.cache_policy import PromptCachePolicy, build_cache_signature
 from permissions import ApprovalMode
 from permissions.default import RuleBasedPermissionEngine
 from core.request_compiler import compile_prompt_blocks
 from runtime import AgentRuntime
+from permissions.base import BasePermissionEngine
+from observability.base import BaseObservabilityManager
+from plan.base import BasePlanMode
 from multiagent.default.definitions import AgentDefinitionRegistry
+from .permissions import ChildPermissionFactory, inherit_permission_engine
+from .tool_binding import ChildToolFactory, apply_child_tool_factories, clone_tool_registry_for_workspace
 
 if TYPE_CHECKING:
+    from Tool.BaseTool import Tool
     from Tool.ToolRegistry import ToolRegistry
     from multiagent.default.agents import AgentRuntimeManager
     from multiagent.default.subagents import SubagentRequest
@@ -49,11 +55,15 @@ class DefaultSubagentFactory:
         runtime: AgentRuntime,
         tool_registry: "ToolRegistry",
         definitions: AgentDefinitionRegistry,
-        permission_engine: Any = None,
+        permission_engine: BasePermissionEngine | None = None,
+        child_permission_factory: ChildPermissionFactory | None = None,
+        child_tool_factories: Mapping[str, ChildToolFactory] | None = None,
+        parent_bound_tools: Sequence[Tool] = (),
         callback_manager: Any = None,
         skill_directories: tuple[str, ...] = (),
         task_service: Any = None,
-        observability: Any = None,
+        observability: BaseObservabilityManager | None = None,
+        plan: BasePlanMode | None = None,
         prompt_blocks_provider: Callable[[], list[Any]] | None = None,
         provider_tools_provider: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
@@ -65,10 +75,14 @@ class DefaultSubagentFactory:
         self.runtime = runtime
         self.tool_registry = tool_registry
         self.permission_engine = permission_engine
+        self.child_permission_factory = child_permission_factory or inherit_permission_engine
+        self.child_tool_factories = dict(child_tool_factories or {})
+        self.parent_bound_tools = tuple(parent_bound_tools)
         self.callback_manager = callback_manager
         self.skill_directories = tuple(skill_directories)
         self.task_service = task_service
         self.observability = observability
+        self.plan = plan
         self.prompt_blocks_provider = prompt_blocks_provider
         self.provider_tools_provider = provider_tools_provider
         self.definitions = definitions
@@ -119,30 +133,10 @@ class DefaultSubagentFactory:
     def __call__(self, request: "SubagentRequest") -> Any:
         from agent.BasicAgent import BasicAgent
         from core.llm import EasyLLM
-        from multiagent.default.tools import clone_tool_registry_for_workspace
 
         definition = self.definitions.get(request.agent_type)
         workspace_root = request.workspace_root or self.runtime.workspace_root
         allowed_roots = tuple(request.allowed_roots or (workspace_root,))
-        registry = clone_tool_registry_for_workspace(
-            self.tool_registry,
-            workspace_root=workspace_root,
-            allowed_roots=allowed_roots,
-            cwd=workspace_root,
-        )
-        if definition.tools is not None:
-            allowed = set(definition.tools)
-            registry.unregister_tools(
-                [name for name in registry.get_tool_names() if name not in allowed]
-            )
-        if definition.disallowed_tools:
-            registry.unregister_tools(
-                [
-                    name
-                    for name in definition.disallowed_tools
-                    if registry.has_tool(name)
-                ]
-            )
 
         config = self.config.model_copy(deep=True) if hasattr(self.config, "model_copy") else deepcopy(self.config)
         if config is not None:
@@ -173,15 +167,6 @@ class DefaultSubagentFactory:
 
         requested_mode = request.mode or definition.permission_mode
         approval_mode = _subagent_approval_mode(requested_mode)
-        child_permission_engine = deepcopy(self.permission_engine) if self.permission_engine is not None else None
-        if approval_mode is not None:
-            if child_permission_engine is None:
-                child_permission_engine = RuleBasedPermissionEngine(
-                    workspace_root=workspace_root,
-                    load_policies=False,
-                )
-            child_permission_engine.set_approval_mode(approval_mode)
-
         task_id = request.metadata.get("task_id") if isinstance(request.metadata, dict) else None
         team_id = None
         if request.team_name and self._team_manager is not None:
@@ -208,6 +193,25 @@ class DefaultSubagentFactory:
             },
         )
 
+        selected_names = {
+            name for name in self.tool_registry.get_tool_names()
+            if (definition.tools is None or name in definition.tools)
+            and name not in definition.disallowed_tools
+        }
+        # Overrides are applied after module assembly, so factories can also
+        # replace/omit module-contributed tools without registration conflicts.
+        excluded = [
+            tool for tool in self.tool_registry.get_visible_tools()
+            if tool.name not in selected_names or tool.name in self.child_tool_factories
+        ]
+        registry = clone_tool_registry_for_workspace(
+            self.tool_registry, workspace_root=workspace_root,
+            allowed_roots=allowed_roots, cwd=workspace_root, runtime=child_context,
+            excluded_tools=(
+                *excluded, *self.parent_bound_tools,
+                *(self.plan.get_tools() if self.plan else ()),
+            ),
+        )
         child = BasicAgent(
             name=request.name or request.description or "Subagent",
             llm=child_llm,
@@ -221,21 +225,40 @@ class DefaultSubagentFactory:
             runtime=child_context,
         )
         child.reasoning = deepcopy(self.reasoning)
+        child_permission_engine = (
+            self.child_permission_factory(self.permission_engine, child_context)
+            if self.permission_engine is not None else None
+        )
+        if self.permission_engine is not None and not isinstance(child_permission_engine, BasePermissionEngine):
+            raise TypeError("Child permission factory must return BasePermissionEngine")
+        if child_permission_engine is None and approval_mode is not None:
+            child_permission_engine = RuleBasedPermissionEngine(
+                approval_mode=approval_mode, workspace_root=workspace_root, load_policies=False,
+            )
+        if child_permission_engine is not None and child_permission_engine is self.permission_engine:
+            raise ValueError("Child permission factory must not rebind the parent engine")
         if child_permission_engine is not None:
             child.with_permissions(child_permission_engine)
         if self.callback_manager is not None:
             child.with_callbacks(self.callback_manager)
         child.with_tool(registry)
+        if self.plan is not None:
+            child_plan = self.plan.create_child()
+            if child_plan is self.plan:
+                raise ValueError("Plan.create_child must not return the parent instance")
+            if child_plan is not None:
+                child.with_plan(child_plan)
         if self.skill_directories:
             child.with_skill(*self.skill_directories)
         if self.task_service is not None:
             child.with_task_service(self.task_service)
         if self.observability is not None and getattr(child, "observability", None) is None:
-            child.with_observability(
-                manager=self.observability.create_child(
-                    parent_invoke_id=request.metadata.get("parent_agent_invoke_id"),
-                )
+            child_observability = self.observability.create_child(
+                parent_invoke_id=request.metadata.get("parent_agent_invoke_id"),
             )
+            if child_observability is self.observability:
+                raise ValueError("Observability.create_child must return an independent binding")
+            child.with_observability(manager=child_observability)
         if bool(getattr(config, "subagent_inherit_cache_safe_params", True)):
             child_context.metadata.setdefault("cacheSafeParams", self.cache_safe_params())
 
@@ -259,6 +282,25 @@ class DefaultSubagentFactory:
                     definitions=self.definitions,
                 )
             )
+        apply_child_tool_factories(
+            registry, self.tool_registry, child_context,
+            {name: factory for name, factory in self.child_tool_factories.items()
+             if name in selected_names},
+        )
+        # Modules contribute fresh child-bound tools. Preserve the parent's
+        # explicit security descriptor even for those reconstructed capabilities.
+        for name in registry.get_tool_names():
+            if self.tool_registry.has_tool(name):
+                spec = registry.get_tool_spec(name)
+                registry.register_tool(
+                    registry.get_tool(name),
+                    visibility=registry.get_tool_visibility(name) or "resident",
+                    expose_in_deferred=spec.expose_in_deferred,
+                    permission_descriptor=deepcopy(self.tool_registry.get_permission_descriptor(name)),
+                )
+        if definition.tools is not None:
+            registry.unregister_tools([name for name in registry.get_tool_names() if name not in definition.tools])
+        registry.unregister_tools([name for name in definition.disallowed_tools if registry.has_tool(name)])
         return child
 
 

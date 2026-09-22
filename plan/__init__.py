@@ -1,6 +1,7 @@
 """Public plan-mode module."""
 
-from .manager import BasePlanMode, PlanModeManager
+from .base import BasePlanMode
+from .manager import PlanModeManager
 from .models import (
     DEFAULT_PLAN_ENTER_MESSAGE,
     DEFAULT_PLAN_EXIT_MESSAGE,

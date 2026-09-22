@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
+from runtime.agent import AgentRuntime
 
 from ..base import BasePermissionEngine
 from ..models import (
@@ -30,7 +30,8 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
         policy_paths: list[str] | None = None,
         load_policies: bool = True,
     ) -> None:
-        self.approval_mode = ApprovalMode(approval_mode)
+        self._runtime: AgentRuntime | None = None
+        self._initial_mode = ApprovalMode(approval_mode)
         self.workspace_root = workspace_root
         self._policy = PolicySet()
         self._grants: list[PermissionGrant] = []
@@ -41,6 +42,28 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
                 loaded = load_policy_file(location, source=str(location))
                 self._policy.extend(loaded.rules)
             self._policy_revision = self._policy.revision
+
+    @property
+    def approval_mode(self) -> ApprovalMode:
+        return ApprovalMode(self._runtime.permission_mode) if self._runtime else self._initial_mode
+
+    @approval_mode.setter
+    def approval_mode(self, mode: ApprovalMode | str) -> None:
+        resolved = ApprovalMode(mode)
+        if self._runtime is None:
+            self._initial_mode = resolved
+        else:
+            self._runtime.permission_mode = resolved.value
+
+    def bind(self, runtime: AgentRuntime) -> None:
+        if self._runtime is not None and self._runtime is not runtime:
+            raise RuntimeError("Permission engine already belongs to another Agent")
+        if self._runtime is None:
+            runtime.permission_mode = self._initial_mode.value
+        self._runtime = runtime
+
+    def set_mode(self, mode: str) -> None:
+        self.set_approval_mode(mode)
 
     def describe_tool(self, tool: Any) -> ToolPermissionDescriptor:
         getter = getattr(tool, "get_permission_descriptor", None)

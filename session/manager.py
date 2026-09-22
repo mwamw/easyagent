@@ -16,7 +16,11 @@ from context.base import BaseContextManager
 from runtime.agent import AgentRuntime
 from core.Exception import SessionNotFoundError, SessionSerializationError
 
-from .report import SessionRestoreReport
+from .report import ComponentRestoreReport, SessionRestoreReport
+from .state import (
+    SessionState, SessionStateData, ValidatableSessionState,
+    ResettableSessionState, ForkableSessionState,
+)
 from .stores.base import BaseSessionStore
 
 
@@ -31,15 +35,21 @@ class SessionStateParticipant:
     """A component that contributes serializable state to a session."""
 
     name: str
-    component: object | Callable[[], object | None]
+    component: SessionState | Callable[[], SessionState | None]
     version: int = 1
     required: bool = False
     forkable: bool = True
 
-    def resolve(self) -> object | None:
+    def resolve(self) -> SessionState | None:
         if inspect.isfunction(self.component) or inspect.ismethod(self.component):
-            return self.component()
-        return self.component
+            component = self.component()
+        else:
+            component = self.component
+        if component is None or isinstance(component, SessionState):
+            return component
+        if self.required:
+            raise TypeError(f"Required participant {self.name!r} must implement SessionState")
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,11 +131,9 @@ class SessionManager:
             component = binding.resolve()
             if component is None or (fork and not binding.forkable):
                 continue
-            exporter = getattr(component, "export_state", None)
-            value = exporter() if callable(exporter) else None
-            fork_state = getattr(component, "fork_state", None)
-            if fork and callable(fork_state):
-                value = fork_state(deepcopy(value))
+            value = component.export_state()
+            if fork and isinstance(component, ForkableSessionState):
+                value = component.fork_state(deepcopy(value))
             modules[name] = {
                 "version": binding.version,
                 "required": binding.required,
@@ -314,7 +322,7 @@ class SessionManager:
                 metadata={"savedProvider": provider, "currentProvider": current_provider},
             )
 
-        operations: list[tuple[str, object, Any]] = []
+        operations: list[tuple[str, SessionState, SessionStateData]] = []
         unknown: dict[str, Any] = {}
         module_states = dict(snapshot.get("modules") or {})
         for name, raw_value in module_states.items():
@@ -323,8 +331,7 @@ class SessionManager:
             value = dict(raw_value)
             binding = self._participants.get(name)
             component = binding.resolve() if binding else None
-            importer = getattr(component, "restore_state", None)
-            if component is None or (value.get("state") is not None and not callable(importer)):
+            if component is None:
                 if value.get("required"):
                     raise SessionSerializationError(f"Required session component is missing: {name}")
                 unknown[name] = deepcopy(value)
@@ -337,37 +344,50 @@ class SessionManager:
             if value.get("version", 1) != binding.version:
                 raise SessionSerializationError(f"Unsupported state version for {name}")
             if value.get("state") is not None:
-                validator = getattr(component, "validate_state", None)
-                if callable(validator):
-                    validator(deepcopy(value["state"]))
+                if isinstance(component, ValidatableSessionState):
+                    component.validate_state(deepcopy(value["state"]))
                 operations.append((name, component, deepcopy(value["state"])))
 
         for name, binding in self._participants.items():
             if name == "context" or module_states.get(name, {}).get("state") is not None:
                 continue
             component = binding.resolve()
-            if callable(getattr(component, "reset_session_state", None)):
+            if isinstance(component, ResettableSessionState):
                 operations.append((name, component, None))
 
         context = self.bindings.context()
         saved_history = context.export_state()
-        backups: list[tuple[object, Any]] = []
+        backups: list[tuple[SessionState, SessionStateData]] = []
         try:
             context.restore_state(history)
             for name, component, value in operations:
-                exporter = getattr(component, "export_state", None)
-                backups.append((component, deepcopy(exporter()) if callable(exporter) else None))
+                backups.append((component, deepcopy(component.export_state())))
                 outcome = (
                     component.reset_session_state()
                     if value is None
                     else component.restore_state(value)
                 )
-                if isinstance(outcome, dict):
+                if isinstance(outcome, ComponentRestoreReport):
+                    report.extend_component(name, outcome.to_dict())
+                elif isinstance(outcome, dict):
                     report.extend_component(name, outcome)
-        except BaseException:
-            context.restore_state(saved_history)
+                elif outcome is not None:
+                    raise TypeError(f"Invalid restore result from session participant {name!r}")
+        except BaseException as error:
+            rollback_errors = []
+            try:
+                context.restore_state(saved_history)
+            except Exception as rollback_error:
+                rollback_errors.append(f"context: {rollback_error}")
             for component, backup in reversed(backups):
-                component.restore_state(backup)
+                try:
+                    component.restore_state(backup)
+                except Exception as rollback_error:
+                    rollback_errors.append(f"{type(component).__name__}: {rollback_error}")
+            if rollback_errors:
+                raise SessionSerializationError(
+                    "Session restore failed; rollback was incomplete: " + "; ".join(rollback_errors)
+                ) from error
             raise
 
         self._unknown = unknown

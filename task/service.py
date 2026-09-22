@@ -9,9 +9,10 @@ from core.Exception import TaskNotFoundError
 
 from .models import TaskRecord, TaskStatus
 from .store import BaseTaskStore
+from .base import BaseTaskService
 
 
-class TaskService:
+class TaskService(BaseTaskService):
     def __init__(self, store: BaseTaskStore):
         self.store = store
 

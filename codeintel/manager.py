@@ -18,6 +18,8 @@ from .models import (
     WorkspaceSymbolsQuery,
 )
 from .provider import CodeIntelProvider
+from .base import BaseCodeIntel
+from runtime.agent import AgentRuntime
 
 
 DEFAULT_CODEINTEL_SUFFIXES = (
@@ -50,23 +52,23 @@ DEFAULT_SKIP_DIRS = {
 }
 
 
-class CodeIntelManager:
+class CodeIntelManager(BaseCodeIntel):
     def __init__(
         self,
         *,
         provider: CodeIntelProvider,
-        parent_agent: Any | None = None,
+        runtime: AgentRuntime | None = None,
         workspace_root: Optional[str] = None,
         allowed_roots: Optional[Iterable[str]] = None,
         cache: WorkspaceCodeIntelCache | None = None,
         workspace_caches: Optional[Iterable[WorkspaceCodeIntelCache]] = None,
     ):
         self.provider = provider
-        self.parent_agent = parent_agent
-        self.workspace_root = os.path.abspath(workspace_root or self._infer_workspace_root(parent_agent) or os.getcwd())
+        self.runtime = runtime
+        self.workspace_root = os.path.abspath(workspace_root or (runtime.workspace_root if runtime else os.getcwd()))
         inferred_roots = tuple(
             os.path.abspath(item)
-            for item in (allowed_roots or self._infer_allowed_roots(parent_agent))
+            for item in (allowed_roots or (runtime.allowed_roots if runtime else ()))
             if item
         )
         self.allowed_roots = inferred_roots or (self.workspace_root,)
@@ -81,42 +83,10 @@ class CodeIntelManager:
         if self.workspace_root not in self._workspace_caches:
             self._workspace_caches[self.workspace_root] = WorkspaceCodeIntelCache(self.workspace_root)
 
-    @staticmethod
-    def _infer_workspace_root(parent_agent: Any | None) -> Optional[str]:
-        if parent_agent is None:
-            return None
-        runtime = getattr(parent_agent, "runtime", None)
-        worktree_path = getattr(runtime, "worktree_path", None)
-        if worktree_path:
-            return os.path.abspath(str(worktree_path))
-        workspace_root = getattr(runtime, "workspace_root", None)
-        if workspace_root:
-            return os.path.abspath(str(workspace_root))
-        config = getattr(parent_agent, "config", None)
-        workspace_root = getattr(config, "workspace_root", None)
-        if workspace_root:
-            return os.path.abspath(str(workspace_root))
-        return None
-
-    @staticmethod
-    def _infer_allowed_roots(parent_agent: Any | None) -> tuple[str, ...]:
-        if parent_agent is None:
-            return ()
-        runtime = getattr(parent_agent, "runtime", None)
-        roots = tuple(getattr(runtime, "allowed_roots", ()) or ())
-        if roots:
-            return tuple(os.path.abspath(str(item)) for item in roots if item)
-        config = getattr(parent_agent, "config", None)
-        if config is not None and hasattr(config, "get_allowed_roots"):
-            try:
-                values = config.get_allowed_roots()
-            except Exception:
-                values = []
-            return tuple(os.path.abspath(str(item)) for item in values if item)
-        return ()
-
-    def bind_parent_agent(self, parent_agent: Any | None) -> None:
-        self.parent_agent = parent_agent
+    def bind(self, runtime: AgentRuntime) -> None:
+        if self.runtime is not None and self.runtime is not runtime:
+            raise RuntimeError("CodeIntel cannot be shared between Agent runtimes")
+        self.runtime = runtime
 
     def _cache_for(self, workspace_root: str) -> WorkspaceCodeIntelCache:
         normalized = os.path.abspath(workspace_root)
@@ -127,24 +97,22 @@ class CodeIntelManager:
         return cache
 
     def _current_workspace_root(self) -> str:
-        parent_agent = self.parent_agent
-        if parent_agent is None:
+        runtime = self.runtime
+        if runtime is None:
             return self.workspace_root
-        runtime = getattr(parent_agent, "runtime", None)
-        worktree_path = getattr(runtime, "worktree_path", None)
+        worktree_path = runtime.worktree_path
         if worktree_path:
             return os.path.abspath(str(worktree_path))
-        workspace_root = getattr(runtime, "workspace_root", None)
+        workspace_root = runtime.workspace_root
         if workspace_root:
             return os.path.abspath(str(workspace_root))
         return self.workspace_root
 
     def _current_allowed_roots(self, workspace_root: str) -> tuple[str, ...]:
-        parent_agent = self.parent_agent
-        if parent_agent is None:
+        runtime = self.runtime
+        if runtime is None:
             return self.allowed_roots
-        runtime = getattr(parent_agent, "runtime", None)
-        roots = tuple(getattr(runtime, "allowed_roots", ()) or ())
+        roots = runtime.allowed_roots
         if roots:
             normalized = tuple(os.path.abspath(str(item)) for item in roots if item)
             return normalized or (workspace_root,)
@@ -634,7 +602,7 @@ class CodeIntelManager:
         cls,
         state: dict[str, Any] | None,
         *,
-        parent_agent: Any | None = None,
+        runtime: AgentRuntime | None = None,
         workspace_root: Optional[str] = None,
         allowed_roots: Optional[Iterable[str]] = None,
         provider: Optional[CodeIntelProvider] = None,
@@ -642,7 +610,7 @@ class CodeIntelManager:
         payload = dict(state or {})
         manager = cls(
             provider=provider or cls._provider_from_state(payload.get("provider") or {}),
-            parent_agent=parent_agent,
+            runtime=runtime,
             workspace_root=workspace_root or payload.get("workspaceRoot"),
             allowed_roots=allowed_roots or payload.get("allowedRoots"),
         )

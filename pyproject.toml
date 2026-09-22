@@ -81,6 +81,7 @@ include = [
   "session*",
   "skill*",
   "task*",
+  "worktree*",
   "Tool*",
   "observability*",
   "training*",

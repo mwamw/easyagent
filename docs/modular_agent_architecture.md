@@ -375,3 +375,8 @@ Callback、Observability、session 和 training 不再维护不同 trace 模型�
 - [`example/example_modular_agent_framework.py`](../example/example_modular_agent_framework.py)
 
 示例使用真实 `EasyLLM`，安装 Prompt、MetaMessage、Tool、Context、Plan、Task、CodeIntel、Observability 和 MultiAgent，执行 plan/execute 两次调用，最后从真实 trace 导出三种训练数据。该文件只作为交付示例提供，框架测试不会执行它。
+
+## Module contract and isolation update
+
+See [Module composition contracts](composition_contracts.md) for fixed mechanisms,
+replaceable module boundaries, child tool inheritance, and session state protocols.
