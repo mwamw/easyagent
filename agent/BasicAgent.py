@@ -45,12 +45,9 @@ class BasicAgent(BaseAgent):
         executor = self.executor
         if not isinstance(executor, BaseAgentExecutor):
             raise RuntimeError("BasicAgent requires an installed BaseAgentExecutor")
-        mailbox_sync = lambda: None
+        before_context_build = lambda: None
         if self.multi_agent is not None:
-            mailbox_sync = lambda: self.multi_agent.sync_mailbox(
-                execution_context=self.execution_context,
-                metamessage_manager=self.metamessage_manager,
-            )
+            before_context_build = self.multi_agent.before_context_build
         return AgentExecutionServices(
             agent_id=self.name,
             llm=self.llm,
@@ -68,7 +65,7 @@ class BasicAgent(BaseAgent):
             reasoning=self.reasoning,
             interrupt_controller=self.interrupt_controller,
             stop_checker=self.stop_reason_if_requested,
-            mailbox_sync=mailbox_sync,
+            before_context_build=before_context_build,
             session_id=self.session_id,
             invocation_lock=self._invocation_lock,
         )

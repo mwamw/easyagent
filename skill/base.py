@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
 
-SkillExecutionContext = Literal["inline", "fork"]
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 
 
@@ -26,9 +25,6 @@ class SkillManifest(BaseModel):
     file_path: str
     recommended_tools: list[str] = Field(default_factory=list)
     argument_hint: str = ""
-    context: SkillExecutionContext = "inline"
-    agent: str | None = None
-    model: str | None = None
     paths: list[str] = Field(default_factory=list)
     disable_model_invocation: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -54,4 +50,4 @@ class SkillManifest(BaseModel):
         return normalized
 
 
-__all__ = ["SkillExecutionContext", "SkillManifest"]
+__all__ = ["SkillManifest"]

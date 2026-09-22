@@ -63,7 +63,7 @@
 | 公共入口 | [API 指南](../framework_api.md)、[BasicAgent](../../agent/BasicAgent.py) | 支持默认装配与执行器替换；不证明任意调度细节均有独立插件接口。 |
 | Memory | [BaseMemory](../../memory/base.py)、[指南](../memory_system_guide.md) | 说明、工具、Hook 的可选契约和绑定责任；不证明各种文件/外部记忆方案已实现。 |
 | Context | [BaseContextManager](../../context/base.py)、[指南](../context_and_compaction_guide.md) | 组装、预算、压缩与来源解耦；不证明完全没有估算误差。 |
-| 动态消息 | [MetaMessageEmitter](../../metamessage/emitter.py)、[API 指南](../framework_api.md) | 源无关注入机制；不证明完整事件溯源或任意副作用事务恢复。 |
+| 动态消息 | [MetaMessageEmitter](../../runtime/metamessage/emitter.py)、[API 指南](../framework_api.md) | 源无关注入机制；不证明完整事件溯源或任意副作用事务恢复。 |
 | Session | [Store 契约](../../core/session/store.py)、[持久化指南](../session_restore_persistence_guide.md) | 显式装配后恢复、存储替换；不是完整 transcript 或外部任务恢复。 |
 | Storage | [公共存储指南](../storage_guide.md) | 与领域对象分离的后端和 Embedding 接口；实际部署仍需后端依赖与配置。 |
 | 示例 | [模块边界示例](../../example/example_module_boundaries.py) | 公共接口的装配方式；不将示例代码行数用作效率实验。 |

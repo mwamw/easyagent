@@ -6,19 +6,20 @@ import json
 from types import SimpleNamespace
 
 from pydantic import BaseModel
+import pytest
 
 import agent
 from agent import BasicAgent
 from prompt.composer import BaseSystemPromptComposer, PromptBuildContext
 from core.hooks import BaseHook, HookDecision, HookManager
 from core.llm import EasyLLM
-from metamessage import MetaMessage, MetaMessageLifecycle
+from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from observability import InMemoryObservabilityStore
 from plan import PlanModeConfig
 from prompt import PromptBlock
-from runtime import AgentRuntimeManager, AgentStreamEventType, ExecutionContext
+from runtime import AgentStreamEventType, ExecutionContext
+from multiagent.default import AgentRuntimeManager, SubagentRequest
 from Tool import Tool, ToolRegistry
-from Tool.runtime import SubagentRequest
 
 
 def _response(
@@ -214,6 +215,11 @@ def test_basic_agent_has_light_defaults_and_only_final_invocation_api():
 def test_with_methods_install_dependencies_without_replacing_custom_modules():
     instance = BasicAgent("composed", ScriptedLLM())
     assert not hasattr(instance, "with_metamessage")
+    assert not hasattr(instance, "with_event_bus")
+    with pytest.raises(AttributeError):
+        instance.metamessage_manager = object()
+    with pytest.raises(AttributeError):
+        instance.event_bus = object()
     registry = ToolRegistry()
     instance.with_tool(registry).with_plan(
         config=PlanModeConfig(register_tools=False)
@@ -229,8 +235,6 @@ def test_with_methods_install_dependencies_without_replacing_custom_modules():
         "AgentWait",
         "AgentStop",
         "SendMessage",
-        "MailboxRead",
-        "MailboxAck",
         "TeamCreate",
         "TeamDelete",
     }

@@ -2,29 +2,38 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from runtime import TeamManager
+from multiagent.default.teams import TeamManager
+from runtime import ExecutionContext
 
-from ..BaseTool import Tool, ToolResult
-from ..ToolRegistry import ToolRegistry
-from .display_utils import format_structured_display
+from Tool.BaseTool import Tool, ToolResult
+from Tool.ToolRegistry import ToolRegistry
+from Tool.builtin.display_utils import format_structured_display
 
 
 class TeamDeleteParams(BaseModel):
-    team_id: str = Field(description="ID or name of the team to delete")
+    pass
 
 
-TEAM_DELETE_PROMPT = """Deletes a team handle.
-- Supply team_id or the team name.
-- This removes the team record; it does not stop member agents or delete their worktrees and task records.
-- Stop or finish members as appropriate before removing the team.
-- Do not treat successful deletion as proof that background work has stopped."""
+TEAM_DELETE_PROMPT = """# TeamDelete
+
+Remove the current team when collaborative work is complete.
+
+This operation removes the team record and clears the current team context. It does not silently terminate running agents or delete their worktrees.
+
+IMPORTANT: TeamDelete fails while the team still has active members. Gracefully stop teammates first, then call TeamDelete after they have shut down."""
 
 
 class TeamDeleteTool(Tool):
-    def __init__(self, *, team_manager: TeamManager):
+    def __init__(
+        self,
+        *,
+        team_manager: TeamManager,
+        execution_context: ExecutionContext | None = None,
+    ):
         self.team_manager = team_manager
+        self.execution_context = execution_context
         super().__init__(
             name="TeamDelete",
             description="Deletes an agent team.",
@@ -41,9 +50,18 @@ class TeamDeleteTool(Tool):
         )
 
     def run(self, parameters: dict) -> ToolResult:
-        identifier = parameters["team_id"]
+        metadata = dict(getattr(self.execution_context, "metadata", {}) or {})
+        identifier = str(metadata.get("teamName") or metadata.get("teamId") or "").strip()
+        if not identifier:
+            return ToolResult.error(
+                "No active team context.",
+                error_type="team_delete_failed",
+            )
         try:
             team = self.team_manager.delete_team(identifier)
+            if self.execution_context is not None:
+                self.execution_context.metadata.pop("teamName", None)
+                self.execution_context.metadata.pop("teamId", None)
         except Exception as exc:
             return ToolResult.error(
                 f"删除团队失败: {exc}",
@@ -66,9 +84,13 @@ def register_team_delete_tool(
     registry: ToolRegistry,
     *,
     team_manager: TeamManager,
+    execution_context: ExecutionContext | None = None,
     expose_in_deferred: bool | None = True,
 ) -> TeamDeleteTool:
-    tool = TeamDeleteTool(team_manager=team_manager)
+    tool = TeamDeleteTool(
+        team_manager=team_manager,
+        execution_context=execution_context,
+    )
     registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool
 

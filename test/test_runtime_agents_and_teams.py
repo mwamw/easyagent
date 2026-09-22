@@ -11,19 +11,19 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from Tool.ToolRegistry import ToolRegistry
-from Tool.builtin import (
+from multiagent.default.tools import (
     AgentTool,
     register_agent_runtime_tools,
-    register_mailbox_tools,
     register_send_message_tool,
     register_team_create_tool,
     register_team_delete_tool,
 )
-from Tool.runtime import SubagentRequest
+from multiagent import ClaudeCodeMultiAgent
+from multiagent.default import AgentRuntimeManager, SubagentRequest, TeamManager
 from agent import BasicAgent
 from core.Exception import AgentStopRequested
 from core.llm import EasyLLM
-from runtime import AgentRuntimeManager, ExecutionContext, MultiAgentRuntime, TeamManager
+from runtime import ExecutionContext
 from task import InMemoryTaskStore, TaskService
 
 
@@ -333,11 +333,30 @@ class TestCollaborationTools(unittest.TestCase):
             runtime.bind_team_manager(teams)
 
             registry = ToolRegistry()
-            create_tool = register_team_create_tool(registry, team_manager=teams)
-            delete_tool = register_team_delete_tool(registry, team_manager=teams)
-            send_tool = register_send_message_tool(registry, agent_runtime=runtime)
+            context = ExecutionContext(
+                workspace_root=tempdir,
+                allowed_roots=(tempdir,),
+                metadata={"agentId": "manager"},
+            )
+            create_tool = register_team_create_tool(
+                registry,
+                team_manager=teams,
+                creator_name="manager",
+                execution_context=context,
+            )
+            delete_tool = register_team_delete_tool(
+                registry,
+                team_manager=teams,
+                execution_context=context,
+            )
+            send_tool = register_send_message_tool(
+                registry,
+                agent_runtime=runtime,
+                sender_name="manager",
+                execution_context=context,
+            )
 
-            create_result = create_tool.run({"name": "analysis"})
+            create_result = create_tool.run({"team_name": "analysis"})
             team_id = create_result.structured_data["teamId"]
             handle = runtime.run(
                 SubagentRequest(
@@ -351,13 +370,12 @@ class TestCollaborationTools(unittest.TestCase):
 
             send_result = send_tool.run(
                 {
-                    "recipient_type": "team",
-                    "recipient_id": team_id,
-                    "content": "先整理结论，再补理由",
-                    "sender_id": "manager",
+                    "to": "*",
+                    "summary": "request concise result",
+                    "message": "先整理结论，再补理由",
                 }
             )
-            delete_result = delete_tool.run({"team_id": team_id})
+            delete_result = delete_tool.run({})
 
             self.assertEqual(create_result.status, "success")
             self.assertIn('"teamId"', create_result.to_display_string())
@@ -388,14 +406,16 @@ class TestCollaborationTools(unittest.TestCase):
             worker = BasicAgent(
                 name="worker",
                 llm=DummyLLM(),
-            ).with_tool(worker_registry).with_multi_agent(
-                MultiAgentRuntime(
+            ).with_tool(worker_registry)
+            worker.execution_context = handle.execution_context
+            worker.with_multi_agent(
+                ClaudeCodeMultiAgent(
+                    agent_factory=lambda request: FakeSubagent(),
                     workspace_root=tempdir,
                     storage_dir=os.path.join(tempdir, ".agents"),
                     agent_runtime=runtime,
                 )
             )
-            worker.execution_context = handle.execution_context
 
             runtime.send_message(
                 recipient_type="agent",
@@ -404,16 +424,13 @@ class TestCollaborationTools(unittest.TestCase):
                 sender_id="manager",
             )
 
-            worker.multi_agent.sync_mailbox(
-                execution_context=worker.execution_context,
-                metamessage_manager=worker.metamessage_manager,
-            )
+            worker.multi_agent.before_context_build()
             worker.metamessage_manager.flush()
             self.assertNotIn("## 协作邮箱", worker.get_enhanced_prompt())
             mailbox_messages = [
                 message
                 for message in worker.history
-                if getattr(message, "metadata", {}).get("source") == "mailbox"
+                if getattr(message, "metadata", {}).get("source") == "multiagent"
             ]
             self.assertEqual(len(mailbox_messages), 1)
             self.assertIn(
@@ -424,26 +441,12 @@ class TestCollaborationTools(unittest.TestCase):
             delivered = runtime.list_mailbox(handle.agent_id, include_consumed=False)
             self.assertEqual(delivered[0].status, "delivered")
 
-            read_result = worker_registry.execute_tool_result("MailboxRead", {"limit": 20})
-            self.assertEqual(read_result.status, "success")
-            self.assertEqual(read_result.structured_data["count"], 1)
-            self.assertIn('"messages"', read_result.to_display_string())
-
-            message_id = read_result.structured_data["messages"][0]["messageId"]
-            ack_result = worker_registry.execute_tool_result("MailboxAck", {"message_ids": [message_id]})
-            self.assertEqual(ack_result.status, "success")
-            self.assertEqual(ack_result.structured_data["messages"][0]["status"], "consumed")
-            self.assertIn('"ackedAll"', ack_result.to_display_string())
-
-            worker.multi_agent.sync_mailbox(
-                execution_context=worker.execution_context,
-                metamessage_manager=worker.metamessage_manager,
-            )
+            worker.multi_agent.before_context_build()
             worker.metamessage_manager.flush()
             mailbox_messages_after_ack = [
                 message
                 for message in worker.history
-                if getattr(message, "metadata", {}).get("source") == "mailbox"
+                if getattr(message, "metadata", {}).get("source") == "multiagent"
             ]
             self.assertEqual(len(mailbox_messages_after_ack), 1)
             runtime.close()
@@ -571,8 +574,11 @@ class TestCollaborationTools(unittest.TestCase):
             teams.create_team(name="task-team")
 
             tool = AgentTool(
-                parent_agent=parent,
                 agent_factory=lambda request: FakeSubagent(),
+                execution_context=parent.execution_context,
+                tool_registry=parent.tool_registry,
+                agent_name=parent.name,
+                task_service=parent.task_service,
                 agent_runtime=runtime,
                 workspace_root=tempdir,
                 storage_dir=os.path.join(tempdir, ".agents"),

@@ -122,7 +122,7 @@ def main() -> None:
         agent.enter_plan_mode(allowed_actions=["read files", "query code intelligence", "delegate read-only analysis"])
         print_stream(
             agent,
-            "审查 runtime/multi_agent.py 与 metamessage/manager.py 的协作边界，只制定检查计划，不修改文件。",
+            "审查 runtime/multi_agent.py 与 runtime/metamessage/manager.py 的协作边界，只制定检查计划，不修改文件。",
         )
 
         if agent.get_execution_mode() is ExecutionMode.PLAN:

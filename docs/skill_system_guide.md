@@ -85,13 +85,13 @@ The Skill directory is `${SKILL_DIR}`.
 | `when_to_use` | 否 | 模型应主动调用 Skill 的条件和示例 |
 | `argument-hint` | 否 | `args` 的格式提示 |
 | `recommended-tools` | 否 | 工具使用建议，不授权工具，也不展开工具 Schema |
-| `context` | 否 | `inline` 或 `fork`，默认 `inline` |
-| `agent` | 否 | fork Skill 使用的 subagent 类型，只允许配合 `context: fork` |
-| `model` | 否 | fork Skill 使用的模型，只允许配合 `context: fork` |
 | `paths` | 否 | 条件发现的 gitignore 风格工作区路径模式 |
 | `disable-model-invocation` | 否 | 为 `true` 时不进入 listing，模型也不能调用 |
 
 未识别字段保存在 `SkillManifest.metadata`，供应用层扩展使用，但框架不会隐式执行这些字段。
+`context`、`agent` 和 `model` 属于 Agent 执行控制字段，Skill frontmatter 明确禁止使用。
+如果某个工作流适合交给子 Agent，应在正文中建议模型在 `Agent` 工具已经可用时使用它；
+Skill 不安装、启用或直接调用 Multi-Agent 能力。
 
 正文支持两个替换变量：
 
@@ -180,39 +180,21 @@ SkillManager 返回已安装工具的建议条目；不可用的条目进入 `un
 括号内的文本只是建议，不被解释成授权规则。Skill 不注册工具、不展开 Deferred Schema，
 不调用权限引擎的规则管理接口。旧 `allowed-tools` 不具有任何授权效果，应迁移为 `recommended-tools`。
 
-inline 和 fork Skill 均不能绕过 ASK 或 DENY；fork 委派调用仍通过 Agent 的正常工具授权入口。
-激活、结束、失败、中断、恢复和关闭 Skill 都不修改既有权限规则。
+推荐 `Agent` 也不会安装或调用 Multi-Agent。只有用户显式装配 Multi-Agent 后，模型才会看到其工具；
+后续调用仍经过 Executor 和 Permission 的正常流程。激活、结束、失败、中断、恢复和关闭 Skill
+都不修改既有权限规则。
 
-## 8. Inline 与 Fork
+## 8. Skill 与 Multi-Agent
 
-### Inline
+Skill 始终在当前 Agent invocation 中加载完整正文。它是能力说明与工作流指导，不是执行编排器。
 
-`context: inline` 在当前 Agent 中注入完整正文，适合需要继续和用户交互、依赖当前上下文或需要多轮工具调用的工作流。正文只在当前 Agent invoke 中保留。
-
-### Fork
-
-```yaml
-context: fork
-agent: reviewer
-model: qwen3.5-9b
+```markdown
+Use a subagent for an independent review when the Agent tool is already available.
+Otherwise perform the review with the currently installed tools.
 ```
 
-fork Skill 必须先通过 `agent.with_multi_agent()` 提供 `Agent` 工具。SkillManager 同步创建子 Agent，并将已展开的 Skill 正文作为完整任务 prompt。ToolResult 返回：
-
-```json
-{
-  "success": true,
-  "skill": "deep-review",
-  "status": "forked",
-  "agentId": "agent_...",
-  "outputFile": "/workspace/.easyagent-agents/agent_....md",
-  "result": "...",
-  "recommendedTools": ["FileRead", "Grep"],
-  "unavailableRecommendedTools": []
-}
-```
-
-默认子 Agent 会获得自己的 SkillManager 和自己的 `skill_tool`，不会复用指向父 Agent 的工具实例，因此子 Agent 加载 Skill 不会污染父 Agent history。
+是否安装 Multi-Agent、使用哪个子 Agent、选择哪个模型以及是否批准调用，分别属于产品装配、
+Multi-Agent、Model 和 Permission 的职责。Skill 只向模型提供建议，不管理这些模块。
 
 ## 9. ToolResult
 

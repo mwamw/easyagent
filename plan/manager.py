@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Callable
 
 from core.Exception import ExecutionModeError
-from metamessage import BaseMetaMessageManager, MetaMessage, MetaMessageLifecycle
+from runtime.metamessage import MetaMessageManager, MetaMessage, MetaMessageLifecycle
 from Tool.ToolRegistry import ToolRegistry
 
 from .models import ExecutionMode, ModeController, PlanModeConfig
@@ -25,7 +25,7 @@ class BasePlanMode(ABC):
     def bind(
         self,
         *,
-        metamessage_manager: BaseMetaMessageManager,
+        metamessage_manager: MetaMessageManager,
         tool_registry: ToolRegistry | None,
         runtime_refresher: Callable[[], None],
     ) -> "BasePlanMode":
@@ -46,7 +46,7 @@ class PlanModeManager(BasePlanMode):
     def __init__(self, config: PlanModeConfig | None = None):
         self.config = config or PlanModeConfig()
         self._controller = ModeController()
-        self._metamessage_manager: BaseMetaMessageManager | None = None
+        self._metamessage_manager: MetaMessageManager | None = None
         self._tool_registry: ToolRegistry | None = None
         self._runtime_refresher: Callable[[], None] = lambda: None
 
@@ -65,12 +65,12 @@ class PlanModeManager(BasePlanMode):
     def bind(
         self,
         *,
-        metamessage_manager: BaseMetaMessageManager,
+        metamessage_manager: MetaMessageManager,
         tool_registry: ToolRegistry | None,
         runtime_refresher: Callable[[], None],
     ) -> "PlanModeManager":
-        if not isinstance(metamessage_manager, BaseMetaMessageManager):
-            raise TypeError("metamessage_manager must be BaseMetaMessageManager")
+        if not isinstance(metamessage_manager, MetaMessageManager):
+            raise TypeError("metamessage_manager must be MetaMessageManager")
         if tool_registry is not None and not isinstance(tool_registry, ToolRegistry):
             raise TypeError("tool_registry must be ToolRegistry or None")
         self._metamessage_manager = metamessage_manager
@@ -78,7 +78,7 @@ class PlanModeManager(BasePlanMode):
         self._runtime_refresher = runtime_refresher
         return self
 
-    def _require_bound(self) -> BaseMetaMessageManager:
+    def _require_bound(self) -> MetaMessageManager:
         if self._metamessage_manager is None:
             raise ExecutionModeError("PlanModeManager 尚未绑定运行时依赖。")
         return self._metamessage_manager

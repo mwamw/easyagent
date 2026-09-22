@@ -47,7 +47,6 @@ from .mcp import (
     register_mcp_tools,
 )
 from .metamessages import (
-    BaseMetaMessageManager,
     MetaMessage,
     MetaMessageCondition,
     MetaMessageContent,
@@ -91,14 +90,12 @@ from .prompting import BaseSystemPromptComposer, PromptBlock, PromptBuildContext
 from .runtime import (
     AgentStreamEvent,
     AgentStreamEventType,
-    BaseMultiAgentRuntime,
     ExecutionContext,
-    MultiAgentRuntime,
     RuntimeEvent,
     RuntimeEventBus,
     RuntimeEventType,
-    TeamManager,
 )
+from .multiagent import BaseMultiAgent, ClaudeCodeMultiAgent
 from .session import BaseSessionStore, SQLiteSessionStore, InMemorySessionStore, SessionRestoreReport
 from .skills import SkillManager, SkillManifest, SkillTool
 from .tasks import TaskRecord, TaskService, TaskStatus
@@ -126,8 +123,7 @@ __all__ = [
     "BaseAgentExecutor",
     "BaseCallback",
     "BaseHook",
-    "BaseMetaMessageManager",
-    "BaseMultiAgentRuntime",
+    "BaseMultiAgent",
     "BaseObservabilityManager",
     "BasePlanMode",
     "BaseSystemPromptComposer",
@@ -200,7 +196,7 @@ __all__ = [
     "PlanModeState",
     "LoggingCallback",
     "MetricsCallback",
-    "MultiAgentRuntime",
+    "ClaudeCodeMultiAgent",
     "PromptInjectionGuardrail",
     "PromptBlock",
     "PromptBuildContext",
@@ -217,7 +213,6 @@ __all__ = [
     "TaskRecord",
     "TaskService",
     "TaskStatus",
-    "TeamManager",
     "SuccessfulAgentInvokeFilter",
     "TrainingDataFilter",
     "TrainingDataFormat",

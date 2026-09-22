@@ -15,7 +15,7 @@ from core.request_input import ReplayRequestInput
 from easyagent.executors import BaseAgentExecutor
 from easyagent.memory import BaseMemory
 from easyagent.session import InMemorySessionStore
-from metamessage import MetaMessage, MetaMessageLifecycle
+from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from prompt import PromptBlock
 from prompt.base import BaseSystemPromptComposer
 from prompt.composer import SystemPromptComposer
@@ -320,8 +320,6 @@ def test_prompt_contributions_survive_composer_change_and_replace_cleanly(tmp_pa
         agent.with_memory(InstructionMemory("second"), replace=True)
         blocks = [block for block in agent.get_system_prompt_blocks() if block.name == "memory.custom"]
         assert len(blocks) == 1 and blocks[0].content == "second"
-        agent.skill_manager.close()
-        assert "skill_listing" not in {block.name for block in agent.get_system_prompt_blocks()}
         agent.with_prompt(SystemPromptComposer(include_defaults=False, include_module_blocks=False))
         assert agent.get_system_prompt_blocks() == []
     finally:

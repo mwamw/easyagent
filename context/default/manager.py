@@ -104,7 +104,7 @@ class ContextManager(BaseContextManager, RequestEstimation):
     def append_tool_context(self, tool_name: str, value: Any) -> None:
         if value is None or self._metamessages is None:
             return
-        from metamessage import MetaMessage, MetaMessageLifecycle
+        from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 
         content = value if isinstance(value, str) else json.dumps(
             value, ensure_ascii=False, default=str, indent=2,

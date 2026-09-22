@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from pydantic import BaseModel, Field
@@ -15,7 +16,7 @@ from .manager import (
 )
 
 
-SKILL_TOOL_PROMPT = """Execute a skill within the current Agent `invoke`.
+SKILL_TOOL_PROMPT = """Load a skill's instructions within the current Agent `invoke`.
 
 When users ask you to perform tasks, check if any available skills match. Skills provide specialized capabilities and domain knowledge.
 
@@ -32,9 +33,10 @@ Execution:
 - For an inline skill, the full SKILL.md body is injected after the tool result as a <skill name="..."> block. Follow those instructions in the next model step.
 - If that block is already present for this invocation, follow it instead of recursively loading the skill.
 - Instructions remain active only for the current Agent invocation; load the skill again in a later invocation when needed.
-- A skill configured with context: fork delegates its task to Agent instead.
 - Use the returned skill directory to resolve supporting scripts, references, and assets. Do not guess instructions that have not been loaded.
-- Tool recommendations are guidance only and do not grant permissions or expose tools. All tool calls remain subject to the Agent's authorization policy."""
+- Tool recommendations are guidance only: they do not grant permissions and never install, expose, authorize, or execute tools.
+- If instructions recommend a subagent, use it only when the Agent tool is already available; otherwise continue with the installed capabilities.
+- All tool calls remain subject to the Agent's normal execution and authorization flow."""
 
 
 class SkillToolInput(BaseModel):
@@ -55,7 +57,7 @@ class SkillTool(Tool):
         self.manager = manager
         super().__init__(
             name="skill_tool",
-            description="Load and execute one indexed Agent Skill by exact name.",
+            description="Load one indexed Agent Skill by exact name.",
             parameters=SkillToolInput,
             guidance=SKILL_TOOL_PROMPT,
             read_only=True,
@@ -71,7 +73,7 @@ class SkillTool(Tool):
         skill_name = str(parameters.get("skill") or "").strip().lstrip("/")
         args = str(parameters.get("args") or "")
         try:
-            payload = self.manager.invoke(skill_name, args=args, model_initiated=True)
+            payload = self.manager.activate(skill_name, args=args, model_initiated=True)
         except KeyError as exc:
             return ToolResult.error(
                 str(exc),
@@ -108,13 +110,7 @@ class SkillTool(Tool):
                 metadata={"skill": skill_name},
             )
 
-        if payload["status"] == "forked":
-            content = (
-                f"Skill `{skill_name}` completed in a forked subagent. "
-                f"Agent ID: {payload.get('agentId') or 'unknown'}. "
-                f"Output file: {payload.get('outputFile') or 'unavailable'}."
-            )
-        elif payload["alreadyActive"]:
+        if payload["alreadyActive"]:
             content = (
                 f"Skill `{skill_name}` is already active with these arguments for the current "
                 "Agent invocation. Continue using the previously injected instructions."
@@ -136,6 +132,10 @@ class SkillTool(Tool):
             structured_data=payload,
             metadata={"skill": skill_name, "skill_status": payload["status"]},
         )
+
+    async def arun(self, parameters: dict) -> ToolResult:
+        """Load Skill files without blocking the async event loop."""
+        return await asyncio.to_thread(self.run, parameters)
 
 
 __all__ = ["SKILL_TOOL_PROMPT", "SkillTool", "SkillToolInput"]

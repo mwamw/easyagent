@@ -1,7 +1,6 @@
 """Stable public meta-message exports."""
 
-from metamessage import (
-    BaseMetaMessageManager,
+from runtime.metamessage import (
     MetaMessage,
     MetaMessageCondition,
     MetaMessageContent,
@@ -15,7 +14,6 @@ from metamessage import (
 )
 
 __all__ = [
-    "BaseMetaMessageManager",
     "MetaMessage",
     "MetaMessageCondition",
     "MetaMessageContent",

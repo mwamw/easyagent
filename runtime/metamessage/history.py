@@ -1,4 +1,4 @@
-"""History boundary used by the provider-neutral meta-message manager."""
+"""History boundary used by the provider-neutral runtime meta-message manager."""
 
 from __future__ import annotations
 

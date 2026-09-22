@@ -12,7 +12,6 @@ from .file_state import (
 from .filesystem_guard import FilesystemAccessError, FilesystemGuard
 from .path_resolver import PathResolutionError, PathResolver
 from .process_manager import BackgroundTaskSnapshot, ProcessExecutionResult, ProcessManager
-from .subagent_manager import SubagentManager, SubagentRequest, SubagentSnapshot
 from .todo_state import (
     TodoItemSnapshot,
     clear_todo_items,
@@ -38,9 +37,6 @@ __all__ = [
     "ProcessManager",
     "ProcessExecutionResult",
     "BackgroundTaskSnapshot",
-    "SubagentRequest",
-    "SubagentSnapshot",
-    "SubagentManager",
     "TodoItemSnapshot",
     "todo_items",
     "normalize_todo_item",

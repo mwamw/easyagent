@@ -42,7 +42,6 @@ EasyLLM 统一 provider 请求、canonical codec、tool calling、streaming 和 
 
 `easyagent.metamessages`：
 
-- `BaseMetaMessageManager`
 - `MetaMessageManager`
 - `MetaMessage`
 - `MetaMessageContext`
@@ -104,8 +103,8 @@ Permission 决定能否执行；Hook 可以阻断或改写；Callback 只观察 
 - `RuntimeEventBus`
 - `AgentStreamEvent`
 - `AgentStreamEventType`
-- `BaseMultiAgentRuntime`
-- `MultiAgentRuntime`
+- `BaseMultiAgent`
+- `ClaudeCodeMultiAgent`
 - `AgentRuntimeManager`
 - `AgentHandle`
 - `BackgroundAgentHandle`

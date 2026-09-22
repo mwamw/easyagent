@@ -198,8 +198,8 @@ def main() -> None:
     # print("=== Restored Runtime State ===")
     # print(f"Current task: {restored.current_task_id}")
     # print(f"Tools: {restored.tool_registry.get_tool_names()}")
-    # print(f"Teams: {[team.to_dict() for team in restored.team_manager.list_teams()]}")
-    # print(f"Handles: {[handle.to_dict() for handle in restored.agent_runtime.list_handles(limit=20)]}")
+    # print(f"Teams: {[team.to_dict() for team in restored.multi_agent.team_manager.list_teams()]}")
+    # print(f"Handles: {[handle.to_dict() for handle in restored.multi_agent.agent_runtime.list_handles(limit=20)]}")
 
     while 1:
         pass

@@ -5,7 +5,7 @@
 ## Public Objects
 
 - `SkillManifest`：只保存 `SKILL.md` frontmatter 和源路径，不保存正文。
-- `SkillManager`：Agent 私有的索引、条件发现、按需展开、临时权限和恢复控制器。
+- `SkillManager`：Agent 私有的索引、条件发现、按需展开和恢复控制器。
 - `SkillTool`：唯一的模型调用入口，参数是 `skill` 和 `args`。
 - `discover_skill_files()`：发现单个 Skill 目录或集合目录的直接子 Skill。
 - `load_skill_manifest()`：只解析 frontmatter。
@@ -22,7 +22,7 @@ skill/
   tool.py           # model-facing skill_tool
 ```
 
-该包不提供 Python Skill 基类、全局 registry、包装型 meta skill、Python bundle 自动扫描或动态 `tools.py`。Skill 的扩展面是目录协议和可替换 `SkillManager`，不是全局注册中心。
+该包不提供 Python Skill 基类、全局 registry、包装型 meta skill、Python bundle 自动扫描或动态 `tools.py`。Skill 的扩展面是目录协议和可替换 `SkillManager`，不是全局注册中心。Skill 只能建议模型使用已经安装的工具；它不能启用 Multi-Agent、修改权限或直接执行其他工具。
 
 ## Minimal Contract
 

@@ -5,7 +5,7 @@ import pytest
 from agent.BasicAgent import BasicAgent
 from core.history import CanonicalMessage, coerce_canonical_message
 from core.llm import EasyLLM
-from metamessage import (
+from runtime.metamessage import (
     MetaMessage,
     MetaMessageContext,
     MetaMessageLifecycle,

@@ -15,7 +15,7 @@ from common import (
     write_json,
     now_ms,
 )
-from Tool.runtime import SubagentRequest
+from multiagent.default import SubagentRequest
 from easyagent import BasicAgent, Config
 from easyagent.runtime import AgentRuntimeManager, TeamManager
 

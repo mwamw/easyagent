@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from prompt import PromptBlock
     from prompt.base import PromptBuildContext
     from Tool.BaseTool import Tool
-    from metamessage.models import MetaMessage
+    from runtime.metamessage.models import MetaMessage
 
 
 class MetaMessageEmitterPort(Protocol):

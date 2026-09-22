@@ -1,4 +1,4 @@
-"""Team registry for multi-agent collaboration."""
+"""Team registry for the built-in multi-agent implementation."""
 
 from __future__ import annotations
 
@@ -97,6 +97,19 @@ class TeamManager:
 
     def delete_team(self, identifier: str) -> TeamHandle:
         handle = self.get_team(identifier)
+        if self.agent_runtime is not None:
+            active_members = []
+            for agent_id in handle.member_agent_ids:
+                try:
+                    member = self.agent_runtime.get_handle(agent_id)
+                except KeyError:
+                    continue
+                if member.status not in {"completed", "error", "stopped", "cancelled", "interrupted"}:
+                    active_members.append(member.name or member.agent_id)
+            if active_members:
+                raise ValueError(
+                    "Team still has active members: " + ", ".join(active_members)
+                )
         with self._lock:
             self._teams.pop(handle.team_id, None)
             self._team_names.pop(handle.name, None)

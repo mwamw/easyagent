@@ -177,15 +177,18 @@ def load_skill_manifest(file_path: str | os.PathLike[str]) -> SkillManifest:
     if path.name != SKILL_FILENAME or not path.is_file():
         raise ValueError(f"Skill definition must be a {SKILL_FILENAME} file: {path}")
     payload = _read_frontmatter(path)
+    execution_fields = sorted({"context", "agent", "model"}.intersection(payload))
+    if execution_fields:
+        raise ValueError(
+            "Skill frontmatter cannot control Agent execution through "
+            f"{', '.join(execution_fields)}; describe optional subagent usage in the Skill body"
+        )
     known_keys = {
         "name",
         "description",
         "when_to_use",
         "recommended-tools",
         "argument-hint",
-        "context",
-        "agent",
-        "model",
         "paths",
         "disable-model-invocation",
     }
@@ -200,9 +203,6 @@ def load_skill_manifest(file_path: str | os.PathLike[str]) -> SkillManifest:
             tool_entries=True,
         ),
         argument_hint=str(payload.get("argument-hint", "") or "").strip(),
-        context=str(payload.get("context") or "inline").strip(),
-        agent=str(payload["agent"]).strip() if payload.get("agent") is not None else None,
-        model=str(payload["model"]).strip() if payload.get("model") is not None else None,
         paths=_path_patterns(payload.get("paths")),
         disable_model_invocation=_boolean(
             payload.get("disable-model-invocation", False)

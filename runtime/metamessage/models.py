@@ -1,4 +1,4 @@
-"""Core models for runtime meta-message injection."""
+"""Core models for fixed runtime meta-message injection."""
 
 from __future__ import annotations
 

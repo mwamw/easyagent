@@ -10,7 +10,6 @@ if project_root not in sys.path:
 from agent import BasicAgent
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import MultiAgentRuntime
 from task import SQLiteTaskStore, TaskService
 from Tool import ToolRegistry
 from Tool.builtin import register_filesystem_tools
@@ -110,8 +109,9 @@ def main() -> None:
 
     print("=== Restored Runtime State ===")
     print(f"Restored current task: {restored.current_task_id}")
-    print(f"Restored teams: {[team.to_dict() for team in restored.team_manager.list_teams()]}")
-    print(f"Restored handles: {[handle.to_dict() for handle in restored.agent_runtime.list_handles()]}")
+    module = restored.multi_agent
+    print(f"Restored teams: {[team.to_dict() for team in module.team_manager.list_teams()]}")
+    print(f"Restored handles: {[handle.to_dict() for handle in module.agent_runtime.list_handles()]}")
     print()
     print("Next manual checks:")
     print("1. Verify the restored handle still carries the original currentTaskId.")

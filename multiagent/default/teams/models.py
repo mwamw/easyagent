@@ -1,4 +1,4 @@
-"""Models for runtime team management."""
+"""Models for built-in team management."""
 
 from __future__ import annotations
 

@@ -13,7 +13,6 @@ from agent import BasicAgent
 from core import enable_logging
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import MultiAgentRuntime
 from task import SQLiteTaskStore, TaskService
 from Tool import ToolRegistry
 from Tool.builtin import register_filesystem_tools
@@ -119,7 +118,7 @@ def main() -> None:
     team_result = registry.execute_tool_result(
         "TeamCreate",
         {
-            "name": "phasec-reviewers",
+            "team_name": "phasec-reviewers",
             "description": "Workers that help validate restore and cleanup semantics",
         },
     )
@@ -166,8 +165,9 @@ def main() -> None:
     print()
 
     print("=== Restored Agent Handles ===")
-    if restored.agent_runtime is not None:
-        print([handle.to_dict() for handle in restored.agent_runtime.list_handles(limit=20)])
+    runtime = getattr(restored.multi_agent, "agent_runtime", None)
+    if runtime is not None:
+        print([handle.to_dict() for handle in runtime.list_handles(limit=20)])
         print()
 
     close_report = restored.close(worktree_action="keep", close_llm=True)

@@ -13,7 +13,7 @@ from context.base import BaseContextManager
 from prompt.base import BaseSystemPromptComposer, PromptBuildContext
 from runtime import AgentStreamEvent, ExecutionContext, RuntimeEventBus
 from runtime.interruptions import BaseToolInterruptController, InMemoryToolInterruptController
-from metamessage import BaseMetaMessageManager
+from runtime.metamessage import MetaMessageManager
 from Tool.ToolRegistry import ToolRegistry
 
 class AgentInvocationPhase(str, Enum):
@@ -49,7 +49,7 @@ class AgentExecutionServices:
     prompt_context_factory: Callable[[str], PromptBuildContext]
     execution_context: ExecutionContext
     event_bus: RuntimeEventBus
-    metamessage_manager: BaseMetaMessageManager
+    metamessage_manager: MetaMessageManager
     permission_engine: BasePermissionEngine | None
     authorization_context_factory: Callable[[], AuthorizationContext]
     hook_manager: HookManager | None
@@ -57,7 +57,7 @@ class AgentExecutionServices:
     reasoning: dict[str, Any] | None = None
     interrupt_controller: BaseToolInterruptController = field(default_factory=InMemoryToolInterruptController)
     stop_checker: Callable[[], str | None] = lambda: None
-    mailbox_sync: Callable[[], None] = lambda: None
+    before_context_build: Callable[[], None] = lambda: None
     session_id: str = ""
     invocation_lock: Any = None
     owns_invocation_lock: bool = False

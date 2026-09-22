@@ -258,7 +258,9 @@ EasyAgent 的 builtin tools 有两种使用方式：
 
 这些工具和上层交互产品高度相关，CLI/UI 产品通常都会用到。
 
-## 7. 多 Agent / 协作工具
+## 7. 默认 Multi-Agent 实现工具
+
+以下工具属于 `ClaudeCodeMultiAgent`，不属于通用 `Tool/builtin`。安装 `agent.with_multi_agent()` 后由该模块统一贡献。
 
 ### `Agent`
 
@@ -288,14 +290,6 @@ EasyAgent 的 builtin tools 有两种使用方式：
 
 - 作用：给 agent 或 team 发消息
 
-### `MailboxRead`
-
-- 作用：读取 mailbox 消息
-
-### `MailboxAck`
-
-- 作用：确认 mailbox 消息
-
 ### `TeamCreate`
 
 - 作用：创建 team
@@ -303,15 +297,6 @@ EasyAgent 的 builtin tools 有两种使用方式：
 ### `TeamDelete`
 
 - 作用：删除 team
-
-### 推荐 helper
-
-- `register_agent_tool`
-  - 只注册 `Agent`
-- `register_agent_runtime_tools`
-  - 注册 `AgentGet / AgentList / AgentWait / AgentStop`
-- `register_mailbox_tools`
-  - 注册 `MailboxRead / MailboxAck`
 
 适合：
 

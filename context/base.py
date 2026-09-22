@@ -8,7 +8,7 @@ from typing import Sequence, TYPE_CHECKING
 from core.cache_policy import PromptCachePolicy
 from core.history import CanonicalMessage, coerce_canonical_message
 from core.request_input import ReplayRequestInput
-from metamessage.models import MetaMessageInjection
+from runtime.metamessage.models import MetaMessageInjection
 from prompt.system_prompt import PromptBlock
 from .history import ConversationHistory
 from .models import (
@@ -22,7 +22,7 @@ from .models import (
 
 if TYPE_CHECKING:
     from core.llm import EasyLLM
-    from metamessage.manager import BaseMetaMessageManager
+    from runtime.metamessage.manager import MetaMessageManager
 
 
 class BaseContextManager(ABC):
@@ -35,14 +35,14 @@ class BaseContextManager(ABC):
     def __init__(self, history: ConversationHistory | None = None):
         self._history = history or ConversationHistory()
         self._llm: EasyLLM | None = None
-        self._metamessages: BaseMetaMessageManager | None = None
+        self._metamessages: MetaMessageManager | None = None
         self._owner = None
 
     def bind(
         self,
         llm: EasyLLM,
         *,
-        metamessages: BaseMetaMessageManager | None = None,
+        metamessages: MetaMessageManager | None = None,
         owner: object | None = None,
     ) -> "BaseContextManager":
         if owner is not None:

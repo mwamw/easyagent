@@ -33,9 +33,8 @@ from core.permissions import PermissionEngine, ApprovalMode
 from core.permissions.base import BasePermissionEngine
 from core.permissions.default import RuleBasedPermissionEngine
 from core.session import SessionRestoreReport
-from metamessage import (
+from runtime.metamessage import (
     ContextMetaMessageHistoryPort,
-    BaseMetaMessageManager,
     MetaMessage,
     MetaMessageContext,
     MetaMessageLifecycle,
@@ -43,11 +42,11 @@ from metamessage import (
 )
 from plan import BasePlanMode, ExecutionMode, PlanModeConfig, PlanModeManager
 from prompt import PromptBlock, SystemPromptTemplate
+from multiagent import BaseMultiAgent
+from multiagent.default.module import ClaudeCodeMultiAgent
 from runtime import (
     AgentStreamEvent,
-    BaseMultiAgentRuntime,
     ExecutionContext,
-    MultiAgentRuntime,
     RuntimeEvent,
     RuntimeEventBus,
 )
@@ -84,13 +83,13 @@ class BaseAgent(ABC):
         self._prompt_providers = {}
         self._context_owner = object()
 
-        self.event_bus = RuntimeEventBus()
+        self._event_bus = RuntimeEventBus()
         self.prompt_composer: BaseSystemPromptComposer = SystemPromptComposer()
         self.skill_manager: SkillManager | None = None
         self.callback_manager: CallbackManager | None = None
         self.hook_manager: HookManager | None = None
         self.permission_engine: BasePermissionEngine | None = None
-        self.metamessage_manager: BaseMetaMessageManager = MetaMessageManager()
+        self._metamessage_manager = MetaMessageManager()
 
         workspace_root = os.path.abspath(self.config.workspace_root or os.getcwd())
         allowed_roots = tuple(os.path.abspath(item) for item in self.config.get_allowed_roots()) or (workspace_root,)
@@ -115,7 +114,7 @@ class BaseAgent(ABC):
         self._invocation_lock = Lock()
         self.plan: BasePlanMode | None = None
         self.observability: Any = None
-        self.multi_agent: BaseMultiAgentRuntime | None = None
+        self.multi_agent: BaseMultiAgent | None = None
         self.mcp_managers: list[Any] = []
         self.codeintel_manager: Any = None
         self.worktree_manager: Any = None
@@ -152,12 +151,16 @@ class BaseAgent(ABC):
         return self.tool_registry is not None and bool(self.tool_registry.get_tool_names())
 
     @property
-    def agent_runtime(self) -> Any:
-        return getattr(self.multi_agent, "agent_runtime", None)
+    def event_bus(self) -> RuntimeEventBus:
+        """Framework-owned event infrastructure; modules may subscribe but not replace it."""
+
+        return self._event_bus
 
     @property
-    def team_manager(self) -> Any:
-        return getattr(self.multi_agent, "team_manager", None)
+    def metamessage_manager(self) -> MetaMessageManager:
+        """Framework-owned dynamic-message infrastructure; it is not a module slot."""
+
+        return self._metamessage_manager
 
     def _metamessage_context(self) -> MetaMessageContext:
         return MetaMessageContext(
@@ -173,20 +176,6 @@ class BaseAgent(ABC):
             history_port=ContextMetaMessageHistoryPort(self.context_manager),
             context_provider=self._metamessage_context,
         )
-
-    def _install_metamessage_manager(
-        self,
-        manager: BaseMetaMessageManager,
-    ) -> None:
-        """Install runtime infrastructure while rebuilding an Agent."""
-
-        if not isinstance(manager, BaseMetaMessageManager):
-            raise TypeError("manager must extend BaseMetaMessageManager")
-        self.metamessage_manager = manager
-        self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
-        self._bind_metamessage_manager()
-        if self.plan is not None:
-            self._bind_plan()
 
     def _handle_runtime_metamessage(self, event: RuntimeEvent) -> None:
         self.metamessage_manager.publish(event.type.value, event.data)
@@ -359,8 +348,25 @@ class BaseAgent(ABC):
             raise ValueError("with_skill requires at least one Skill directory")
         if self.tool_registry is None:
             self.with_tool()
-        resolved.bind_agent(self)
-        resolved.install_tool()
+        resolved.bind(
+            tool_registry=self.tool_registry,
+            metamessages=self.metamessage_manager,
+            event_bus=self.event_bus,
+            execution_context=self.execution_context,
+        )
+        existing = self.tool_registry.get_tool("skill_tool")
+        if existing is None:
+            from skill.tool import SkillTool
+
+            self.tool_registry.register_tool(
+                SkillTool(resolved),
+                expose_in_deferred=True,
+                conflict_policy="error",
+            )
+        elif getattr(existing, "manager", None) is not resolved:
+            raise ToolRegistryError(
+                "Tool 'skill_tool' is already registered by another SkillManager"
+            )
         self.skill_manager = resolved
         self.register_prompt_provider("skill", resolved.get_prompt_blocks)
         return self
@@ -458,7 +464,7 @@ class BaseAgent(ABC):
 
     def with_multi_agent(
         self,
-        runtime: BaseMultiAgentRuntime | None = None,
+        module: BaseMultiAgent | None = None,
         *,
         workspace_root: str | None = None,
         storage_dir: str | None = None,
@@ -468,21 +474,75 @@ class BaseAgent(ABC):
             raise ValueError("MultiAgent module is already installed")
         if self.tool_registry is None:
             self.with_tool()
-        resolved = runtime or MultiAgentRuntime(
-            workspace_root=workspace_root or self.execution_context.workspace_root,
-            storage_dir=storage_dir,
-            max_background_tasks=max_background_tasks or self.config.max_background_tasks,
+        resolved = module
+        if resolved is None:
+            from multiagent.default.definitions import build_default_agent_definitions
+            from multiagent.default.factory import DefaultSubagentFactory
+
+            definitions = build_default_agent_definitions()
+            skill_directories = tuple(
+                str(item) for item in getattr(self.skill_manager, "directories", ()) or ()
+            )
+            factory = DefaultSubagentFactory(
+                parent_name=self.name,
+                llm=self.llm,
+                config=self.config,
+                system_prompt=self.system_prompt,
+                reasoning=self.reasoning,
+                execution_context=self.execution_context,
+                tool_registry=self.tool_registry,
+                definitions=definitions,
+                permission_engine=self.permission_engine,
+                callback_manager=self.callback_manager,
+                skill_directories=skill_directories,
+                task_service=self.task_service,
+                observability=self.observability,
+            )
+            resolved = ClaudeCodeMultiAgent(
+                agent_factory=factory,
+                workspace_root=workspace_root or self.execution_context.workspace_root,
+                storage_dir=storage_dir,
+                max_background_tasks=max_background_tasks or self.config.max_background_tasks,
+                worktree_manager=self.worktree_manager,
+                agent_name=self.name,
+                task_service=self.task_service,
+                observability=self.observability,
+                cache_safe_params_provider=factory.cache_safe_params,
+                definitions=definitions,
+            )
+        if not isinstance(resolved, BaseMultiAgent):
+            raise TypeError("module must extend BaseMultiAgent")
+        resolved.bind(
+            tool_registry=self.tool_registry,
+            execution_context=self.execution_context,
+            event_bus=self.event_bus,
+            metamessages=self.metamessage_manager,
         )
-        if not isinstance(resolved, BaseMultiAgentRuntime):
-            raise TypeError("runtime must extend BaseMultiAgentRuntime")
-        self.multi_agent = resolved.install(self)
+        contributed_tools = tuple(resolved.get_tools())
+        names: set[str] = set()
+        for tool in contributed_tools:
+            if not isinstance(tool, Tool):
+                raise TypeError("MultiAgent modules must contribute Tool instances")
+            if tool.name in names:
+                raise ToolRegistryError(
+                    f"MultiAgent module contributed duplicate tool {tool.name!r}"
+                )
+            names.add(tool.name)
+            if self.tool_registry.has_tool(tool.name):
+                raise ToolRegistryError(
+                    f"MultiAgent tool {tool.name!r} conflicts with an installed tool"
+                )
+        for tool in contributed_tools:
+            self.tool_registry.register_tool(tool, expose_in_deferred=True)
+        self.multi_agent = resolved
+        self.register_prompt_provider("multiagent", resolved.get_prompt_blocks)
         return self
 
     def with_memory(self, memory: Any, *, owned: bool = False, replace: bool = False) -> "BaseAgent":
         from core.hooks import BaseHook
         from memory.base import BaseMemory, MemoryServices
         from core.scope import RuntimeScope
-        from metamessage.emitter import MetaMessageEmitter
+        from runtime.metamessage.emitter import MetaMessageEmitter
 
         if not isinstance(memory, BaseMemory):
             raise TypeError("memory must implement the BaseMemory module contract")

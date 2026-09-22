@@ -11,7 +11,6 @@ if ROOT not in sys.path:
 
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin import (
-    AgentTool,
     BashTool,
     EnterWorktreeTool,
     ExitWorktreeTool,
@@ -21,7 +20,7 @@ from Tool.builtin import (
     register_file_write_tool,
     register_shell_tools,
 )
-from Tool.builtin.agent_tool import clone_tool_registry_for_workspace
+from multiagent.default.tools import AgentTool, clone_tool_registry_for_workspace
 from Tool.runtime import WorktreeManager
 from agent import BasicAgent
 from core.Config import Config

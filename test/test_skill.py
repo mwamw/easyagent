@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -13,8 +15,7 @@ from runtime import RuntimeEventType
 from skill import SkillManager, SkillTool, discover_skill_files, load_skill_body, load_skill_manifest
 from Tool import Tool
 from Tool.BaseTool import ToolResult
-from Tool.builtin.agent_tool import AgentTool
-from Tool.runtime import SubagentRequest
+from multiagent.default import SubagentRequest
 
 
 class StubLLM(EasyLLM):
@@ -224,10 +225,14 @@ def test_skill_has_no_permission_rule_builder():
     assert not hasattr(SkillManager, "_permission_rule")
 
 
-def test_inline_skill_rejects_fork_only_agent_and_model_fields(tmp_path: Path):
-    write_skill(tmp_path, "invalid", extra_frontmatter="model: specialist-model")
+@pytest.mark.parametrize(
+    "frontmatter",
+    ["context: fork", "agent: reviewer", "model: specialist-model"],
+)
+def test_skill_rejects_agent_execution_control_fields(tmp_path: Path, frontmatter: str):
+    write_skill(tmp_path, "invalid", extra_frontmatter=frontmatter)
 
-    with pytest.raises(ValueError, match="only with context: fork"):
+    with pytest.raises(ValueError, match="cannot control Agent execution"):
         SkillManager().add_directories([tmp_path])
 
 
@@ -267,14 +272,43 @@ def test_agent_has_no_skill_module_until_with_skill(tmp_path: Path):
     assert isinstance(agent.skill_manager, SkillManager)
     assert agent.tool_registry is not None
     assert agent.tool_registry.has_tool("skill_tool")
+    assert not hasattr(agent.skill_manager, "_agent")
+
+
+@pytest.mark.asyncio
+async def test_skill_tool_arun_keeps_event_loop_responsive(tmp_path: Path, monkeypatch):
+    write_skill(tmp_path, "review")
+    agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
+    manager = agent.skill_manager
+    original_activate = manager.activate
+
+    def slow_activate(*args, **kwargs):
+        time.sleep(0.06)
+        return original_activate(*args, **kwargs)
+
+    monkeypatch.setattr(manager, "activate", slow_activate)
+    timer_fired = asyncio.Event()
+
+    async def tick():
+        await asyncio.sleep(0.01)
+        timer_fired.set()
+
+    ticker = asyncio.create_task(tick())
+    try:
+        result = await agent.tool_registry.get_tool("skill_tool").arun({"skill": "review"})
+        assert result.status == "success"
+        assert timer_fired.is_set()
+        await ticker
+    finally:
+        agent.close()
 
 
 def test_active_skill_names_are_public_and_deduplicated(tmp_path: Path):
     write_skill(tmp_path, "review")
     agent = BasicAgent("agent", StubLLM()).with_skill(tmp_path)
     assert agent.skill_manager.active_skill_names == ()
-    agent.skill_manager.invoke("review", args="first", model_initiated=False)
-    agent.skill_manager.invoke("review", args="second", model_initiated=False)
+    agent.skill_manager.activate("review", args="first", model_initiated=False)
+    agent.skill_manager.activate("review", args="second", model_initiated=False)
     assert agent.skill_manager.active_skill_names == ("review",)
     agent.close()
 
@@ -453,17 +487,17 @@ def test_model_disabled_skill_is_hidden_and_rejected(tmp_path: Path):
     assert result.error_type == "skill_model_invocation_disabled"
 
 
-def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
+def test_skill_can_recommend_subagent_without_executing_or_enabling_it(tmp_path: Path):
     write_skill(
         tmp_path,
         "deep-review",
         extra_frontmatter=(
-            "context: fork\n"
-            "agent: reviewer\n"
-            "model: specialist-model\n"
             "recommended-tools: Agent"
         ),
-        body="Review $ARGUMENTS deeply.",
+        body=(
+            "Review $ARGUMENTS deeply. If the Agent tool is already available, "
+            "consider asking a subagent for an independent review."
+        ),
     )
     fork_tool = ForkAgentTool()
     agent = BasicAgent("agent", StubLLM()).add_tool(fork_tool).with_skill(tmp_path)
@@ -473,28 +507,20 @@ def test_fork_skill_returns_subagent_identity_output_and_result(tmp_path: Path):
         {"skill": "deep-review", "args": "src/core.py"},
     )
     assert result.status == "success"
-    assert result.structured_data["status"] == "forked"
-    assert result.structured_data["agentId"] == "agent-child"
-    assert result.structured_data["outputFile"] == "/tmp/agent-child.md"
-    assert result.structured_data["result"] == "fork result"
+    assert result.structured_data["status"] == "inline"
     assert result.structured_data["recommendedTools"] == ["Agent"]
-    assert agent.permission_engine is None
-    assert fork_tool.last_parameters["subagent_type"] == "reviewer"
-    assert fork_tool.last_parameters["model"] == "specialist-model"
-    assert "Review src/core.py deeply." in fork_tool.last_parameters["prompt"]
-    assert "/tmp/agent-child.md" in result.to_display_string()
-    assert "fork result" in result.to_display_string()
-    assert agent.metamessage_manager.list_pending() == []
+    assert fork_tool.last_parameters == {}
+    assert len(agent.metamessage_manager.list_pending()) == 1
+    agent.metamessage_manager.flush()
+    assert "consider asking a subagent" in agent.history[-1].text_content()
 
 
 def test_default_subagent_gets_an_agent_local_skill_manager(tmp_path: Path):
     skill_root = tmp_path / "skills"
     write_skill(skill_root, "review")
     parent = BasicAgent("parent", StubLLM()).with_skill(skill_root)
-    agent_tool = AgentTool(
-        parent_agent=parent,
-        storage_dir=str(tmp_path / "agents"),
-    )
+    parent.with_multi_agent(storage_dir=str(tmp_path / "agents"))
+    agent_tool = parent.tool_registry.get_tool("Agent")
     child = agent_tool.agent_factory(
         SubagentRequest(
             description="child",
@@ -524,5 +550,6 @@ def test_skill_tool_has_detailed_progressive_disclosure_contract(tmp_path: Path)
     description = tool.get_spec().build_schema_description()
     assert "<available_skills>" in description
     assert "current Agent `invoke`" in description
-    assert "context: fork" in description
+    assert "never install, expose, authorize, or execute tools" in description
+    assert "subagent" in description
     assert "$ARGUMENTS" in tool.get_spec().parameter_schema()["properties"]["args"]["description"]

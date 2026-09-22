@@ -6,12 +6,12 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from runtime import AgentRuntimeManager
+from multiagent.default.agents import AgentRuntimeManager
 from task import TaskStatus
 
-from ..BaseTool import Tool, ToolResult
-from ..ToolRegistry import ToolRegistry
-from .display_utils import format_structured_display
+from Tool.BaseTool import Tool, ToolResult
+from Tool.ToolRegistry import ToolRegistry
+from Tool.builtin.display_utils import format_structured_display
 
 
 class AgentGetParams(BaseModel):
@@ -63,13 +63,13 @@ AGENT_STOP_PROMPT = """Sends a cooperative stop request to a background subagent
 
 
 class _AgentRuntimeToolBase(Tool):
-    def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None, **kwargs):
+    def __init__(self, *, agent_runtime: AgentRuntimeManager, task_service: Any | None = None, **kwargs):
         self.agent_runtime = agent_runtime
-        self.parent_agent = parent_agent
+        self.task_service = task_service
         super().__init__(**kwargs)
 
     def _sync_task_binding(self, handle: Any) -> None:
-        task_service = getattr(self.parent_agent, "task_service", None)
+        task_service = self.task_service
         task_id = getattr(handle, "metadata", {}).get("task_id")
         if task_service is None or not task_id:
             return
@@ -104,10 +104,10 @@ class _AgentRuntimeToolBase(Tool):
 
 
 class AgentGetTool(_AgentRuntimeToolBase):
-    def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None):
+    def __init__(self, *, agent_runtime: AgentRuntimeManager, task_service: Any | None = None):
         super().__init__(
             agent_runtime=agent_runtime,
-            parent_agent=parent_agent,
+            task_service=task_service,
             name="AgentGet",
             description="Reads the structured runtime state of a subagent.",
             parameters=AgentGetParams,
@@ -146,10 +146,10 @@ class AgentGetTool(_AgentRuntimeToolBase):
 
 
 class AgentListTool(_AgentRuntimeToolBase):
-    def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None):
+    def __init__(self, *, agent_runtime: AgentRuntimeManager, task_service: Any | None = None):
         super().__init__(
             agent_runtime=agent_runtime,
-            parent_agent=parent_agent,
+            task_service=task_service,
             name="AgentList",
             description="Lists subagent handles in the current runtime.",
             parameters=AgentListParams,
@@ -201,10 +201,10 @@ class AgentListTool(_AgentRuntimeToolBase):
 
 
 class AgentWaitTool(_AgentRuntimeToolBase):
-    def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None):
+    def __init__(self, *, agent_runtime: AgentRuntimeManager, task_service: Any | None = None):
         super().__init__(
             agent_runtime=agent_runtime,
-            parent_agent=parent_agent,
+            task_service=task_service,
             name="AgentWait",
             description="Waits for a subagent and returns its latest observable state.",
             parameters=AgentWaitParams,
@@ -255,10 +255,10 @@ class AgentWaitTool(_AgentRuntimeToolBase):
 
 
 class AgentStopTool(_AgentRuntimeToolBase):
-    def __init__(self, *, agent_runtime: AgentRuntimeManager, parent_agent: Any | None = None):
+    def __init__(self, *, agent_runtime: AgentRuntimeManager, task_service: Any | None = None):
         super().__init__(
             agent_runtime=agent_runtime,
-            parent_agent=parent_agent,
+            task_service=task_service,
             name="AgentStop",
             description="Requests cooperative shutdown of a background subagent.",
             parameters=AgentStopParams,
@@ -323,13 +323,13 @@ def register_agent_runtime_tools(
     registry: ToolRegistry,
     *,
     agent_runtime: AgentRuntimeManager,
-    parent_agent: Any | None = None,
+    task_service: Any | None = None,
     expose_in_deferred: bool | None = True,
 ) -> tuple[AgentGetTool, AgentListTool, AgentWaitTool, AgentStopTool]:
-    get_tool = AgentGetTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    list_tool = AgentListTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    wait_tool = AgentWaitTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
-    stop_tool = AgentStopTool(agent_runtime=agent_runtime, parent_agent=parent_agent)
+    get_tool = AgentGetTool(agent_runtime=agent_runtime, task_service=task_service)
+    list_tool = AgentListTool(agent_runtime=agent_runtime, task_service=task_service)
+    wait_tool = AgentWaitTool(agent_runtime=agent_runtime, task_service=task_service)
+    stop_tool = AgentStopTool(agent_runtime=agent_runtime, task_service=task_service)
     registry.register_tool(get_tool, expose_in_deferred=expose_in_deferred)
     registry.register_tool(list_tool, expose_in_deferred=expose_in_deferred)
     registry.register_tool(wait_tool, expose_in_deferred=expose_in_deferred)

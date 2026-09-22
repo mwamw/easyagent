@@ -1,4 +1,4 @@
-"""Runtime events consumed by the meta-message manager."""
+"""Runtime events consumed by the fixed meta-message manager."""
 
 from __future__ import annotations
 

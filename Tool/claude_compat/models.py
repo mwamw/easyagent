@@ -178,37 +178,19 @@ class ClaudeTaskListInput(BaseModel):
 
 
 class ClaudeSendMessageInput(BaseModel):
-    recipient_type: Literal["agent", "team", "task"] = Field(description="Recipient type")
-    recipient_id: str = Field(description="Recipient ID or team name")
-    content: str = Field(description="Message content to send")
-    sender_id: Optional[str] = Field(default=None, description="Sender identity")
-    ttl_ms: Optional[int] = Field(default=None, ge=0, description="Message time to live in milliseconds")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    to: str = Field(description='Recipient teammate name or "*" for broadcast')
+    summary: Optional[str] = Field(default=None, description="A 5-10 word message preview")
+    message: str | dict[str, Any] = Field(description="Plain text or structured protocol message")
 
 
 class ClaudeTeamCreateInput(BaseModel):
-    name: str = Field(description="Team name")
+    team_name: str = Field(description="Name for the new team")
     description: str = Field(default="", description="Team description")
-    member_agent_ids: list[str] = Field(default_factory=list, description="Initial member agent IDs")
-    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    agent_type: Optional[str] = Field(default=None, description="Type or role of the team lead")
 
 
 class ClaudeTeamDeleteInput(BaseModel):
-    team_id: str = Field(description="Team ID or name")
-
-
-class ClaudeMailboxReadInput(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="Agent ID; defaults to the current agent")
-    limit: int = Field(default=100, ge=1, le=500, description="Maximum number of results")
-    include_consumed: bool = Field(default=False, description="Include consumed messages")
-    include_expired: bool = Field(default=False, description="Include expired messages")
-    mark_delivered: bool = Field(default=True, description="Mark queued messages as delivered")
-
-
-class ClaudeMailboxAckInput(BaseModel):
-    agent_id: Optional[str] = Field(default=None, description="Agent ID; defaults to the current agent")
-    message_ids: list[str] = Field(default_factory=list, description="Message IDs to acknowledge as consumed")
-    ack_all: bool = Field(default=False, description="Acknowledge all unconsumed messages for the current agent")
+    pass
 
 
 class ClaudeListMcpResourcesInput(BaseModel):

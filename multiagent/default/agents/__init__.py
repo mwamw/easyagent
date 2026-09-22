@@ -1,4 +1,4 @@
-"""Agent runtime exports."""
+"""Built-in Agent runtime exports."""
 
 from .manager import AgentRuntimeManager
 from .models import AgentHandle, BackgroundAgentHandle, CompletionRecord, MailboxMessage

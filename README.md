@@ -48,7 +48,7 @@ Agent 是能力装配与调用的中心，不意味着所有逻辑都放进一�
 
 `BasicAgent`、`DefaultAgentExecutor`、`SystemPromptComposer`、`ContextManager`、`LayeredMemory` 和已有存储实现提供起点。自定义模块则使用各职责自己的契约，例如：
 
-`BaseAgentExecutor` · `BaseContextManager` · `BaseHistoryCompactor` · `BaseMemory` · `BaseSystemPromptComposer` · `BaseSessionStore` · `BaseObservabilityManager` · `BaseMultiAgentRuntime`
+`BaseAgentExecutor` · `BaseContextManager` · `BaseHistoryCompactor` · `BaseMemory` · `BaseSystemPromptComposer` · `BaseSessionStore` · `BaseObservabilityManager` · `BaseMultiAgent`
 
 不同能力不必强行继承同一个万能 `AgentModule`。
 
@@ -258,7 +258,7 @@ def install_research_prompt(agent):
 | 权限策略 | `BasePermissionEngine` | `with_permissions(engine)` |
 | 会话存储 | `BaseSessionStore` | `with_session(store)` |
 | 可观测性 | `BaseObservabilityManager` / `BaseObservabilityStore` | `with_observability(manager=...)` 或 `store=...` |
-| 子 Agent 运行时 | `BaseMultiAgentRuntime` | `with_multi_agent(runtime)` |
+| Multi-Agent | `BaseMultiAgent` | `with_multi_agent(module)` |
 
 `with_skill`、`with_mcp`、`with_plan`、`with_task_service`、`with_hooks`、`with_callbacks`、`with_codeintel`、`with_worktree`、`with_interruptions` 提供其他能力入口。
 
@@ -308,7 +308,7 @@ MCP 将外部工具和资源接入本地工具体系，并处理相应连接、S
 
 ### Subagent、Team、Task 与 Mailbox
 
-可选 `MultiAgentRuntime` 提供 Agent Handle、后台运行、查询/等待/停止、Team、Mailbox 和 Completion Record。子 Agent 不只是另一个函数调用，还具有可管理的运行生命周期。
+可选 `ClaudeCodeMultiAgent` 是内置的 Claude Code 风格实现，提供 Agent Handle、后台运行、查询/等待/停止、Team、自动消息投递和 Completion Record。框架层只定义 `BaseMultiAgent` 的工具、提示词、上下文前置处理、状态和关闭接口，因此也可以换成完全不同的 Actor、Swarm 或远程 Worker 实现。
 
 Mailbox 投递与模型读取分开：框架在后续请求准备时同步消息，通过 MetaMessage 接入上下文并去重；读取和确认仍有独立操作。持久化 Handle 不意味着外部进程会随会话自动复活。
 

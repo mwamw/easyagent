@@ -31,7 +31,7 @@ from observability import (
 from core.history import CanonicalBlock, CanonicalMessage
 from runtime.events import RuntimeEvent, RuntimeEventBus
 from Tool import Tool, ToolRegistry
-from Tool.builtin.agent_tool import AgentTool
+from multiagent.default.tools import AgentTool
 from training import (
     TrainingDataFilter,
     TrainingDataFormat,
@@ -350,14 +350,8 @@ class TestObservability(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as directory:
-            tool = AgentTool(
-                parent_agent=parent,
-                agent_factory=lambda request: BasicAgent(
-                    name=request.name or "child",
-                    llm=DummyLLM(),
-                ),
-                storage_dir=directory,
-            )
+            parent.with_multi_agent(storage_dir=directory)
+            tool = parent.tool_registry.get_tool("Agent")
             try:
                 result = tool.run(
                     {

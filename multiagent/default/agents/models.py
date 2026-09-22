@@ -1,4 +1,4 @@
-"""Public models for the unified agent runtime."""
+"""Models for the built-in multi-agent runtime."""
 
 from __future__ import annotations
 

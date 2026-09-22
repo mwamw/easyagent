@@ -1,12 +1,11 @@
-"""Runtime-event-driven meta-message injection and cleanup."""
+"""Fixed runtime-event-driven meta-message injection and cleanup."""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections import OrderedDict, defaultdict
 import logging
 from threading import RLock
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, final
 from uuid import uuid4
 
 from core.history import CanonicalBlock, CanonicalMessage
@@ -29,41 +28,9 @@ _AGENT_TERMINAL = {
 _LLM_TERMINAL = {"llm.invoke.completed", "llm.invoke.failed"}
 
 
-class BaseMetaMessageManager(ABC):
-    """Extension boundary used by Agent modules and the request pipeline."""
-
-    @abstractmethod
-    def bind(
-        self,
-        *,
-        history_port: MetaMessageHistoryPort,
-        context_provider: MetaMessageContextProvider,
-    ) -> None:
-        raise NotImplementedError
-
-    @abstractmethod
-    def flush(self) -> list[MetaMessageInjection]:
-        raise NotImplementedError
-
-    @abstractmethod
-    def register(self, message: MetaMessage) -> MetaMessage:
-        raise NotImplementedError
-
-    @abstractmethod
-    def emit(self, message: MetaMessage) -> MetaMessage:
-        raise NotImplementedError
-
-    @abstractmethod
-    def publish(
-        self,
-        event: str | MetaMessageEvent,
-        payload: Optional[dict[str, Any]] = None,
-    ) -> list[MetaMessage]:
-        raise NotImplementedError
-
-
-class MetaMessageManager(BaseMetaMessageManager):
-    """Owns meta-message rules, safe history insertion, and scoped cleanup."""
+@final
+class MetaMessageManager:
+    """Framework-owned meta-message injection, lifecycle, and cleanup runtime."""
 
     def __init__(
         self,
@@ -475,7 +442,6 @@ class MetaMessageManager(BaseMetaMessageManager):
 
 
 __all__ = [
-    "BaseMetaMessageManager",
     "MetaMessageContextProvider",
     "MetaMessageFactory",
     "MetaMessageManager",

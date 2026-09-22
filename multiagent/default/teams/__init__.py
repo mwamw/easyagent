@@ -1,4 +1,4 @@
-"""Team runtime exports."""
+"""Built-in team runtime exports."""
 
 from .manager import TeamManager
 from .models import TeamHandle

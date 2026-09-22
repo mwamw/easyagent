@@ -1,9 +1,8 @@
-"""Public runtime meta-message API."""
+"""Fixed runtime meta-message infrastructure."""
 
 from .events import MetaMessageEvent
 from .history import ContextMetaMessageHistoryPort, MetaMessageHistoryPort
 from .manager import (
-    BaseMetaMessageManager,
     MetaMessageContextProvider,
     MetaMessageFactory,
     MetaMessageManager,
@@ -19,7 +18,6 @@ from .models import (
 
 __all__ = [
     "ContextMetaMessageHistoryPort",
-    "BaseMetaMessageManager",
     "MetaMessage",
     "MetaMessageCondition",
     "MetaMessageContent",

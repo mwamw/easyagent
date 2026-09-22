@@ -207,13 +207,15 @@ report = agent.close()
 大多数产品不需要再创建新的 Agent 类型。优先替换具体模块：
 
 - Prompt：继承 `BaseSystemPromptComposer`
-- MetaMessage：继承 `BaseMetaMessageManager`
 - Plan：继承 `BasePlanMode`
 - Executor：继承 `BaseAgentExecutor`
 - Observability：继承 `BaseObservabilityManager`
-- MultiAgent：继承 `BaseMultiAgentRuntime`
+- MultiAgent：继承 `BaseMultiAgent`
 
 只有调用协议本身需要变化时才继承 `BaseAgent`；此时必须实现 `invoke`、`ainvoke`、`stream` 和 `astream`。
+
+`MetaMessageManager` 和 `RuntimeEventBus` 是框架固定的 Runtime 基础设施，不是可替换模块。
+模块可以发送 MetaMessage 或订阅 RuntimeEvent，但不能通过 `with_*` 替换其生命周期语义。
 
 ## 8. 已删除接口
 

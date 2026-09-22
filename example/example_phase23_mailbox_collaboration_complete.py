@@ -85,7 +85,7 @@ def build_manager() -> tuple[BasicAgent, dict[str, object]]:
 def main() -> None:
     agent, env = build_manager()
     registry = agent.tool_registry
-    runtime = agent.agent_runtime
+    runtime = getattr(agent.multi_agent, "agent_runtime", None)
     assert registry is not None
     assert runtime is not None
 
@@ -98,7 +98,7 @@ def main() -> None:
     team_result = registry.execute_tool_result(
         "TeamCreate",
         {
-            "name": "mailbox-reviewers",
+            "team_name": "mailbox-reviewers",
             "description": "Workers that receive mailbox updates during analysis",
         },
     )
@@ -112,8 +112,7 @@ def main() -> None:
             "prompt": (
                 "你是一个只读代码审查 worker。\n"
                 "先读取 `agent_test.py` 的主要内容并整理一个初步结论。\n"
-                "在继续之前，检查协作邮箱：如果 manager 追加了新要求，就调用 MailboxRead 读取完整消息，"
-                "按消息里的要求继续执行，并在采用消息后调用 MailboxAck。\n"
+                "manager 追加的新要求会自动进入你的下一轮上下文，请按新要求继续执行。\n"
                 "不要修改任何文件，最后输出简洁的中文总结。"
             ),
             "name": "mailbox-aware-reviewer",
@@ -130,17 +129,12 @@ def main() -> None:
     message_result = registry.execute_tool_result(
         "SendMessage",
         {
-            "recipient_type": "agent",
-            "recipient_id": child_agent_id,
-            "content": (
+            "to": "mailbox-aware-reviewer",
+            "summary": "expand read-only review scope",
+            "message": (
                 "更新任务：在保持只读的前提下，额外读取 `example_stream.py`，"
-                "并把它与 `agent_test.py` 的差异一起总结。读取后请确认消费该消息。"
+                "并把它与 `agent_test.py` 的差异一起总结。"
             ),
-            "ttl_ms": 300000,
-            "metadata": {
-                "reason": "manager refined scope",
-                "expectedFollowup": "MailboxRead + MailboxAck",
-            },
         },
     )
     # show_result("SendMessage(agent)", message_result)
@@ -153,16 +147,6 @@ def main() -> None:
     )
     # show_result("AgentGet", get_result)
 
-    manager_mailbox_view = registry.execute_tool_result(
-        "MailboxRead",
-        {
-            "agent_id": child_agent_id,
-            "limit": 20,
-            "include_consumed": True,
-        },
-    )
-    # show_result("MailboxRead(child mailbox)", manager_mailbox_view)
-
     wait_result = registry.execute_tool_result(
         "AgentWait",
         {
@@ -172,32 +156,19 @@ def main() -> None:
     )
     # show_result("AgentWait", wait_result)
 
-    post_wait_mailbox = registry.execute_tool_result(
-        "MailboxRead",
-        {
-            "agent_id": child_agent_id,
-            "limit": 20,
-            "include_consumed": True,
-            "include_expired": True,
-        },
-    )
-    # show_result("MailboxRead(after wait)", post_wait_mailbox)
-
     print("=== Runtime completion records ===")
     print([record.to_dict() for record in runtime.list_completion_records()])
     print()
 
     delete_result = registry.execute_tool_result(
         "TeamDelete",
-        {
-            "team_id": team_id,
-        },
+        {},
     )
     # show_result("TeamDelete", delete_result)
 
     print("Manual verification suggestions:")
     print("1. Check whether AgentGet/AgentWait return mailbox counters and outputFile.")
-    print("2. Check whether MailboxRead(after wait) shows the message as consumed if the worker called MailboxAck.")
+    print("2. Check whether the teammate message was injected automatically before the worker's next context build.")
     print("3. Check runtime.list_completion_records() for the completed background worker.")
 
 

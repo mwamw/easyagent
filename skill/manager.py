@@ -10,8 +10,10 @@ from typing import Any, Iterable
 
 from pathspec import GitIgnoreSpec
 
-from metamessage import MetaMessage, MetaMessageLifecycle
-from runtime import RuntimeEvent, RuntimeEventType
+from runtime.context import ExecutionContext
+from runtime.events import RuntimeEvent, RuntimeEventBus, RuntimeEventType
+from runtime.metamessage import MetaMessage, MetaMessageLifecycle, MetaMessageManager
+from Tool.ToolRegistry import ToolRegistry
 
 from .base import SkillManifest
 from .folder_loader import discover_skill_files, load_skill_body, load_skill_manifest
@@ -53,7 +55,10 @@ class SkillManager:
     """Indexes Skill directories and expands a selected Skill on demand."""
 
     def __init__(self) -> None:
-        self._agent: Any = None
+        self._tool_registry: ToolRegistry | None = None
+        self._metamessages: MetaMessageManager | None = None
+        self._event_bus: RuntimeEventBus | None = None
+        self._execution_context: ExecutionContext | None = None
         self._directories: list[str] = []
         self._skills: dict[str, SkillManifest] = {}
         self._activated_path_skills: set[str] = set()
@@ -77,40 +82,43 @@ class SkillManager:
         with self._lock:
             return tuple(sorted({key.rsplit(":", 1)[0] for key in self._active_keys}))
 
-    def bind_agent(self, agent: Any) -> None:
-        """Bind this module to one Agent and its RuntimeEvent stream."""
+    def bind(
+        self,
+        *,
+        tool_registry: ToolRegistry,
+        metamessages: MetaMessageManager,
+        event_bus: RuntimeEventBus,
+        execution_context: ExecutionContext,
+    ) -> "SkillManager":
+        """Receive the module and fixed runtime facilities required by Skills."""
 
-        previous = self._agent
-        if previous is not None and previous is not agent and self._event_subscription:
-            previous.event_bus.unsubscribe(self._event_subscription)
-            self._event_subscription = None
-        self._agent = agent
+        if not isinstance(tool_registry, ToolRegistry):
+            raise TypeError("tool_registry must be ToolRegistry")
+        if not isinstance(metamessages, MetaMessageManager):
+            raise TypeError("metamessages must be the Agent MetaMessageManager")
+        if not isinstance(event_bus, RuntimeEventBus):
+            raise TypeError("event_bus must be the Agent RuntimeEventBus")
+        if not isinstance(execution_context, ExecutionContext):
+            raise TypeError("execution_context must be the Agent ExecutionContext")
+
+        bindings = (
+            (self._tool_registry, tool_registry),
+            (self._metamessages, metamessages),
+            (self._event_bus, event_bus),
+            (self._execution_context, execution_context),
+        )
+        if any(current is not None and current is not requested for current, requested in bindings):
+            raise RuntimeError("A SkillManager cannot be shared between Agents")
+        self._tool_registry = tool_registry
+        self._metamessages = metamessages
+        self._event_bus = event_bus
+        self._execution_context = execution_context
         if self._event_subscription is None:
-            self._event_subscription = agent.event_bus.subscribe(
+            self._event_subscription = event_bus.subscribe(
                 self._handle_runtime_event,
                 event_types=_SKILL_EVENTS,
             )
-
-    def install_tool(self) -> None:
-        """Install the single model-facing Skill tool into the bound Agent."""
-
-        if self._agent is None:
-            raise RuntimeError("SkillManager must be bound before installing skill_tool")
-        registry = getattr(self._agent, "tool_registry", None)
-        if registry is None:
-            raise RuntimeError("SkillManager requires an installed ToolRegistry")
-        existing = registry.get_tool("skill_tool")
-        if existing is not None:
-            if getattr(existing, "manager", None) is self:
-                return
-            raise ValueError("Tool 'skill_tool' is already registered by another SkillManager")
-        from .tool import SkillTool
-
-        registry.register_tool(
-            SkillTool(self),
-            expose_in_deferred=True,
-            conflict_policy="error",
-        )
+        return self
 
     def add_directories(
         self,
@@ -131,10 +139,6 @@ class SkillManager:
                     raise ValueError(
                         f"Skill name '{manifest.name}' must match directory "
                         f"'{skill_file.parent.name}' in {skill_file}"
-                    )
-                if manifest.context != "fork" and (manifest.agent or manifest.model):
-                    raise ValueError(
-                        f"Skill '{manifest.name}' may declare agent/model only with context: fork"
                     )
                 candidates.append(manifest)
 
@@ -213,14 +217,13 @@ class SkillManager:
 
     def _recommended_tools(self, manifest: SkillManifest) -> tuple[list[str], list[str]]:
         """Return advisory tool names; this never changes authorization."""
-        if self._agent is None or not manifest.recommended_tools:
+        if self._tool_registry is None or not manifest.recommended_tools:
             return [], []
-        registry = getattr(self._agent, "tool_registry", None)
         available: list[str] = []
         unavailable: list[str] = []
         for item in manifest.recommended_tools:
             tool_name = str(item).split("(", 1)[0].strip()
-            if registry is None or not registry.has_tool(tool_name):
+            if not self._tool_registry.has_tool(tool_name):
                 unavailable.append(item)
                 continue
             available.append(item)
@@ -245,7 +248,7 @@ class SkillManager:
         listing = self.build_skill_listing_prompt()
         return [PromptBlock("skill_listing", listing, placement="system_reminder", order=100)] if listing else []
 
-    def invoke(
+    def activate(
         self,
         name: str,
         *,
@@ -261,14 +264,9 @@ class SkillManager:
             )
         if model_initiated and not self.is_visible(manifest.name):
             raise SkillNotActiveError(manifest)
-        if self._agent is None:
-            raise RuntimeError("SkillManager is not bound to an Agent")
+        if self._metamessages is None:
+            raise RuntimeError("SkillManager is not bound to runtime infrastructure")
         body = load_skill_body(manifest, args)
-        if manifest.context == "fork":
-            recommended, unavailable = self._recommended_tools(manifest)
-            return self._invoke_fork(
-                manifest, body, args, recommended=recommended, unavailable=unavailable,
-            )
 
         key = f"{manifest.name}:{sha256(str(args or '').encode('utf-8')).hexdigest()[:16]}"
         with self._lock:
@@ -276,7 +274,7 @@ class SkillManager:
             self._active_keys.add(key)
         recommended, unavailable = self._recommended_tools(manifest)
         if not already_active:
-            self._agent.emit_metamessage(
+            self._metamessages.emit(
                 MetaMessage(
                     name=f"skill:{manifest.name}",
                     content=self._render_inline_content(manifest, body, args),
@@ -302,51 +300,6 @@ class SkillManager:
             "skillDirectory": manifest.directory,
             "recommendedTools": recommended,
             "unavailableRecommendedTools": unavailable,
-            "model": manifest.model,
-        }
-
-    def _invoke_fork(
-        self,
-        manifest: SkillManifest,
-        body: str,
-        args: str,
-        *,
-        recommended: list[str],
-        unavailable: list[str],
-    ) -> dict[str, Any]:
-        if self._agent is None:
-            raise RuntimeError("SkillManager is not bound to an Agent")
-        registry = getattr(self._agent, "tool_registry", None)
-        if registry is None or not registry.has_tool("Agent"):
-            raise RuntimeError(
-                f"Skill '{manifest.name}' requires context: fork; install the multi-agent "
-                "module with agent.with_multi_agent() first"
-            )
-        parameters: dict[str, Any] = {
-            "description": f"Run Skill {manifest.name}",
-            "prompt": self._render_inline_content(manifest, body, args),
-            "run_in_background": False,
-        }
-        if manifest.agent:
-            parameters["subagent_type"] = manifest.agent
-        if manifest.model:
-            parameters["model"] = manifest.model
-        result = registry.execute_tool_result("Agent", parameters)
-        if result.status != "success":
-            raise RuntimeError(result.to_display_string())
-        data = dict(result.structured_data or {})
-        return {
-            "success": True,
-            "skill": manifest.name,
-            "status": "forked",
-            "instructionSource": manifest.file_path,
-            "skillDirectory": manifest.directory,
-            "recommendedTools": recommended,
-            "unavailableRecommendedTools": unavailable,
-            "model": manifest.model,
-            "agentId": data.get("agentId"),
-            "outputFile": data.get("outputFile"),
-            "result": data.get("content") or result.content,
         }
 
     @staticmethod
@@ -378,11 +331,10 @@ class SkillManager:
         return [candidate] if parent_key in _PATH_KEYS or parent_key == "paths" else []
 
     def _workspace_paths_from_event(self, event: RuntimeEvent) -> list[str]:
-        if self._agent is None:
+        if self._tool_registry is None:
             return []
-        registry = getattr(self._agent, "tool_registry", None)
         tool_name = str(event.data.get("tool_name") or "")
-        tool = registry.get_tool(tool_name) if registry is not None else None
+        tool = self._tool_registry.get_tool(tool_name)
         if tool is None:
             return []
         spec = tool.get_spec()
@@ -406,9 +358,9 @@ class SkillManager:
     def activate_for_paths(self, paths: Iterable[str | os.PathLike[str]]) -> list[str]:
         """Make conditional Skills visible after a workspace path is touched."""
 
-        if self._agent is None:
-            raise RuntimeError("SkillManager is not bound to an Agent")
-        workspace_root = os.path.realpath(self._agent.execution_context.workspace_root)
+        if self._execution_context is None:
+            raise RuntimeError("SkillManager is not bound to runtime infrastructure")
+        workspace_root = os.path.realpath(self._execution_context.workspace_root)
         relative_paths: list[str] = []
         for value in paths:
             candidate = os.fspath(value).strip()
@@ -486,12 +438,13 @@ class SkillManager:
     def close(self) -> dict[str, Any]:
         with self._lock:
             self._active_keys.clear()
-        if self._agent is not None:
-            self._agent.register_prompt_provider("skill", None)
-            if self._event_subscription:
-                self._agent.event_bus.unsubscribe(self._event_subscription)
+        if self._event_bus is not None and self._event_subscription:
+            self._event_bus.unsubscribe(self._event_subscription)
         self._event_subscription = None
-        self._agent = None
+        self._tool_registry = None
+        self._metamessages = None
+        self._event_bus = None
+        self._execution_context = None
         return {"status": "closed", "directories": list(self.directories)}
 
 

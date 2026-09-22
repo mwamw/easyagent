@@ -1,4 +1,4 @@
-"""An owned group of registrations using the existing injection mechanism."""
+"""An owned group of registrations using the runtime injection mechanism."""
 
 from .models import MetaMessageLifecycle
 

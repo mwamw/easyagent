@@ -14,7 +14,7 @@ from core.permissions.models import PermissionBehavior
 from core.request_input import ReplayRequestInput
 from context.models import ContextCompactionResult, ContextUsage
 from core.scope import RuntimeScope
-from metamessage import MetaMessage, MetaMessageLifecycle
+from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from runtime import AgentStreamEvent, AgentStreamEventType, RuntimeEventType
 from Tool.BaseTool import ToolResult
 from .base import AgentExecutionServices, AgentInvocationPhase, AgentInvocationState, BaseAgentExecutor
@@ -572,7 +572,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                services.mailbox_sync()
+                services.before_context_build()
                 scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
                 if services.hook_manager is not None:
                     hook = services.hook_manager.before_context({
@@ -777,7 +777,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                services.mailbox_sync()
+                services.before_context_build()
                 scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
                 if services.hook_manager is not None:
                     hook = await services.hook_manager.arun_stage("before_context", {
@@ -982,7 +982,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                services.mailbox_sync()
+                services.before_context_build()
                 scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
                 if services.hook_manager is not None:
                     hook = services.hook_manager.before_context({
@@ -1260,7 +1260,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             for round_number in range(1, max_iter + 1):
                 state.round_number = round_number
                 self._check_stop(services)
-                services.mailbox_sync()
+                services.before_context_build()
                 scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
                 if services.hook_manager is not None:
                     hook = await services.hook_manager.arun_stage("before_context", {

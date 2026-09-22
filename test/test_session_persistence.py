@@ -12,7 +12,7 @@ from core.history import CanonicalBlock, CanonicalMessage
 from core.llm import EasyLLM
 from easyagent.session import SQLiteSessionStore as SessionStore
 from db import ConversationStore
-from metamessage import MetaMessage, MetaMessageLifecycle
+from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from observability import InMemoryObservabilityStore
 from plan import PlanModeConfig
 from prompt import PromptBlock

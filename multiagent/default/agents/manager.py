@@ -1,4 +1,4 @@
-"""Unified runtime manager for subagents, handles, and mailboxes."""
+"""Claude-style runtime manager for subagents, handles, and mailboxes."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import time
 from typing import Any, Callable, Optional
 from uuid import uuid4
 
-from Tool.runtime import SubagentManager, SubagentRequest
+from multiagent.default.subagents import SubagentManager, SubagentRequest
 from runtime.context import ExecutionContext
-from runtime.teams.manager import TeamManager
+from multiagent.default.teams.manager import TeamManager
 
 from .models import AgentHandle, BackgroundAgentHandle, CompletionRecord, MailboxMessage
 
@@ -235,6 +235,26 @@ class AgentRuntimeManager:
             self._capture_completion_record_locked(agent_id=agent_id, handle=handle)
         return handle
 
+    def resolve_agent_id(self, identifier: str) -> str:
+        """Resolve an agent ID or unique teammate name to a runtime ID."""
+
+        candidate = str(identifier or "").strip()
+        if not candidate:
+            raise ValueError("agent recipient must not be empty")
+        with self._lock:
+            if candidate in self._requests:
+                return candidate
+            matches = [
+                agent_id
+                for agent_id, request in self._requests.items()
+                if request.name == candidate
+            ]
+        if not matches:
+            raise KeyError(f"Agent does not exist: {candidate}")
+        if len(matches) > 1:
+            raise ValueError(f"Agent name is ambiguous: {candidate}")
+        return matches[0]
+
     def list_handles(
         self,
         *,
@@ -429,7 +449,7 @@ class AgentRuntimeManager:
 
         recipient_type = str(recipient_type).strip().lower()
         if recipient_type == "agent":
-            target_ids = [recipient_id]
+            target_ids = [self.resolve_agent_id(recipient_id)]
         elif recipient_type == "team":
             if self.team_manager is None:
                 raise ValueError("当前未绑定 TeamManager，无法向团队发送消息。")

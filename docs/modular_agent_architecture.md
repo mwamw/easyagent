@@ -186,7 +186,9 @@ EventBus 会保存历史、隔离 subscriber 异常，并随 session snapshot �
 
 ## 8. MultiAgent 是独立模块
 
-`MultiAgentRuntime` 是多智能体能力的 façade，内部拥有：
+`BaseMultiAgent` 是可替换的模块契约，只定义显式设施绑定、工具贡献、PromptBlock 贡献、`before_context_build()`、状态恢复和关闭。它不强制所有实现都使用 Team 或 Mailbox。
+
+内置 `ClaudeCodeMultiAgent` 是一个具体实现，内部拥有：
 
 - `AgentRuntimeManager`
 - `TeamManager`
@@ -210,21 +212,18 @@ agent.with_multi_agent(workspace_root=".")
 - `AgentWait`
 - `AgentStop`
 - `SendMessage`
-- `MailboxRead`
-- `MailboxAck`
 - `TeamCreate`
 - `TeamDelete`
 
 Agent 相关工具都返回结构化 handle 信息，包括 `agentId`、`status`、`outputFile`、`executionContext`、background 状态和错误信息。后台 Agent 的完整输出写入 `outputFile`，调用方不需要从一句“已启动”文本猜测结果位置。
 
-### 8.1 mailbox 的真实读取链路
+### 8.1 teammate message 的真实读取链路
 
 1. `SendMessage` 调用 `AgentRuntimeManager.send_message()`，消息进入目标 handle 的 mailbox。
-2. 子 Agent 每次构建 LLM request 前调用 `MultiAgentRuntime.sync_mailbox()`。
+2. Executor 在 Context 组装前调用通用 `before_context_build()` 生命周期入口。
 3. 未消费消息被标记为 delivered，并通过永久 MetaMessage 注入子 Agent history。
 4. 模型可以立即从当前 request 看到消息。
-5. `MailboxRead` 提供结构化查看；`MailboxAck` 将消息标记为 consumed。
-6. dedup key 保证同一消息不会重复写入 history。
+5. dedup key 保证同一消息不会重复写入 history。
 
 这不是把 mailbox 文本拼进 system prompt，也不要求子 Agent 轮询私有字段。
 
@@ -303,13 +302,15 @@ Session snapshot 显式保存 Agent 状态和已安装模块，不扫描 ToolReg
 当前正式扩展基类：
 
 - `BaseSystemPromptComposer`
-- `BaseMetaMessageManager`
 - `BasePlanMode`
 - `BaseObservabilityManager`
-- `BaseMultiAgentRuntime`
+- `BaseMultiAgent`
 - `BaseAgentExecutor`
 
 框架不要求它们拥有统一的 config、manager、install 或 lifecycle 方法。每个接口只表达该能力真正需要的契约。
+
+`runtime/metamessage`、`RuntimeEventBus` 和 `ExecutionContext` 是框架内核基础设施，
+由 Agent 固定创建并提供给模块使用，不属于 `with_*` 可替换模块。
 
 示例：替换 Prompt 只实现 `build(context)`；替换 Executor 必须实现四种 invoke API；替换 Observability 则实现 event bind/consume、`list()` 和 close。Training 只通过 `list()` 消费其标准 `AgentInvoke` 记录。自定义类通过对应 `with_*` 接入。
 
@@ -344,9 +345,9 @@ Plan、Skill、mailbox 和 tool ephemeral context 不再各自维护 prompt 注�
 
 Callback、Observability、session 和 training 不再维护不同 trace 模型。RuntimeEvent 是执行事实，Observability 把事件沉淀为 AgentInvoke/LLMInvoke，Training 再从这些记录导出语料。
 
-### 变化五：多智能体从工具集合变为运行时模块
+### 变化五：多智能体成为可替换模块
 
-`MultiAgentRuntime` 统一安装 subagent、team 和 mailbox 控制面，并负责恢复和关闭。`Agent` 工具只做派发；handle、output file 和生命周期状态由 runtime 管理。
+框架通过 `BaseMultiAgent` 接入任意多智能体实现；`ClaudeCodeMultiAgent` 负责内置的 subagent、Agent Definition、team、自动消息投递、恢复和关闭。默认实现不再接收整个父 Agent，所需模块和固定基础设施都由 `with_multi_agent()` 显式注入。
 
 ## 13. 已删除的旧接口
 
