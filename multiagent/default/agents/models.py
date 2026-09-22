@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from runtime.context import ExecutionContext
+from runtime.agent import AgentRuntime
 
 
 @dataclass(slots=True)
@@ -105,7 +105,7 @@ class AgentHandle:
     output_file: str
     workspace_root: str
     allowed_roots: tuple[str, ...]
-    execution_context: ExecutionContext
+    runtime: AgentRuntime
     agent_type: Optional[str] = None
     name: Optional[str] = None
     team_name: Optional[str] = None
@@ -142,7 +142,7 @@ class AgentHandle:
             "outputFile": self.output_file,
             "workspaceRoot": self.workspace_root,
             "allowedRoots": list(self.allowed_roots),
-            "executionContext": self.execution_context.to_dict(),
+            "executionContext": self.runtime.to_dict(),
             "agentType": self.agent_type,
             "name": self.name,
             "teamName": self.team_name,

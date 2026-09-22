@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 import inspect
 import json
 from threading import RLock
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from uuid import uuid4
 
 from context.base import BaseContextManager
+from runtime.agent import AgentRuntime
 from core.Exception import SessionNotFoundError, SessionSerializationError
 
 from .report import SessionRestoreReport
@@ -41,8 +43,8 @@ class SessionStateParticipant:
 
 
 @dataclass(frozen=True, slots=True)
-class SessionRuntime:
-    """Only the Agent runtime capabilities required by session management."""
+class SessionBindings:
+    """Explicit module dependencies; shared execution state lives in AgentRuntime."""
 
     agent_type: str
     agent_name: str
@@ -50,25 +52,17 @@ class SessionRuntime:
     provider_name: Callable[[], str | None]
     tool_names: Callable[[], list[str]]
     has_tool: Callable[[str], bool]
-    get_session_id: Callable[[], str]
-    set_session_id: Callable[[str], None]
-    get_reasoning: Callable[[], Mapping[str, Any] | None]
-    set_reasoning: Callable[[Mapping[str, Any] | None], None]
-    get_current_task_id: Callable[[], str | None]
-    set_current_task_id: Callable[[str | None], None]
-    has_pending_interruption: Callable[[], bool]
-    ensure_idle: Callable[[], None]
-    reconcile_history: Callable[[], None]
-    refresh_execution_context: Callable[[], None]
+
 
 
 class SessionManager:
     """Capture, persist, fork, and restore one explicitly assembled runtime."""
 
-    def __init__(self, runtime: SessionRuntime) -> None:
-        if not isinstance(runtime, SessionRuntime):
-            raise TypeError("runtime must be SessionRuntime")
+    def __init__(self, runtime: AgentRuntime, bindings: SessionBindings) -> None:
+        if not isinstance(runtime, AgentRuntime):
+            raise TypeError("runtime must be AgentRuntime")
         self.runtime = runtime
+        self.bindings = bindings
         self.store: BaseSessionStore | None = None
         self._participants: dict[str, SessionStateParticipant] = {}
         self._revisions: dict[tuple[int, str], int] = {}
@@ -108,6 +102,17 @@ class SessionManager:
             raise RuntimeError("A session operation is already in progress")
         self.runtime.ensure_idle()
 
+    @contextmanager
+    def _operation(self) -> Iterator[None]:
+        with self._lock:
+            self._ensure_idle()
+            with self.runtime.operation():
+                self.busy = True
+                try:
+                    yield
+                finally:
+                    self.busy = False
+
     def snapshot(self, *, fork: bool = False) -> dict[str, Any]:
         modules = {} if fork else deepcopy(self._unknown)
         for name, binding in self._participants.items():
@@ -129,13 +134,13 @@ class SessionManager:
             }
         snapshot = {
             "schemaVersion": 4,
-            "agentType": self.runtime.agent_type,
-            "name": self.runtime.agent_name,
-            "history": self.runtime.context().export_state(),
+            "agentType": self.bindings.agent_type,
+            "name": self.bindings.agent_name,
+            "history": self.bindings.context().export_state(),
             "modules": modules,
-            "tools": self.runtime.tool_names(),
-            "reasoning": deepcopy(self.runtime.get_reasoning()),
-            "currentTaskId": None if fork else self.runtime.get_current_task_id(),
+            "tools": self.bindings.tool_names(),
+            "reasoning": deepcopy(self.runtime.reasoning),
+            "currentTaskId": None if fork else self.runtime.current_task_id,
         }
         return json.loads(
             json.dumps(snapshot, ensure_ascii=False, allow_nan=False, default=_state_json)
@@ -149,22 +154,21 @@ class SessionManager:
         metadata: Mapping[str, Any] | None = None,
         expires_at: datetime | None = None,
     ) -> str:
-        with self._lock:
-            self._ensure_idle()
+        with self._operation():
             resolved = self.resolve_store(store)
-            resolved_id = session_id or self.runtime.get_session_id()
+            resolved_id = session_id or self.runtime.session_id
             key = (id(resolved), resolved_id)
             record = resolved.create_or_update_session(
                 session_id=resolved_id,
-                agent_type=self.runtime.agent_type,
-                agent_name=self.runtime.agent_name,
+                agent_type=self.bindings.agent_type,
+                agent_name=self.bindings.agent_name,
                 snapshot=self.snapshot(),
                 metadata=self._metadata.get(key, {}) if metadata is None else dict(metadata),
                 expires_at=expires_at,
                 expected_revision=self._revisions.get(key),
             )
             self._remember_record(resolved, resolved_id, record)
-            self.runtime.set_session_id(resolved_id)
+            self.runtime.session_id = resolved_id
             return resolved_id
 
     def fork(
@@ -174,11 +178,10 @@ class SessionManager:
         store: BaseSessionStore | str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
-        with self._lock:
-            self._ensure_idle()
+        with self._operation():
             self._ensure_forkable()
             resolved = self.resolve_store(store)
-            source_id = self.runtime.get_session_id()
+            source_id = self.runtime.session_id
             fork_id = session_id or f"session_{uuid4().hex}"
             lineage = {
                 **dict(metadata or {}),
@@ -187,8 +190,8 @@ class SessionManager:
             }
             resolved.create_or_update_session(
                 session_id=fork_id,
-                agent_type=self.runtime.agent_type,
-                agent_name=self.runtime.agent_name,
+                agent_type=self.bindings.agent_type,
+                agent_name=self.bindings.agent_name,
                 snapshot=self.snapshot(fork=True),
                 metadata=lineage,
             )
@@ -200,8 +203,7 @@ class SessionManager:
         *,
         store: BaseSessionStore | str | None = None,
     ) -> SessionRestoreReport:
-        with self._lock:
-            self._ensure_idle()
+        with self._operation():
             resolved = self.resolve_store(store)
             return self._restore_record(session_id, resolved, resolved.get_session(session_id))
 
@@ -213,26 +215,22 @@ class SessionManager:
         metadata: Mapping[str, Any] | None = None,
         expires_at: datetime | None = None,
     ) -> str:
-        self._ensure_idle()
-        self.busy = True
-        try:
+        with self._operation():
             resolved = self.resolve_store(store)
-            resolved_id = session_id or self.runtime.get_session_id()
+            resolved_id = session_id or self.runtime.session_id
             key = (id(resolved), resolved_id)
             record = await resolved.asave_session(
                 session_id=resolved_id,
-                agent_type=self.runtime.agent_type,
-                agent_name=self.runtime.agent_name,
+                agent_type=self.bindings.agent_type,
+                agent_name=self.bindings.agent_name,
                 snapshot=self.snapshot(),
                 metadata=self._metadata.get(key, {}) if metadata is None else dict(metadata),
                 expires_at=expires_at,
                 expected_revision=self._revisions.get(key),
             )
             self._remember_record(resolved, resolved_id, record)
-            self.runtime.set_session_id(resolved_id)
+            self.runtime.session_id = resolved_id
             return resolved_id
-        finally:
-            self.busy = False
 
     async def arestore(
         self,
@@ -240,17 +238,13 @@ class SessionManager:
         *,
         store: BaseSessionStore | str | None = None,
     ) -> SessionRestoreReport:
-        self._ensure_idle()
-        self.busy = True
-        try:
+        with self._operation():
             resolved = self.resolve_store(store)
             return self._restore_record(
                 session_id,
                 resolved,
                 await resolved.aget_session(session_id),
             )
-        finally:
-            self.busy = False
 
     async def afork(
         self,
@@ -259,12 +253,10 @@ class SessionManager:
         store: BaseSessionStore | str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
-        self._ensure_idle()
-        self._ensure_forkable()
-        self.busy = True
-        try:
+        with self._operation():
+            self._ensure_forkable()
             resolved = self.resolve_store(store)
-            source_id = self.runtime.get_session_id()
+            source_id = self.runtime.session_id
             fork_id = session_id or f"session_{uuid4().hex}"
             lineage = {
                 **dict(metadata or {}),
@@ -273,17 +265,15 @@ class SessionManager:
             }
             await resolved.asave_session(
                 session_id=fork_id,
-                agent_type=self.runtime.agent_type,
-                agent_name=self.runtime.agent_name,
+                agent_type=self.bindings.agent_type,
+                agent_name=self.bindings.agent_name,
                 snapshot=self.snapshot(fork=True),
                 metadata=lineage,
             )
             return fork_id
-        finally:
-            self.busy = False
 
     def _ensure_forkable(self) -> None:
-        if self.runtime.has_pending_interruption():
+        if self.runtime.interruptions.get_last_interrupt() is not None:
             raise SessionSerializationError("Resolve the pending interaction before forking")
 
     def _remember_record(
@@ -308,14 +298,14 @@ class SessionManager:
         if snapshot.get("schemaVersion") != 4:
             raise SessionSerializationError("Explicitly migrate the legacy session to V4 first")
 
-        report = SessionRestoreReport(session_id=session_id, agent_type=self.runtime.agent_type)
+        report = SessionRestoreReport(session_id=session_id, agent_type=self.bindings.agent_type)
         history = snapshot.get("history")
         try:
-            self.runtime.context().validate_state(history)
+            self.bindings.context().validate_state(history)
         except Exception as exc:
             raise SessionSerializationError("Invalid Context session state") from exc
         provider = history.get("providerName") if isinstance(history, dict) else None
-        current_provider = self.runtime.provider_name()
+        current_provider = self.bindings.provider_name()
         if provider and provider != current_provider:
             report.add_issue(
                 component="history",
@@ -359,7 +349,7 @@ class SessionManager:
             if callable(getattr(component, "reset_session_state", None)):
                 operations.append((name, component, None))
 
-        context = self.runtime.context()
+        context = self.bindings.context()
         saved_history = context.export_state()
         backups: list[tuple[object, Any]] = []
         try:
@@ -381,14 +371,13 @@ class SessionManager:
             raise
 
         self._unknown = unknown
-        self.runtime.set_session_id(session_id)
-        self.runtime.set_reasoning(snapshot.get("reasoning"))
-        self.runtime.set_current_task_id(snapshot.get("currentTaskId"))
+        self.runtime.session_id = session_id
+        self.runtime.reasoning = snapshot.get("reasoning")
+        self.runtime.current_task_id = snapshot.get("currentTaskId")
         self._remember_record(store, session_id, record)
         report.note_missing_tools(
-            [name for name in snapshot.get("tools", []) if not self.runtime.has_tool(name)]
+            [name for name in snapshot.get("tools", []) if not self.bindings.has_tool(name)]
         )
-        self.runtime.reconcile_history()
-        self.runtime.refresh_execution_context()
+        self.runtime.metamessages.reconcile_history()
         self.last_restored_snapshot = snapshot
         return report

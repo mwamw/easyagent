@@ -6,7 +6,7 @@ import os
 from typing import Any, Callable, Iterable
 
 from permissions import ApprovalMode
-from runtime import ExecutionContext
+from runtime import AgentRuntime
 from multiagent.default.agents import AgentRuntimeManager
 from multiagent.default.subagents import SubagentManager, SubagentRequest
 from task import TaskStatus
@@ -171,7 +171,7 @@ class AgentTool(Tool):
         self,
         *,
         agent_factory: Callable[[SubagentRequest], Any],
-        execution_context: ExecutionContext | None = None,
+        runtime: AgentRuntime | None = None,
         tool_registry: ToolRegistry | None = None,
         agent_name: str | None = None,
         task_service: Any = None,
@@ -188,17 +188,17 @@ class AgentTool(Tool):
         if not callable(agent_factory):
             raise TypeError("agent_factory must be callable")
         self.agent_factory = agent_factory
-        self.execution_context = execution_context
+        self.runtime = runtime
         self.tool_registry = tool_registry
         self.agent_name = agent_name
         self.task_service = task_service
         self.observability = observability
         self.cache_safe_params_provider = cache_safe_params_provider
         self.workspace_root = _normalize_workspace_root(
-            workspace_root or getattr(execution_context, "workspace_root", None)
+            workspace_root or getattr(runtime, "workspace_root", None)
         )
         roots = tuple(os.path.abspath(item) for item in (allowed_roots or ()) if item)
-        self.allowed_roots = roots or tuple(getattr(execution_context, "allowed_roots", ())) or (self.workspace_root,)
+        self.allowed_roots = roots or tuple(getattr(runtime, "allowed_roots", ())) or (self.workspace_root,)
         self.worktree_manager = worktree_manager
         self.storage_dir = os.path.abspath(storage_dir or os.path.join(self.workspace_root, ".easyagent-agents"))
         self.agent_runtime = agent_runtime or AgentRuntimeManager(
@@ -231,7 +231,7 @@ class AgentTool(Tool):
         except Exception:
             return {}
 
-    def _build_execution_context(self, request: SubagentRequest) -> ExecutionContext:
+    def _build_runtime(self, request: SubagentRequest) -> AgentRuntime:
         workspace_root = os.path.abspath(request.workspace_root or self.workspace_root)
         allowed_roots = tuple(request.allowed_roots or (workspace_root,))
         mode = _normalize_subagent_mode(request.mode)
@@ -239,13 +239,13 @@ class AgentTool(Tool):
         metadata = {
             "delegatedBy": self.agent_name,
             "parentAgentId": (
-                self.execution_context.metadata.get("agentId")
-                if self.execution_context is not None
+                self.runtime.metadata.get("agentId")
+                if self.runtime is not None
                 else None
             ),
         }
-        if self.execution_context is not None:
-            return self.execution_context.copy_for_workspace(
+        if self.runtime is not None:
+            return self.runtime.derive(
                 workspace_root=workspace_root,
                 allowed_roots=allowed_roots,
                 worktree_path=request.worktree_path,
@@ -254,7 +254,7 @@ class AgentTool(Tool):
                 current_task_id=task_id,
                 metadata=metadata,
             )
-        return ExecutionContext(
+        return AgentRuntime(
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             permission_mode=mode.value if mode is not None else "default",
@@ -280,7 +280,7 @@ class AgentTool(Tool):
             description=request.prompt,
             status=TaskStatus.IN_PROGRESS,
             owner=request.name,
-            parent_task_id=getattr(self.execution_context, "current_task_id", None),
+            parent_task_id=getattr(self.runtime, "current_task_id", None),
             metadata=metadata,
         )
         request.metadata = {**metadata, "task_id": task.task_id}
@@ -367,7 +367,7 @@ class AgentTool(Tool):
             request, metadata = self._prepare_request(parameters)
             handle = self.agent_runtime.run(
                 request,
-                execution_context=self._build_execution_context(request),
+                runtime=self._build_runtime(request),
                 run_in_background=bool(parameters.get("run_in_background", False)),
                 agent_factory=self.agent_factory,
             )
@@ -406,7 +406,7 @@ def register_agent_tool(
     registry: ToolRegistry,
     *,
     agent_factory: Callable[[SubagentRequest], Any],
-    execution_context: ExecutionContext | None = None,
+    runtime: AgentRuntime | None = None,
     tool_registry: ToolRegistry | None = None,
     agent_name: str | None = None,
     task_service: Any = None,
@@ -423,7 +423,7 @@ def register_agent_tool(
 ) -> AgentTool:
     tool = AgentTool(
         agent_factory=agent_factory,
-        execution_context=execution_context,
+        runtime=runtime,
         tool_registry=tool_registry or registry,
         agent_name=agent_name,
         task_service=task_service,

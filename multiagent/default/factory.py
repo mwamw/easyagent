@@ -9,7 +9,7 @@ from core.cache_policy import PromptCachePolicy, build_cache_signature
 from permissions import ApprovalMode
 from permissions.default import RuleBasedPermissionEngine
 from core.request_compiler import compile_prompt_blocks
-from runtime import ExecutionContext
+from runtime import AgentRuntime
 from multiagent.default.definitions import AgentDefinitionRegistry
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ class DefaultSubagentFactory:
         config: Any,
         system_prompt: str | None,
         reasoning: dict[str, Any] | None,
-        execution_context: ExecutionContext,
+        runtime: AgentRuntime,
         tool_registry: "ToolRegistry",
         definitions: AgentDefinitionRegistry,
         permission_engine: Any = None,
@@ -62,7 +62,7 @@ class DefaultSubagentFactory:
         self.config = config
         self.system_prompt = system_prompt
         self.reasoning = reasoning
-        self.execution_context = execution_context
+        self.runtime = runtime
         self.tool_registry = tool_registry
         self.permission_engine = permission_engine
         self.callback_manager = callback_manager
@@ -122,7 +122,7 @@ class DefaultSubagentFactory:
         from multiagent.default.tools import clone_tool_registry_for_workspace
 
         definition = self.definitions.get(request.agent_type)
-        workspace_root = request.workspace_root or self.execution_context.workspace_root
+        workspace_root = request.workspace_root or self.runtime.workspace_root
         allowed_roots = tuple(request.allowed_roots or (workspace_root,))
         registry = clone_tool_registry_for_workspace(
             self.tool_registry,
@@ -189,7 +189,8 @@ class DefaultSubagentFactory:
                 team_id = self._team_manager.get_team(request.team_name).team_id
             except KeyError:
                 team_id = None
-        child_context = self.execution_context.copy_for_workspace(
+        child_context = self.runtime.derive(
+            agent_id=request.metadata.get("agent_id"),
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             worktree_path=request.worktree_path,
@@ -199,7 +200,7 @@ class DefaultSubagentFactory:
             current_task_id=task_id,
             metadata={
                 "delegatedBy": self.parent_name,
-                "parentAgentId": self.execution_context.metadata.get("agentId"),
+                "parentAgentId": self.runtime.metadata.get("agentId"),
                 "agentId": request.metadata.get("agent_id"),
                 "outputFile": request.metadata.get("output_file"),
                 "teamName": request.team_name,
@@ -217,9 +218,9 @@ class DefaultSubagentFactory:
             ) or None,
             description=request.description,
             config=config,
+            runtime=child_context,
         )
         child.reasoning = deepcopy(self.reasoning)
-        child.execution_context = child_context
         if child_permission_engine is not None:
             child.with_permissions(child_permission_engine)
         if self.callback_manager is not None:

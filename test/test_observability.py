@@ -371,7 +371,7 @@ class TestObservability(unittest.TestCase):
         )
         records = store.list()
         self.assertEqual(len(records), 2)
-        child = next(item for item in records if item.agent_id == "child")
+        child = next(item for item in records if item.agent_id == result.structured_data["agentId"])
         self.assertEqual(child.parent_invoke_id, parent_invoke_id)
 
         rollouts = TrainingExporter.from_agent(parent).build("agentic_rollout")

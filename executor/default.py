@@ -56,9 +56,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         state: AgentInvocationState,
         data: dict[str, Any] | None = None,
     ) -> None:
-        services.event_bus.publish(
+        services.runtime.event_bus.publish(
             event_type,
-            agent_id=services.agent_id,
+            agent_id=services.runtime.agent_id,
             invocation_id=state.invocation_id,
             data=data,
         )
@@ -114,9 +114,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             content=content,
             data=dict(data or {}),
         )
-        services.event_bus.publish(
+        services.runtime.event_bus.publish(
             RuntimeEventType.STREAM_EVENT,
-            agent_id=services.agent_id,
+            agent_id=services.runtime.agent_id,
             invocation_id=state.invocation_id,
             data={"stream_event": event},
         )
@@ -124,7 +124,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
 
     @staticmethod
     def _check_stop(services: AgentExecutionServices) -> None:
-        reason = services.stop_checker()
+        reason = services.runtime.stop_reason_if_requested()
         if reason is not None:
             raise AgentStopRequested(reason or "Agent stop requested")
 
@@ -190,9 +190,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
 
     @staticmethod
     def _apply_after_llm_hook(services: AgentExecutionServices, response: Any) -> Any:
-        if services.hook_manager is None:
+        if services.runtime.hooks is None:
             return response
-        hook = services.hook_manager.after_llm_response({"response": response})
+        hook = services.runtime.hooks.after_llm_response({"response": response})
         if hook.blocked:
             raise HookExecutionError(
                 hook.message or "LLM response blocked by hook",
@@ -220,8 +220,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         tool_name, arguments = requested_name, dict(requested_arguments)
 
         result = None
-        if services.hook_manager is not None:
-            hook = services.hook_manager.before_tool_use({
+        if services.runtime.hooks is not None:
+            hook = services.runtime.hooks.before_tool_use({
                 "tool_name": tool_name,
                 "tool_args": dict(arguments),
                 "tool_spec": registry.get_tool_spec(tool_name),
@@ -283,8 +283,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             except Exception as exc:
                 result = ToolResult.error(str(exc), error_type=exc.__class__.__name__)
 
-        if services.hook_manager is not None:
-            hook = services.hook_manager.after_tool_use({
+        if services.runtime.hooks is not None:
+            hook = services.runtime.hooks.after_tool_use({
                 "tool_name": tool_name,
                 "tool_args": dict(validated),
                 "tool_spec": registry.get_tool_spec(tool_name),
@@ -319,7 +319,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             "error_type": result.error_type,
         })
         if result.status == "needs_confirmation" and services.config.interrupt_on_confirmation:
-            raise services.interrupt_controller.create_interruption(
+            raise services.runtime.interruptions.create_interruption(
                 tool_name=tool_name,
                 tool_args=validated,
                 tool_id=tool_id,
@@ -348,8 +348,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         tool_name, arguments = requested_name, dict(requested_arguments)
 
         result = None
-        if services.hook_manager is not None:
-            hook = await services.hook_manager.arun_stage("before_tool_use", {
+        if services.runtime.hooks is not None:
+            hook = await services.runtime.hooks.arun_stage("before_tool_use", {
                 "tool_name": tool_name,
                 "tool_args": dict(arguments),
                 "tool_spec": registry.get_tool_spec(tool_name),
@@ -413,8 +413,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             except Exception as exc:
                 result = ToolResult.error(str(exc), error_type=exc.__class__.__name__)
 
-        if services.hook_manager is not None:
-            hook = await services.hook_manager.arun_stage("after_tool_use", {
+        if services.runtime.hooks is not None:
+            hook = await services.runtime.hooks.arun_stage("after_tool_use", {
                 "tool_name": tool_name,
                 "tool_args": dict(validated),
                 "tool_spec": registry.get_tool_spec(tool_name),
@@ -449,7 +449,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             "error_type": result.error_type,
         })
         if result.status == "needs_confirmation" and services.config.interrupt_on_confirmation:
-            raise services.interrupt_controller.create_interruption(
+            raise services.runtime.interruptions.create_interruption(
                 tool_name=tool_name,
                 tool_args=validated,
                 tool_id=tool_id,
@@ -461,16 +461,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         return tool_name, validated, tool_id, result
 
     def _start(self, services: AgentExecutionServices, query: str, *, stream: bool) -> AgentInvocationState:
-        if services.invocation_lock is not None:
-            if not services.invocation_lock.acquire(blocking=False):
-                raise RuntimeError("An Agent supports one active invocation at a time")
-            services.owns_invocation_lock = True
-        state = AgentInvocationState(
-            invocation_id=f"invoke_{uuid4().hex}",
-            query=query,
-            stream=stream,
-            phase=AgentInvocationPhase.STARTED,
-        )
+        state = services.runtime.begin_invocation(query, stream=stream)
         try:
             self.last_state = state
             services.context_manager.append_query(query)
@@ -480,7 +471,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 state,
                 {
                     "query": query,
-                    "mode": services.execution_context.execution_mode,
+                    "mode": services.runtime.execution_mode,
                     "stream": stream,
                 },
             )
@@ -553,9 +544,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
             if services.tool_registry is not None:
                 services.tool_registry.clear_deferred_tool_expansions()
         finally:
-            if services.owns_invocation_lock:
-                services.owns_invocation_lock = False
-                services.invocation_lock.release()
+            services.runtime.end_invocation()
 
     def invoke(
         self,
@@ -573,9 +562,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
-                scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
-                if services.hook_manager is not None:
-                    hook = services.hook_manager.before_context({
+                scope = RuntimeScope(services.runtime.session_id, services.runtime.workspace_root)
+                if services.runtime.hooks is not None:
+                    hook = services.runtime.hooks.before_context({
                         "query": state.query,
                         "history": services.context_manager.canonical,
                         "scope": scope,
@@ -596,7 +585,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 tools = self._tool_payload(services)
                 options = {
                     "temperature": temperature,
-                    "reasoning": services.reasoning,
+                    "reasoning": services.runtime.reasoning,
                     **kwargs,
                 }
                 request_input = services.context_manager.build_input(
@@ -621,8 +610,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     canonical_history = services.context_manager.canonical
                     replay_history = services.context_manager.replay
                     max_tokens = context_usage.max_tokens
-                    if services.hook_manager is not None:
-                        hook = services.hook_manager.before_compaction({
+                    if services.runtime.hooks is not None:
+                        hook = services.runtime.hooks.before_compaction({
                             "canonical_history": canonical_history,
                             "replay_history": replay_history,
                             "max_tokens": max_tokens,
@@ -659,8 +648,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         request_input = _expect_context_result(
                             "build_input", request_input, ReplayRequestInput,
                         )
-                if services.hook_manager is not None:
-                    hook = services.hook_manager.before_llm_request({
+                if services.runtime.hooks is not None:
+                    hook = services.runtime.hooks.before_llm_request({
                         "request_input": request_input,
                         "tools": tools,
                         "options": dict(options),
@@ -778,9 +767,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
-                scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
-                if services.hook_manager is not None:
-                    hook = await services.hook_manager.arun_stage("before_context", {
+                scope = RuntimeScope(services.runtime.session_id, services.runtime.workspace_root)
+                if services.runtime.hooks is not None:
+                    hook = await services.runtime.hooks.arun_stage("before_context", {
                         "query": state.query,
                         "history": services.context_manager.canonical,
                         "scope": scope,
@@ -801,7 +790,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 tools = self._tool_payload(services)
                 options = {
                     "temperature": temperature,
-                    "reasoning": services.reasoning,
+                    "reasoning": services.runtime.reasoning,
                     **kwargs,
                 }
                 request_input = await services.context_manager.abuild_input(
@@ -826,8 +815,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     canonical_history = services.context_manager.canonical
                     replay_history = services.context_manager.replay
                     max_tokens = context_usage.max_tokens
-                    if services.hook_manager is not None:
-                        hook = await services.hook_manager.arun_stage("before_compaction", {
+                    if services.runtime.hooks is not None:
+                        hook = await services.runtime.hooks.arun_stage("before_compaction", {
                             "canonical_history": canonical_history,
                             "replay_history": replay_history,
                             "max_tokens": max_tokens,
@@ -864,8 +853,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         request_input = _expect_context_result(
                             "abuild_input", request_input, ReplayRequestInput,
                         )
-                if services.hook_manager is not None:
-                    hook = await services.hook_manager.arun_stage("before_llm_request", {
+                if services.runtime.hooks is not None:
+                    hook = await services.runtime.hooks.arun_stage("before_llm_request", {
                         "request_input": request_input,
                         "tools": tools,
                         "options": dict(options),
@@ -983,9 +972,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
-                scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
-                if services.hook_manager is not None:
-                    hook = services.hook_manager.before_context({
+                scope = RuntimeScope(services.runtime.session_id, services.runtime.workspace_root)
+                if services.runtime.hooks is not None:
+                    hook = services.runtime.hooks.before_context({
                         "query": state.query,
                         "history": services.context_manager.canonical,
                         "scope": scope,
@@ -1006,7 +995,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 tools = self._tool_payload(services)
                 options = {
                     "temperature": temperature,
-                    "reasoning": services.reasoning,
+                    "reasoning": services.runtime.reasoning,
                     **kwargs,
                 }
                 request_input = services.context_manager.build_input(
@@ -1031,8 +1020,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     canonical_history = services.context_manager.canonical
                     replay_history = services.context_manager.replay
                     max_tokens = context_usage.max_tokens
-                    if services.hook_manager is not None:
-                        hook = services.hook_manager.before_compaction({
+                    if services.runtime.hooks is not None:
+                        hook = services.runtime.hooks.before_compaction({
                             "canonical_history": canonical_history,
                             "replay_history": replay_history,
                             "max_tokens": max_tokens,
@@ -1069,8 +1058,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         request_input = _expect_context_result(
                             "build_input", request_input, ReplayRequestInput,
                         )
-                if services.hook_manager is not None:
-                    hook = services.hook_manager.before_llm_request({
+                if services.runtime.hooks is not None:
+                    hook = services.runtime.hooks.before_llm_request({
                         "request_input": request_input,
                         "tools": tools,
                         "options": dict(options),
@@ -1261,9 +1250,9 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
-                scope = RuntimeScope(services.session_id, services.execution_context.workspace_root)
-                if services.hook_manager is not None:
-                    hook = await services.hook_manager.arun_stage("before_context", {
+                scope = RuntimeScope(services.runtime.session_id, services.runtime.workspace_root)
+                if services.runtime.hooks is not None:
+                    hook = await services.runtime.hooks.arun_stage("before_context", {
                         "query": state.query,
                         "history": services.context_manager.canonical,
                         "scope": scope,
@@ -1284,7 +1273,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                 tools = self._tool_payload(services)
                 options = {
                     "temperature": temperature,
-                    "reasoning": services.reasoning,
+                    "reasoning": services.runtime.reasoning,
                     **kwargs,
                 }
                 request_input = await services.context_manager.abuild_input(
@@ -1309,8 +1298,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                     canonical_history = services.context_manager.canonical
                     replay_history = services.context_manager.replay
                     max_tokens = context_usage.max_tokens
-                    if services.hook_manager is not None:
-                        hook = await services.hook_manager.arun_stage("before_compaction", {
+                    if services.runtime.hooks is not None:
+                        hook = await services.runtime.hooks.arun_stage("before_compaction", {
                             "canonical_history": canonical_history,
                             "replay_history": replay_history,
                             "max_tokens": max_tokens,
@@ -1347,8 +1336,8 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         request_input = _expect_context_result(
                             "abuild_input", request_input, ReplayRequestInput,
                         )
-                if services.hook_manager is not None:
-                    hook = await services.hook_manager.arun_stage("before_llm_request", {
+                if services.runtime.hooks is not None:
+                    hook = await services.runtime.hooks.arun_stage("before_llm_request", {
                         "request_input": request_input,
                         "tools": tools,
                         "options": dict(options),

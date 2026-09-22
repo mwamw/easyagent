@@ -40,7 +40,7 @@ composer = SystemPromptComposer(
         ),
         PromptBlock(
             "workspace",
-            lambda ctx: f"当前工作区：{ctx.execution_context.workspace_root}",
+            lambda ctx: f"当前工作区：{ctx.runtime.workspace_root}",
             placement="system_reminder",
             order=100,
         ),
@@ -67,7 +67,7 @@ class ProductComposer(BaseSystemPromptComposer):
             ),
             PromptBlock(
                 "mode",
-                f"当前模式：{context.execution_context.execution_mode}",
+                f"当前模式：{context.runtime.execution_mode}",
                 placement="system_reminder",
             ),
         ]
@@ -87,7 +87,7 @@ agent.with_prompt(ProductComposer())
 - `system_prompt`
 - `query`
 - `config`
-- `execution_context`
+- `runtime`
 - `tool_registry`
 - `skill_manager`
 - `memory`

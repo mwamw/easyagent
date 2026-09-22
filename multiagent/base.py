@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Sequence
 
 if TYPE_CHECKING:
     from prompt import PromptBlock, PromptBuildContext
-    from runtime import ExecutionContext, RuntimeEventBus
+    from runtime import AgentRuntime, RuntimeEventBus
     from runtime.metamessage import MetaMessageManager
     from Tool.BaseTool import Tool
     from Tool.ToolRegistry import ToolRegistry
@@ -26,9 +26,7 @@ class BaseMultiAgent(ABC):
         self,
         *,
         tool_registry: "ToolRegistry",
-        execution_context: "ExecutionContext",
-        event_bus: "RuntimeEventBus",
-        metamessages: "MetaMessageManager",
+        runtime: "AgentRuntime",
     ) -> None:
         """Bind framework facilities without receiving the parent Agent."""
 

@@ -6,7 +6,7 @@ response formats and `invoke`/`ainvoke`/streaming interfaces remain unchanged.
 ## Required and optional capabilities
 
 Every `BasicAgent` has a supplied LLM, a default Executor, a System Prompt composer and an owned Context.
-The default Context has no total token limit. Tools, permissions, hooks, callbacks, memory, skills,
+The default Context has no total token limit. Tools, permissions, callbacks, memory, skills,
 planning, observability and external services are optional. Install permissions and guardrails explicitly
 when enabling tools that can affect the environment:
 
@@ -15,6 +15,7 @@ agent.with_permissions().with_hooks()
 ```
 
 No permission module means no Agent-level authorization check; it is not a sandbox or a hidden policy.
+The Runtime always owns an initially empty Hook pipeline; `with_hooks` registers hooks in that pipeline.
 
 ## Ownership and public calls
 
@@ -62,7 +63,7 @@ may have a different internal structure and validate it through `validate_state(
 
 `PromptBuildContext` exposes request facts and registered providers, not concrete Memory/Skill/Plan
 objects. `include_defaults` controls default behavior text; `include_module_blocks` independently
-controls module contributions. No unified AgentRuntime or universal AgentModule was introduced.
+controls module contributions. AgentRuntime now owns shared state and fixed runtime facilities. Functional modules remain separate.
 
 ## Regression gates
 

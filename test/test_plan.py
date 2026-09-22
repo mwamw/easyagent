@@ -79,13 +79,13 @@ def test_plan_enter_and_exit_use_configured_permanent_metamessages():
     agent.plan.enter()
     assert agent.plan.is_active
     assert agent.permission_engine is None
-    assert agent.execution_context.execution_mode == "plan"
+    assert agent.runtime.execution_mode == "plan"
     agent.metamessage_manager.flush()
 
     agent.plan.exit()
     assert not agent.plan.is_active
     assert agent.permission_engine is None
-    assert agent.execution_context.execution_mode == "execute"
+    assert agent.runtime.execution_mode == "execute"
     agent.metamessage_manager.flush()
 
     messages = _plan_messages(agent)

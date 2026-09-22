@@ -23,7 +23,7 @@ from multiagent.default import AgentRuntimeManager, SubagentRequest, TeamManager
 from agent import BasicAgent
 from core.Exception import AgentStopRequested
 from core.llm import EasyLLM
-from runtime import ExecutionContext
+from runtime import AgentRuntime
 from task import InMemoryTaskStore, TaskService
 
 
@@ -87,7 +87,7 @@ class StoppableFakeSubagent(FakeSubagent):
 
 
 class TestAgentRuntimeManager(unittest.TestCase):
-    def test_runtime_returns_agent_handle_with_execution_context(self):
+    def test_runtime_returns_agent_handle_with_runtime(self):
         with tempfile.TemporaryDirectory() as tempdir:
             runtime = AgentRuntimeManager(
                 agent_factory=lambda request: FakeSubagent(),
@@ -99,7 +99,7 @@ class TestAgentRuntimeManager(unittest.TestCase):
                 workspace_root=tempdir,
                 allowed_roots=(tempdir,),
             )
-            context = ExecutionContext(
+            context = AgentRuntime(
                 workspace_root=tempdir,
                 allowed_roots=(tempdir,),
                 execution_mode="execute",
@@ -107,11 +107,11 @@ class TestAgentRuntimeManager(unittest.TestCase):
                 metadata={"stage": "phase2"},
             )
 
-            handle = runtime.run(request, execution_context=context)
+            handle = runtime.run(request, runtime=context)
 
             self.assertEqual(handle.status, "completed")
-            self.assertEqual(handle.execution_context.workspace_root, os.path.abspath(tempdir))
-            self.assertEqual(handle.execution_context.metadata["stage"], "phase2")
+            self.assertEqual(handle.runtime.workspace_root, os.path.abspath(tempdir))
+            self.assertEqual(handle.runtime.metadata["stage"], "phase2")
             self.assertEqual(handle.total_tool_use_count, 1)
             self.assertEqual(handle.total_tokens, 21)
             runtime.close()
@@ -155,7 +155,7 @@ class TestAgentRuntimeManager(unittest.TestCase):
                 agent_factory=lambda request: FakeSubagent(),
                 storage_dir=os.path.join(tempdir, ".agents"),
             )
-            task_context = ExecutionContext(
+            task_context = AgentRuntime(
                 workspace_root=tempdir,
                 allowed_roots=(tempdir,),
                 execution_mode="execute",
@@ -169,7 +169,7 @@ class TestAgentRuntimeManager(unittest.TestCase):
                     workspace_root=tempdir,
                     allowed_roots=(tempdir,),
                 ),
-                execution_context=task_context,
+                runtime=task_context,
             )
 
             deliveries = runtime.send_message(
@@ -236,7 +236,7 @@ class TestAgentRuntimeManager(unittest.TestCase):
             teams = TeamManager(agent_runtime=runtime)
             runtime.bind_team_manager(teams)
             team = teams.create_team(name="restorable-team", description="session restore target")
-            context = ExecutionContext(
+            context = AgentRuntime(
                 workspace_root=tempdir,
                 allowed_roots=(tempdir,),
                 execution_mode="execute",
@@ -253,7 +253,7 @@ class TestAgentRuntimeManager(unittest.TestCase):
                     workspace_root=tempdir,
                     allowed_roots=(tempdir,),
                 ),
-                execution_context=context,
+                runtime=context,
             )
             runtime.send_message(
                 recipient_type="team",
@@ -277,8 +277,8 @@ class TestAgentRuntimeManager(unittest.TestCase):
 
             restored_handle = restored_runtime.get_handle(handle.agent_id)
             self.assertEqual(restored_handle.team_id, team.team_id)
-            self.assertEqual(restored_handle.execution_context.current_task_id, "task_restore")
-            self.assertEqual(restored_handle.execution_context.metadata["phase"], "phase3")
+            self.assertEqual(restored_handle.runtime.current_task_id, "task_restore")
+            self.assertEqual(restored_handle.runtime.metadata["phase"], "phase3")
             self.assertEqual(restored_handle.mailbox[0].content, "这条消息必须随 runtime state 一起恢复")
             self.assertEqual(restored_teams.get_team("restorable-team").member_agent_ids, (handle.agent_id,))
             restored_runtime.close()
@@ -333,7 +333,7 @@ class TestCollaborationTools(unittest.TestCase):
             runtime.bind_team_manager(teams)
 
             registry = ToolRegistry()
-            context = ExecutionContext(
+            context = AgentRuntime(
                 workspace_root=tempdir,
                 allowed_roots=(tempdir,),
                 metadata={"agentId": "manager"},
@@ -342,18 +342,18 @@ class TestCollaborationTools(unittest.TestCase):
                 registry,
                 team_manager=teams,
                 creator_name="manager",
-                execution_context=context,
+                runtime=context,
             )
             delete_tool = register_team_delete_tool(
                 registry,
                 team_manager=teams,
-                execution_context=context,
+                runtime=context,
             )
             send_tool = register_send_message_tool(
                 registry,
                 agent_runtime=runtime,
                 sender_name="manager",
-                execution_context=context,
+                runtime=context,
             )
 
             create_result = create_tool.run({"team_name": "analysis"})
@@ -406,8 +406,8 @@ class TestCollaborationTools(unittest.TestCase):
             worker = BasicAgent(
                 name="worker",
                 llm=DummyLLM(),
+                runtime=handle.runtime,
             ).with_tool(worker_registry)
-            worker.execution_context = handle.execution_context
             worker.with_multi_agent(
                 ClaudeCodeMultiAgent(
                     agent_factory=lambda request: FakeSubagent(),
@@ -451,7 +451,7 @@ class TestCollaborationTools(unittest.TestCase):
             self.assertEqual(len(mailbox_messages_after_ack), 1)
             runtime.close()
 
-    def test_agent_tool_uses_runtime_and_returns_execution_context(self):
+    def test_agent_tool_uses_runtime_and_returns_runtime(self):
         with tempfile.TemporaryDirectory() as tempdir:
             runtime = AgentRuntimeManager(
                 agent_factory=lambda request: FakeSubagent(delay_s=0.05),
@@ -575,7 +575,7 @@ class TestCollaborationTools(unittest.TestCase):
 
             tool = AgentTool(
                 agent_factory=lambda request: FakeSubagent(),
-                execution_context=parent.execution_context,
+                runtime=parent.runtime,
                 tool_registry=parent.tool_registry,
                 agent_name=parent.name,
                 task_service=parent.task_service,
@@ -596,7 +596,7 @@ class TestCollaborationTools(unittest.TestCase):
 
             self.assertEqual(result.status, "success")
             self.assertEqual(len(child_tasks), 1)
-            self.assertEqual(handle.execution_context.current_task_id, child_tasks[0].task_id)
+            self.assertEqual(handle.runtime.current_task_id, child_tasks[0].task_id)
             self.assertEqual(child_tasks[0].owner, handle.agent_id)
             self.assertEqual(child_tasks[0].metadata["runtime"]["teamId"], handle.team_id)
             self.assertEqual(child_tasks[0].metadata["runtime"]["status"], "completed")

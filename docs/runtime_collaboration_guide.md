@@ -10,8 +10,9 @@ Custom implementations extend `BaseMultiAgent`:
 from easyagent.multiagent import BaseMultiAgent
 
 class MyMultiAgent(BaseMultiAgent):
-    def bind(self, *, tool_registry, execution_context, event_bus, metamessages):
-        self.context = execution_context
+    def bind(self, *, tool_registry, runtime):
+        self.runtime = runtime
+        self.tools = tool_registry
 
     def get_tools(self):
         return (MyDelegateTool(...),)

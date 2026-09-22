@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from pathspec import GitIgnoreSpec
 
-from runtime.context import ExecutionContext
+from runtime.agent import AgentRuntime
 from runtime.events import RuntimeEvent, RuntimeEventBus, RuntimeEventType
 from runtime.metamessage import MetaMessage, MetaMessageLifecycle, MetaMessageManager
 from Tool.ToolRegistry import ToolRegistry
@@ -56,9 +56,7 @@ class SkillManager:
 
     def __init__(self) -> None:
         self._tool_registry: ToolRegistry | None = None
-        self._metamessages: MetaMessageManager | None = None
-        self._event_bus: RuntimeEventBus | None = None
-        self._execution_context: ExecutionContext | None = None
+        self._runtime: AgentRuntime | None = None
         self._directories: list[str] = []
         self._skills: dict[str, SkillManifest] = {}
         self._activated_path_skills: set[str] = set()
@@ -86,35 +84,25 @@ class SkillManager:
         self,
         *,
         tool_registry: ToolRegistry,
-        metamessages: MetaMessageManager,
-        event_bus: RuntimeEventBus,
-        execution_context: ExecutionContext,
+        runtime: AgentRuntime,
     ) -> "SkillManager":
         """Receive the module and fixed runtime facilities required by Skills."""
 
         if not isinstance(tool_registry, ToolRegistry):
             raise TypeError("tool_registry must be ToolRegistry")
-        if not isinstance(metamessages, MetaMessageManager):
-            raise TypeError("metamessages must be the Agent MetaMessageManager")
-        if not isinstance(event_bus, RuntimeEventBus):
-            raise TypeError("event_bus must be the Agent RuntimeEventBus")
-        if not isinstance(execution_context, ExecutionContext):
-            raise TypeError("execution_context must be the Agent ExecutionContext")
+        if not isinstance(runtime, AgentRuntime):
+            raise TypeError("runtime must be the Agent AgentRuntime")
 
         bindings = (
             (self._tool_registry, tool_registry),
-            (self._metamessages, metamessages),
-            (self._event_bus, event_bus),
-            (self._execution_context, execution_context),
+            (self._runtime, runtime),
         )
         if any(current is not None and current is not requested for current, requested in bindings):
             raise RuntimeError("A SkillManager cannot be shared between Agents")
         self._tool_registry = tool_registry
-        self._metamessages = metamessages
-        self._event_bus = event_bus
-        self._execution_context = execution_context
+        self._runtime = runtime
         if self._event_subscription is None:
-            self._event_subscription = event_bus.subscribe(
+            self._event_subscription = runtime.event_bus.subscribe(
                 self._handle_runtime_event,
                 event_types=_SKILL_EVENTS,
             )
@@ -264,7 +252,7 @@ class SkillManager:
             )
         if model_initiated and not self.is_visible(manifest.name):
             raise SkillNotActiveError(manifest)
-        if self._metamessages is None:
+        if self._runtime is None:
             raise RuntimeError("SkillManager is not bound to runtime infrastructure")
         body = load_skill_body(manifest, args)
 
@@ -274,7 +262,7 @@ class SkillManager:
             self._active_keys.add(key)
         recommended, unavailable = self._recommended_tools(manifest)
         if not already_active:
-            self._metamessages.emit(
+            self._runtime.metamessages.emit(
                 MetaMessage(
                     name=f"skill:{manifest.name}",
                     content=self._render_inline_content(manifest, body, args),
@@ -358,9 +346,9 @@ class SkillManager:
     def activate_for_paths(self, paths: Iterable[str | os.PathLike[str]]) -> list[str]:
         """Make conditional Skills visible after a workspace path is touched."""
 
-        if self._execution_context is None:
+        if self._runtime is None:
             raise RuntimeError("SkillManager is not bound to runtime infrastructure")
-        workspace_root = os.path.realpath(self._execution_context.workspace_root)
+        workspace_root = os.path.realpath(self._runtime.workspace_root)
         relative_paths: list[str] = []
         for value in paths:
             candidate = os.fspath(value).strip()
@@ -438,13 +426,11 @@ class SkillManager:
     def close(self) -> dict[str, Any]:
         with self._lock:
             self._active_keys.clear()
-        if self._event_bus is not None and self._event_subscription:
-            self._event_bus.unsubscribe(self._event_subscription)
+        if self._runtime is not None and self._event_subscription:
+            self._runtime.event_bus.unsubscribe(self._event_subscription)
         self._event_subscription = None
         self._tool_registry = None
-        self._metamessages = None
-        self._event_bus = None
-        self._execution_context = None
+        self._runtime = None
         return {"status": "closed", "directories": list(self.directories)}
 
 

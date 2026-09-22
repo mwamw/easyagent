@@ -259,7 +259,7 @@ def test_session_restores_directory_skills_and_conditional_activation(tmp_path):
     workspace.mkdir()
     store = SessionStore(str(tmp_path / "skills.sqlite3"))
     agent = BasicAgent("skill-session", SessionLLM()).with_skill(tmp_path / "skills")
-    agent.execution_context.workspace_root = str(workspace)
+    agent.runtime.workspace_root = str(workspace)
     assert agent.skill_manager.activate_for_paths(["src/package/module.py"]) == [
         "python-review"
     ]

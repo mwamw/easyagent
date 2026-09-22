@@ -75,12 +75,10 @@ class CustomMultiAgent(BaseMultiAgent):
         self.before_context_calls = 0
         self.tool = ProbeTool()
 
-    def bind(self, *, tool_registry, execution_context, event_bus, metamessages) -> None:
+    def bind(self, *, tool_registry, runtime) -> None:
         self.bindings = {
             "tool_registry": tool_registry,
-            "execution_context": execution_context,
-            "event_bus": event_bus,
-            "metamessages": metamessages,
+            "runtime": runtime,
         }
 
     def get_tools(self):
@@ -102,9 +100,9 @@ def test_custom_multiagent_receives_facilities_not_parent_agent():
 
     assert agent.multi_agent is module
     assert module.bindings["tool_registry"] is agent.tool_registry
-    assert module.bindings["execution_context"] is agent.execution_context
-    assert module.bindings["event_bus"] is agent.event_bus
-    assert module.bindings["metamessages"] is agent.metamessage_manager
+    assert module.bindings["runtime"] is agent.runtime
+    assert module.bindings["runtime"].event_bus is agent.event_bus
+    assert module.bindings["runtime"].metamessages is agent.metamessage_manager
     assert agent.tool_registry.get_tool("DelegateProbe") is module.tool
     assert "Custom collaboration policy." in agent.get_enhanced_prompt()
 

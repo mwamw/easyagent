@@ -99,7 +99,7 @@ CodeIntel 的目标是把这些能力变成统一接口。
 - `provider`
   - 必填。真正执行 codeintel 查询的 provider。
 - `parent_agent`
-  - 可选。若传入，manager 会尝试从 agent 的 `execution_context`、`config` 中推断工作区。
+  - 可选。若传入，manager 会尝试从 agent 的 `runtime`、`config` 中推断工作区。
 - `workspace_root`
   - 当前工作区根目录。
 - `allowed_roots`
@@ -111,8 +111,8 @@ CodeIntel 的目标是把这些能力变成统一接口。
 
 如果你没有显式传 `workspace_root`，manager 会尽量从：
 
-- `execution_context.worktree_path`
-- `execution_context.workspace_root`
+- `runtime.worktree_path`
+- `runtime.workspace_root`
 - `config.workspace_root`
 - 当前进程 cwd
 
@@ -217,7 +217,7 @@ agent = BasicAgent(
 ).with_tool(registry).with_codeintel(manager)
 ```
 
-如果你的 Agent 有 `execution_context` 或 worktree，manager 可以自动跟随当前工作区。
+如果你的 Agent 有 `runtime` 或 worktree，manager 可以自动跟随当前工作区。
 
 ## 10. 和 Worktree 的关系
 
@@ -229,7 +229,7 @@ Code agent 很常见的场景是：
 这时最重要的是不要混用工作区边界和缓存：
 
 - 每个 worktree 应视为独立 workspace
-- `workspace_root` 应跟随当前 `execution_context.worktree_path`
+- `workspace_root` 应跟随当前 `runtime.worktree_path`
 - codeintel cache 最好按 workspace 拆开
 
 ## 11. 推荐的产品使用方式

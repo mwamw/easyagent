@@ -85,11 +85,11 @@ class CodeIntelManager:
     def _infer_workspace_root(parent_agent: Any | None) -> Optional[str]:
         if parent_agent is None:
             return None
-        execution_context = getattr(parent_agent, "execution_context", None)
-        worktree_path = getattr(execution_context, "worktree_path", None)
+        runtime = getattr(parent_agent, "runtime", None)
+        worktree_path = getattr(runtime, "worktree_path", None)
         if worktree_path:
             return os.path.abspath(str(worktree_path))
-        workspace_root = getattr(execution_context, "workspace_root", None)
+        workspace_root = getattr(runtime, "workspace_root", None)
         if workspace_root:
             return os.path.abspath(str(workspace_root))
         config = getattr(parent_agent, "config", None)
@@ -102,8 +102,8 @@ class CodeIntelManager:
     def _infer_allowed_roots(parent_agent: Any | None) -> tuple[str, ...]:
         if parent_agent is None:
             return ()
-        execution_context = getattr(parent_agent, "execution_context", None)
-        roots = tuple(getattr(execution_context, "allowed_roots", ()) or ())
+        runtime = getattr(parent_agent, "runtime", None)
+        roots = tuple(getattr(runtime, "allowed_roots", ()) or ())
         if roots:
             return tuple(os.path.abspath(str(item)) for item in roots if item)
         config = getattr(parent_agent, "config", None)
@@ -130,11 +130,11 @@ class CodeIntelManager:
         parent_agent = self.parent_agent
         if parent_agent is None:
             return self.workspace_root
-        execution_context = getattr(parent_agent, "execution_context", None)
-        worktree_path = getattr(execution_context, "worktree_path", None)
+        runtime = getattr(parent_agent, "runtime", None)
+        worktree_path = getattr(runtime, "worktree_path", None)
         if worktree_path:
             return os.path.abspath(str(worktree_path))
-        workspace_root = getattr(execution_context, "workspace_root", None)
+        workspace_root = getattr(runtime, "workspace_root", None)
         if workspace_root:
             return os.path.abspath(str(workspace_root))
         return self.workspace_root
@@ -143,8 +143,8 @@ class CodeIntelManager:
         parent_agent = self.parent_agent
         if parent_agent is None:
             return self.allowed_roots
-        execution_context = getattr(parent_agent, "execution_context", None)
-        roots = tuple(getattr(execution_context, "allowed_roots", ()) or ())
+        runtime = getattr(parent_agent, "runtime", None)
+        roots = tuple(getattr(runtime, "allowed_roots", ()) or ())
         if roots:
             normalized = tuple(os.path.abspath(str(item)) for item in roots if item)
             return normalized or (workspace_root,)

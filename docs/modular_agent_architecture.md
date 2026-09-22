@@ -21,7 +21,7 @@ EasyAgent 是通用 Agent 框架，不是一个固定的 Code Agent 产品。框
 - `executor/base.py` 定义执行接口，`executor/default.py` 直接协调 Prompt、Context、LLM、Tool 和可选授权能力。
 - `prompt/base.py` 定义提示词接口，`prompt/composer.py` 收集注册的模块贡献，不认识 Memory/Skill/Plan 的具体类型。
 - `context/base.py` 定义 Context 契约并提供统一历史操作；`context/history.py` 是框架层 canonical `ConversationHistory`。预算、压缩、Provider replay 和输入算法位于 `context/default/`。
-- `runtime/interruptions.py` 提供现有中断机制。本次没有引入新的 AgentRuntime 抽象。
+- `runtime/interruptions.py` 提供现有中断机制。每个 Agent 拥有自己的 `AgentRuntime`，统一运行状态和固定基础设施。
 - LLM 的实现、Provider 目录以及四类模型调用接口保持不变。
 
 Context 是历史状态的唯一拥有者。默认 Context 的 provider replay、Token 预算、API usage 锚点、压缩器属于其内部实现，Executor 不操作这些字段。MetaMessage 通过 Context 的公共消息接口注入和清理动态信息。
@@ -31,12 +31,12 @@ Context 是历史状态的唯一拥有者。默认 Context 的 provider replay�
 构造器仍为：
 
 ```python
-BasicAgent(name, llm, system_prompt=None, description=None, config=None)
+BasicAgent(name, llm, system_prompt=None, description=None, config=None, *, runtime=None)
 ```
 
 LLM 由调用方提供，Executor、System Prompt、Context 默认安装。无 Token 上限的默认 Context 仍管理当前历史和完整模型输入。
 
-Permission、Hook、Callback、Tool、Memory、Skill、Plan、Task、Observability、MultiAgent、MCP、CodeIntel、Worktree 与会话后端按需安装。未安装权限模块表示没有该层授权检查，不是自动放入一个隐形默认策略。工具型产品应显式安装自己的权限模块。
+Permission、Callback、Tool、Memory、Skill、Plan、Task、Observability、MultiAgent、MCP、CodeIntel、Worktree 与会话后端按需安装。Runtime 的 Hook 管线固定存在，Hook 规则按需注册。未安装权限模块表示没有该层授权检查，不是自动放入一个隐形默认策略。工具型产品应显式安装自己的权限模块。
 
 Context 现在是有状态的 Agent 私有模块，不能被多个 Agent 实例共享。可以共享无状态配置或 LLM，但应分别创建 Context。空闲时替换 Context 会通过公开历史接口转移当前记录；活跃 invoke 中禁止替换。
 
@@ -93,7 +93,7 @@ composer = SystemPromptComposer(
         PromptBlock("identity", "你是游戏开发 Agent。", placement="system"),
         PromptBlock(
             "workspace",
-            lambda ctx: f"当前工作区：{ctx.execution_context.workspace_root}",
+            lambda ctx: f"当前工作区：{ctx.runtime.workspace_root}",
             placement="system_reminder",
         ),
     ]
@@ -114,7 +114,7 @@ MetaMessage 是 Agent 内建运行时基础设施，不是通过 `with_*` 安装
 - `REQUEST`：只在一次 LLM request 中存在，请求成功后回收。
 - `CONDITIONAL`：条件为真时注入，条件变为假时自动回收。
 
-模块应在自己的触发逻辑中调用 `agent.emit_metamessage(...)`，而不是要求 Agent 使用者直接注册 MetaMessage。永久静态规则属于 SystemPromptComposer；运行时消息的触发和生命周期由具体模块负责。
+模块通过注入的 `runtime.metamessages.emit(...)` 发布动态消息，无需持有 Agent。永久静态规则属于 SystemPromptComposer；运行时消息的触发和生命周期由具体模块负责。
 
 Plan、按需 Skill、mailbox 和工具临时上下文都复用这套注入机制：
 
@@ -309,7 +309,7 @@ Session snapshot 显式保存 Agent 状态和已安装模块，不扫描 ToolReg
 
 框架不要求它们拥有统一的 config、manager、install 或 lifecycle 方法。每个接口只表达该能力真正需要的契约。
 
-`runtime/metamessage`、`RuntimeEventBus` 和 `ExecutionContext` 是框架内核基础设施，
+`runtime/metamessage`、`RuntimeEventBus` 和 `AgentRuntime` 是框架内核基础设施，
 由 Agent 固定创建并提供给模块使用，不属于 `with_*` 可替换模块。
 
 示例：替换 Prompt 只实现 `build(context)`；替换 Executor 必须实现四种 invoke API；替换 Observability 则实现 event bind/consume、`list()` 和 close。Training 只通过 `list()` 消费其标准 `AgentInvoke` 记录。自定义类通过对应 `with_*` 接入。
@@ -318,7 +318,7 @@ Session snapshot 显式保存 Agent 状态和已安装模块，不扫描 ToolReg
 
 ### 变化一：构造器从总装配器变为身份入口
 
-旧形态把 Tool、Context、Memory、Runtime、Permission、Observability 和多个执行组件全部塞进构造器。现在构造器固定为五个字段，能力通过链式接口表达：
+构造器接收身份、模型、提示词、描述和配置，并允许用关键字 `runtime` 指定一个尚未被其他 Agent 拥有的 AgentRuntime。功能模块通过链式接口装配：
 
 ```python
 agent = (

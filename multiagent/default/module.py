@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from multiagent.base import BaseMultiAgent
 from prompt import PromptBlock
-from runtime import ExecutionContext, RuntimeEventBus
+from runtime import AgentRuntime, RuntimeEventBus
 from runtime.metamessage import MetaMessage, MetaMessageLifecycle, MetaMessageManager
 from Tool.BaseTool import Tool
 from Tool.ToolRegistry import ToolRegistry
@@ -79,9 +79,7 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         self.cache_safe_params_provider = cache_safe_params_provider
         self.definitions = definitions or build_default_agent_definitions()
         self._tool_registry: ToolRegistry | None = None
-        self._execution_context: ExecutionContext | None = None
-        self._event_bus: RuntimeEventBus | None = None
-        self._metamessages: MetaMessageManager | None = None
+        self._runtime: AgentRuntime | None = None
         self._tools: tuple[Tool, ...] = ()
 
         bind_collaboration = getattr(agent_factory, "bind_collaboration", None)
@@ -97,18 +95,14 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         self,
         *,
         tool_registry: ToolRegistry,
-        execution_context: ExecutionContext,
-        event_bus: RuntimeEventBus,
-        metamessages: MetaMessageManager,
+        runtime: AgentRuntime,
     ) -> None:
         self._tool_registry = tool_registry
-        self._execution_context = execution_context
-        self._event_bus = event_bus
-        self._metamessages = metamessages
+        self._runtime = runtime
         self._tools = self._build_tools()
 
     def _build_tools(self) -> tuple[Tool, ...]:
-        if self._tool_registry is None or self._execution_context is None:
+        if self._tool_registry is None or self._runtime is None:
             raise RuntimeError("ClaudeCodeMultiAgent must be bound before tools are requested")
         common = {
             "agent_runtime": self.agent_runtime,
@@ -117,7 +111,7 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         return (
             AgentTool(
                 agent_factory=self.agent_factory,
-                execution_context=self._execution_context,
+                runtime=self._runtime,
                 tool_registry=self._tool_registry,
                 agent_name=self.agent_name,
                 task_service=self.task_service,
@@ -126,7 +120,7 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
                 agent_runtime=self.agent_runtime,
                 worktree_manager=self.worktree_manager,
                 workspace_root=self.workspace_root,
-                allowed_roots=self._execution_context.allowed_roots,
+                allowed_roots=self._runtime.allowed_roots,
                 storage_dir=self.storage_dir,
                 max_background_tasks=self.max_background_tasks,
             ),
@@ -137,16 +131,16 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
             SendMessageTool(
                 agent_runtime=self.agent_runtime,
                 sender_name=self.agent_name,
-                execution_context=self._execution_context,
+                runtime=self._runtime,
             ),
             TeamCreateTool(
                 team_manager=self.team_manager,
                 creator_name=self.agent_name,
-                execution_context=self._execution_context,
+                runtime=self._runtime,
             ),
             TeamDeleteTool(
                 team_manager=self.team_manager,
-                execution_context=self._execution_context,
+                runtime=self._runtime,
             ),
         )
 
@@ -175,9 +169,9 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         )
 
     def before_context_build(self) -> None:
-        if self._execution_context is None or self._metamessages is None:
+        if self._runtime is None or self._runtime.metamessages is None:
             return
-        agent_id = str(self._execution_context.metadata.get("agentId") or "").strip()
+        agent_id = str(self._runtime.metadata.get("agentId") or "").strip()
         if not agent_id:
             return
         try:
@@ -190,7 +184,7 @@ class ClaudeCodeMultiAgent(BaseMultiAgent):
         except KeyError:
             return
         for message in messages:
-            self._metamessages.emit(
+            self._runtime.metamessages.emit(
                 MetaMessage(
                     name=f"teammate:{message.message_id}",
                     content=(

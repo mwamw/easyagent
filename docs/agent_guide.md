@@ -89,7 +89,7 @@ agent.with_permissions(RuleBasedPermissionEngine())
 agent.with_hooks(HookManager())
 ```
 
-权限与 Hook 是附加模块，默认不安装。`with_permissions()` 安装默认规则引擎，`with_hooks()` 安装默认 guardrail；也可以像上面一样显式传入实现。
+权限是可选模块，`with_permissions()` 安装默认规则引擎。Hook 管线由每个 Agent 的 Runtime 固定创建，初始为空；`with_hooks()` 注册默认 guardrail，传入 HookManager 则将其中的 Hook 注册到既有管线。它不会替换 Runtime 的 HookManager。
 
 ### Plan
 
@@ -101,7 +101,7 @@ agent.enter_plan_mode()
 agent.exit_plan_mode()
 ```
 
-Plan 通过 MetaMessage 记录进入和退出指令，并更新现有 ExecutionContext 的执行模式。
+Plan 通过 MetaMessage 记录进入和退出指令，并更新现有 AgentRuntime 的执行模式。
 Agent 的 `build_authorization_context()` 将当前 `runtime_mode` 和审批状态传给权限引擎；
 Executor 不自行解释 Plan 权限。默认引擎限制 Plan 下的写操作，自定义引擎可以实现自己的规则。
 

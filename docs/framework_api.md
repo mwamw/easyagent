@@ -97,12 +97,17 @@ Permission 决定能否执行；Hook 可以阻断或改写；Callback 只观察 
 
 `easyagent.runtime`：
 
-- `ExecutionContext`
+- `AgentRuntime`
 - `RuntimeEvent`
 - `RuntimeEventType`
 - `RuntimeEventBus`
 - `AgentStreamEvent`
 - `AgentStreamEventType`
+
+每个 Agent 独享 `agent.runtime`；它同时承载 workspace、session、mode 等状态和 events、hooks、metamessages、interruptions 等基础设施。详见 [Agent Runtime](agent_runtime_guide.md)。
+
+`easyagent.multiagent` 提供模块接口，默认实现细节位于 `multiagent.default`：
+
 - `BaseMultiAgent`
 - `ClaudeCodeMultiAgent`
 - `AgentRuntimeManager`

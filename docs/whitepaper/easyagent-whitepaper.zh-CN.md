@@ -182,7 +182,7 @@ class ResearchPrompt(BaseSystemPromptComposer):
             PromptBlock("identity", "You are an evidence-based research assistant."),
             PromptBlock("evidence-rule", "Distinguish verified evidence from hypotheses."),
             PromptBlock(
-                "workspace", f"Workspace: {context.execution_context.workspace_root}",
+                "workspace", f"Workspace: {context.runtime.workspace_root}",
                 placement="system_reminder",
             ),
         ]

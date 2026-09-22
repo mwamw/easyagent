@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 from core.Config import Config
-from runtime import ExecutionContext
+from runtime import AgentRuntime
 from .system_prompt import PromptBlock
 
 def merge_prompt_blocks(blocks: Iterable[PromptBlock]) -> list[PromptBlock]:
@@ -32,7 +32,7 @@ class PromptBuildContext:
     system_prompt: str | None
     query: str
     config: Config
-    execution_context: ExecutionContext
+    runtime: AgentRuntime
     tools_enabled: bool = False
     providers: tuple[Callable[["PromptBuildContext"], Iterable[PromptBlock]], ...] = ()
 

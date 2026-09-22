@@ -9,11 +9,10 @@ from executor import (
     BaseAgentExecutor,
     DefaultAgentExecutor,
 )
-from runtime.interruptions import InMemoryToolInterruptController
 from core.agent import BaseAgent
 from core.Config import Config
 from core.llm import EasyLLM
-from runtime import AgentStreamEvent
+from runtime import AgentRuntime, AgentStreamEvent
 
 
 class BasicAgent(BaseAgent):
@@ -26,6 +25,8 @@ class BasicAgent(BaseAgent):
         system_prompt: str | None = None,
         description: str | None = None,
         config: Config | None = None,
+        *,
+        runtime: AgentRuntime | None = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -33,14 +34,14 @@ class BasicAgent(BaseAgent):
             system_prompt=system_prompt,
             description=description,
             config=config,
+            runtime=runtime,
         )
         self.executor = DefaultAgentExecutor()
-        self.interrupt_controller = InMemoryToolInterruptController()
 
     def _services(self) -> AgentExecutionServices:
         if self._sessions.busy:
             raise RuntimeError("Cannot invoke while a session operation is in progress")
-        if self._closed:
+        if self.runtime.closed:
             raise RuntimeError("Agent is closed and cannot accept new invocations")
         executor = self.executor
         if not isinstance(executor, BaseAgentExecutor):
@@ -49,25 +50,16 @@ class BasicAgent(BaseAgent):
         if self.multi_agent is not None:
             before_context_build = self.multi_agent.before_context_build
         return AgentExecutionServices(
-            agent_id=self.name,
             llm=self.llm,
             config=self.config,
             prompt_composer=self.prompt_composer,
             prompt_context_factory=self.build_prompt_context,
-            execution_context=self.execution_context,
-            event_bus=self.event_bus,
-            metamessage_manager=self.metamessage_manager,
+            runtime=self.runtime,
             permission_engine=self.permission_engine,
             authorization_context_factory=self.build_authorization_context,
-            hook_manager=self.hook_manager,
             tool_registry=self.tool_registry,
             context_manager=self.context_manager,
-            reasoning=self.reasoning,
-            interrupt_controller=self.interrupt_controller,
-            stop_checker=self.stop_reason_if_requested,
             before_context_build=before_context_build,
-            session_id=self.session_id,
-            invocation_lock=self._invocation_lock,
         )
 
     def invoke(

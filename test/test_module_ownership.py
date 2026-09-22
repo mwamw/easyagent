@@ -80,7 +80,7 @@ def test_custom_context_owns_history_and_builds_every_model_input(path):
         for name in ("builder", "counter", "budget", "history_store"):
             assert not hasattr(context, name)
         assert agent.permission_engine is None
-        assert agent.hook_manager is None
+        assert agent.runtime.hooks.hooks == []
         run_path(agent, path)
         assert tool.calls == 1
         assert len(context.prepared) == len(context.feedback) == 2
@@ -385,7 +385,7 @@ def test_minimal_agent_installs_only_required_functional_modules():
         assert agent.context_manager is not None
         assert isinstance(agent.executor, BaseAgentExecutor)
         assert isinstance(agent.prompt_composer, BaseSystemPromptComposer)
-        for name in ("memory", "skill_manager", "permission_engine", "hook_manager",
+        for name in ("memory", "skill_manager", "permission_engine",
                      "callback_manager", "plan", "observability", "multi_agent", "tool_registry"):
             assert getattr(agent, name) is None
         assert agent.invoke("hello") == "session-response"

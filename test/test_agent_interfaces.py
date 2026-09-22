@@ -41,11 +41,11 @@ class CustomExecutor(BaseAgentExecutor):
 
     def invoke(self, services: AgentExecutionServices, query: str, *, max_iter: int, temperature: float, **kwargs):
         self.calls.append(("invoke", query))
-        return f"sync:{services.agent_id}:{query}"
+        return f"sync:{services.runtime.agent_id}:{query}"
 
     async def ainvoke(self, services: AgentExecutionServices, query: str, *, max_iter: int, temperature: float, **kwargs):
         self.calls.append(("ainvoke", query))
-        return f"async:{services.agent_id}:{query}"
+        return f"async:{services.runtime.agent_id}:{query}"
 
     def stream(self, services: AgentExecutionServices, query: str, *, max_iter: int, temperature: float, **kwargs):
         self.calls.append(("stream", query))
@@ -98,7 +98,7 @@ def test_custom_executor_receives_the_current_composed_services():
     services = agent._services()
 
     assert isinstance(services, AgentExecutionServices)
-    assert services.agent_id == "services-agent"
+    assert services.runtime.agent_id == "services-agent"
     assert services.context_manager is agent.context_manager
     assert services.prompt_composer is agent.prompt_composer
-    assert services.event_bus is agent.event_bus
+    assert services.runtime.event_bus is agent.event_bus

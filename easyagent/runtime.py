@@ -1,18 +1,22 @@
 """Stable public runtime exports."""
 
 from runtime import (
+    AgentInvocationPhase,
+    AgentInvocationState,
     AgentStreamEvent,
     AgentStreamEventType,
-    ExecutionContext,
+    AgentRuntime,
     RuntimeEvent,
     RuntimeEventBus,
     RuntimeEventType,
 )
 
 __all__ = [
+    "AgentInvocationPhase",
+    "AgentInvocationState",
     "AgentStreamEvent",
     "AgentStreamEventType",
-    "ExecutionContext",
+    "AgentRuntime",
     "RuntimeEvent",
     "RuntimeEventBus",
     "RuntimeEventType",

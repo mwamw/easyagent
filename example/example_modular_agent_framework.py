@@ -66,8 +66,8 @@ def build_agent(workspace: Path) -> BasicAgent:
             PromptBlock(
                 "workspace",
                 lambda ctx: (
-                    f"当前工作区是 {ctx.execution_context.workspace_root}；"
-                    f"当前执行模式是 {ctx.execution_context.execution_mode}。"
+                    f"当前工作区是 {ctx.runtime.workspace_root}；"
+                    f"当前执行模式是 {ctx.runtime.execution_mode}。"
                 ),
                 placement="system_reminder",
                 order=100,

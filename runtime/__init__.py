@@ -1,6 +1,7 @@
 """Framework-owned runtime infrastructure."""
 
-from .context import ExecutionContext
+from .agent import AgentRuntime
+from .invocation import AgentInvocationPhase, AgentInvocationState
 from .events import (
     AgentStreamEvent,
     AgentStreamEventType,
@@ -11,9 +12,11 @@ from .events import (
 )
 
 __all__ = [
+    "AgentInvocationPhase",
+    "AgentInvocationState",
     "AgentStreamEvent",
     "AgentStreamEventType",
-    "ExecutionContext",
+    "AgentRuntime",
     "RuntimeEvent",
     "RuntimeEventBus",
     "RuntimeEventHandler",

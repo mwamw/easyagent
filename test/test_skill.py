@@ -372,7 +372,7 @@ def test_path_conditional_skill_activates_from_filesystem_runtime_event(tmp_path
         .add_tool(FilesystemProbeTool())
         .with_skill(skill_root)
     )
-    agent.execution_context.workspace_root = str(workspace)
+    agent.runtime.workspace_root = str(workspace)
 
     assert "`python-review`" not in agent.get_system_prompt_template().render_system_reminders()
     hidden = agent.tool_registry.execute_tool_result("skill_tool", {"skill": "python-review"})

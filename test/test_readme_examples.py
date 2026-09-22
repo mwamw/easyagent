@@ -126,7 +126,7 @@ def test_product_assembly_installs_context_and_observability(monkeypatch, tmp_pa
         assert agent.context_manager.history_compactor is not None
         assert agent.tool_registry.has_tool("FileRead")
         assert agent.observability is not None
-        assert agent.execution_context.workspace_root == str(tmp_path)
+        assert agent.runtime.workspace_root == str(tmp_path)
         assert agent.invoke("Explain the installed modules") == "session-response"
         assert agent.observability.list()
     finally:

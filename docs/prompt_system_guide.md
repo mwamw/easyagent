@@ -29,7 +29,7 @@ composer = SystemPromptComposer(
         ),
         PromptBlock(
             name="workspace",
-            content=lambda ctx: f"当前工作区：{ctx.execution_context.workspace_root}",
+            content=lambda ctx: f"当前工作区：{ctx.runtime.workspace_root}",
             placement="system_reminder",
             order=100,
         ),
@@ -56,7 +56,7 @@ class GameAgentPrompt(BaseSystemPromptComposer):
             PromptBlock("identity", "你是游戏引擎开发 Agent。"),
             PromptBlock(
                 "mode",
-                f"当前模式：{context.execution_context.execution_mode}",
+                f"当前模式：{context.runtime.execution_mode}",
                 placement="system_reminder",
             ),
         ]

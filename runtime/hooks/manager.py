@@ -29,6 +29,9 @@ class HookManager:
     def remove_hook(self, hook: BaseHook) -> None:
         self._hooks = [item for item in self._hooks if item is not hook]
 
+    def clear(self) -> None:
+        self._hooks.clear()
+
     def before_llm_request(self, payload: dict[str, Any]) -> HookExecutionResult:
         return self._run_stage("before_llm_request", payload)
 

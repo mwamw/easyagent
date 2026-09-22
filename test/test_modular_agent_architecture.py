@@ -17,7 +17,7 @@ from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from observability import InMemoryObservabilityStore
 from plan import PlanModeConfig
 from prompt import PromptBlock
-from runtime import AgentStreamEventType, ExecutionContext
+from runtime import AgentStreamEventType, AgentRuntime
 from multiagent.default import AgentRuntimeManager, SubagentRequest
 from Tool import Tool, ToolRegistry
 
@@ -198,6 +198,7 @@ def test_basic_agent_has_light_defaults_and_only_final_invocation_api():
         "system_prompt",
         "description",
         "config",
+        "runtime",
     ]
 
     instance = BasicAgent("minimal", ScriptedLLM())
@@ -395,7 +396,7 @@ def test_runtime_registers_before_factory_and_supports_per_launch_factory(tmp_pa
         )
         return _RuntimeProbeAgent(runtime, request)
 
-    context = ExecutionContext(
+    context = AgentRuntime(
         workspace_root=str(tmp_path),
         allowed_roots=(str(tmp_path),),
         metadata={"agentId": "parent"},
@@ -407,11 +408,11 @@ def test_runtime_registers_before_factory_and_supports_per_launch_factory(tmp_pa
             workspace_root=str(tmp_path),
             allowed_roots=(str(tmp_path),),
         ),
-        execution_context=context,
+        runtime=context,
         agent_factory=current_factory,
     )
 
     assert handle.status == "completed"
     assert handle.content == "registered-before-factory"
-    assert handle.execution_context.metadata["agentId"] == handle.agent_id
+    assert handle.runtime.metadata["agentId"] == handle.agent_id
     assert handle.output_file

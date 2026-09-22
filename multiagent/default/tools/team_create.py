@@ -7,7 +7,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from multiagent.default.teams import TeamManager
-from runtime import ExecutionContext
+from runtime import AgentRuntime
 
 from Tool.BaseTool import Tool, ToolResult
 from Tool.ToolRegistry import ToolRegistry
@@ -52,11 +52,11 @@ class TeamCreateTool(Tool):
         *,
         team_manager: TeamManager,
         creator_name: str | None = None,
-        execution_context: ExecutionContext | None = None,
+        runtime: AgentRuntime | None = None,
     ):
         self.team_manager = team_manager
         self.creator_name = creator_name
-        self.execution_context = execution_context
+        self.runtime = runtime
         super().__init__(
             name="TeamCreate",
             description="Creates an explicit agent team.",
@@ -76,7 +76,7 @@ class TeamCreateTool(Tool):
 
     def run(self, parameters: dict) -> ToolResult:
         metadata: dict[str, Any] = {}
-        current_task_id = getattr(self.execution_context, "current_task_id", None)
+        current_task_id = getattr(self.runtime, "current_task_id", None)
         if current_task_id and "taskId" not in metadata:
             metadata["taskId"] = current_task_id
         creator_name = self.creator_name
@@ -90,9 +90,9 @@ class TeamCreateTool(Tool):
                 description=str(parameters.get("description") or ""),
                 metadata=metadata,
             )
-            if self.execution_context is not None:
-                self.execution_context.metadata["teamName"] = team.name
-                self.execution_context.metadata["teamId"] = team.team_id
+            if self.runtime is not None:
+                self.runtime.metadata["teamName"] = team.name
+                self.runtime.metadata["teamId"] = team.team_id
         except Exception as exc:
             return ToolResult.error(
                 f"创建团队失败: {exc}",
@@ -116,13 +116,13 @@ def register_team_create_tool(
     *,
     team_manager: TeamManager,
     creator_name: str | None = None,
-    execution_context: ExecutionContext | None = None,
+    runtime: AgentRuntime | None = None,
     expose_in_deferred: bool | None = True,
 ) -> TeamCreateTool:
     tool = TeamCreateTool(
         team_manager=team_manager,
         creator_name=creator_name,
-        execution_context=execution_context,
+        runtime=runtime,
     )
     registry.register_tool(tool, expose_in_deferred=expose_in_deferred)
     return tool

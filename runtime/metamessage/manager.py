@@ -440,6 +440,19 @@ class MetaMessageManager:
     def reset_session_state(self):
         self.restore_state(None)
 
+    def close(self) -> None:
+        """Release subscriptions and history bindings with the owning runtime."""
+        with self._lock:
+            self._subscriptions.clear()
+            self._registered.clear()
+            self._pending.clear()
+            self._injections.clear()
+            self._condition_active.clear()
+            self._seen_dedup_keys.clear()
+            self._history_port = None
+            self._context_provider = None
+            self._invoke_active = False
+
 
 __all__ = [
     "MetaMessageContextProvider",

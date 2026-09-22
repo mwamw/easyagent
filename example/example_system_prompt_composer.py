@@ -42,7 +42,7 @@ class CodeProductPromptComposer(SystemPromptComposer):
                     content=lambda context: (
                         "## 当前产品上下文\n"
                         f"Agent: {context.agent_name}\n"
-                        f"Workspace: {context.execution_context.workspace_root}\n"
+                        f"Workspace: {context.runtime.workspace_root}\n"
                         "本段是 request-scoped system reminder，不会写入长期对话历史。"
                     ),
                     placement="system_reminder",

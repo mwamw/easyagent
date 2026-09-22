@@ -252,6 +252,10 @@ class RuntimeEventBus:
         with self._lock:
             return [dict(item) for item in self._subscriber_errors]
 
+    def close(self) -> None:
+        with self._lock:
+            self._subscriptions.clear()
+
 
 __all__ = [
     "AgentStreamEvent",

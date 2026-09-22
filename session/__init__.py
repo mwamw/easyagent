@@ -7,12 +7,12 @@ from .stores import (
     SessionConflictError,
     SQLiteSessionStore,
 )
-from .manager import SessionManager, SessionRuntime, SessionStateParticipant
+from .manager import SessionManager, SessionBindings, SessionStateParticipant
 
 __all__ = [
     "ComponentRestoreReport",
     "RestoreIssue",
     "SessionRestoreReport",
     "BaseSessionStore", "SessionConflictError", "SQLiteSessionStore", "InMemorySessionStore",
-    "SessionManager", "SessionRuntime", "SessionStateParticipant",
+    "SessionManager", "SessionBindings", "SessionStateParticipant",
 ]

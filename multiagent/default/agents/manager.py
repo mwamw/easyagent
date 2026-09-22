@@ -9,7 +9,7 @@ from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from multiagent.default.subagents import SubagentManager, SubagentRequest
-from runtime.context import ExecutionContext
+from runtime.agent import AgentRuntime
 from multiagent.default.teams.manager import TeamManager
 
 from .models import AgentHandle, BackgroundAgentHandle, CompletionRecord, MailboxMessage
@@ -33,7 +33,7 @@ class AgentRuntimeManager:
         )
         self._lock = threading.RLock()
         self._requests: dict[str, SubagentRequest] = {}
-        self._contexts: dict[str, ExecutionContext] = {}
+        self._contexts: dict[str, AgentRuntime] = {}
         self._mailboxes: dict[str, list[MailboxMessage]] = {}
         self._team_assignments: dict[str, str] = {}
         self._background_agent_ids: set[str] = set()
@@ -74,12 +74,12 @@ class AgentRuntimeManager:
     def _normalize_context(
         self,
         request: SubagentRequest,
-        execution_context: Optional[ExecutionContext],
-    ) -> ExecutionContext:
-        if execution_context is not None:
-            return execution_context
+        runtime: Optional[AgentRuntime],
+    ) -> AgentRuntime:
+        if runtime is not None:
+            return runtime
         workspace_root = os.path.abspath(request.workspace_root or os.getcwd())
-        return ExecutionContext(
+        return AgentRuntime(
             workspace_root=workspace_root,
             allowed_roots=tuple(request.allowed_roots or (workspace_root,)),
             execution_mode="plan" if request.mode == "plan" else "execute",
@@ -93,13 +93,13 @@ class AgentRuntimeManager:
         self,
         agent_id: str,
         request: SubagentRequest,
-        execution_context: ExecutionContext,
+        runtime: AgentRuntime,
         *,
         background: bool = False,
     ) -> None:
         with self._lock:
             self._requests[agent_id] = request
-            self._contexts[agent_id] = execution_context
+            self._contexts[agent_id] = runtime
             self._mailboxes.setdefault(agent_id, [])
             if background:
                 self._background_agent_ids.add(agent_id)
@@ -139,7 +139,7 @@ class AgentRuntimeManager:
             completed_at=float(handle.finished_at or time.time()),
             output_file=handle.output_file,
             team_id=handle.team_id,
-            current_task_id=handle.execution_context.current_task_id,
+            current_task_id=handle.runtime.current_task_id,
             error=handle.error,
             stop_reason=handle.stop_reason,
         )
@@ -150,11 +150,23 @@ class AgentRuntimeManager:
         self,
         request: SubagentRequest,
         *,
-        execution_context: Optional[ExecutionContext] = None,
+        runtime: Optional[AgentRuntime] = None,
         run_in_background: bool = False,
         agent_factory: Optional[Callable[[SubagentRequest], Any]] = None,
     ) -> AgentHandle:
-        context = self._normalize_context(request, execution_context)
+        context = self._normalize_context(request, runtime)
+
+        def create_agent(created_request: SubagentRequest):
+            agent = (agent_factory or self.subagent_manager.agent_factory)(created_request)
+            live_runtime = getattr(agent, "runtime", None)
+            if isinstance(live_runtime, AgentRuntime):
+                agent_id = created_request.metadata["agent_id"]
+                live_runtime.metadata = {**context.metadata, **live_runtime.metadata,
+                                         "agentId": agent_id}
+                live_runtime.agent_id = agent_id
+                self._remember_registration(agent_id, created_request, live_runtime,
+                                            background=run_in_background)
+            return agent
 
         def register_before_execution(snapshot: Any, created_request: SubagentRequest) -> None:
             context.metadata["agentId"] = snapshot.agent_id
@@ -170,13 +182,13 @@ class AgentRuntimeManager:
         snapshot = (
             self.subagent_manager.launch_background(
                 request,
-                agent_factory=agent_factory,
+                agent_factory=create_agent,
                 on_created=register_before_execution,
             )
             if run_in_background
             else self.subagent_manager.run(
                 request,
-                agent_factory=agent_factory,
+                agent_factory=create_agent,
                 on_created=register_before_execution,
             )
         )
@@ -201,7 +213,7 @@ class AgentRuntimeManager:
             output_file=snapshot.output_file,
             workspace_root=os.path.abspath(request.workspace_root or context.workspace_root),
             allowed_roots=tuple(request.allowed_roots or context.allowed_roots),
-            execution_context=context,
+            runtime=context,
             agent_type=snapshot.agent_type,
             name=snapshot.name,
             team_name=snapshot.team_name,
@@ -275,7 +287,7 @@ class AgentRuntimeManager:
         if current_task_id is not None:
             handles = [
                 handle for handle in handles
-                if handle.execution_context.current_task_id == current_task_id
+                if handle.runtime.current_task_id == current_task_id
             ]
         if limit is not None:
             handles = handles[: max(int(limit), 0)]
@@ -575,7 +587,7 @@ class AgentRuntimeManager:
             self._contexts = {
                 agent_id: context
                 for agent_id, payload in dict(data.get("contexts") or {}).items()
-                if (context := ExecutionContext.from_dict(payload)) is not None
+                if (context := AgentRuntime.from_dict(payload)) is not None
             }
             self._mailboxes = {
                 agent_id: [

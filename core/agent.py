@@ -7,7 +7,6 @@ from datetime import datetime
 import json
 import os
 from uuid import uuid4
-from threading import Lock
 from typing import Any, AsyncIterator, Iterator
 
 from executor.base import BaseAgentExecutor
@@ -28,10 +27,11 @@ from core.Exception import (
 )
 from guardrails import build_default_hook_manager
 from runtime.hooks import HookManager
+from runtime.interruptions import BaseToolInterruptController
 from core.llm import EasyLLM
 from permissions.base import BasePermissionEngine
 from permissions.default import RuleBasedPermissionEngine
-from session import SessionManager, SessionRestoreReport, SessionRuntime, SessionStateParticipant
+from session import SessionManager, SessionRestoreReport, SessionBindings, SessionStateParticipant
 from runtime.metamessage import (
     ContextMetaMessageHistoryPort,
     MetaMessage,
@@ -45,7 +45,7 @@ from multiagent import BaseMultiAgent
 from multiagent.default.module import ClaudeCodeMultiAgent
 from runtime import (
     AgentStreamEvent,
-    ExecutionContext,
+    AgentRuntime,
     RuntimeEvent,
     RuntimeEventBus,
 )
@@ -65,6 +65,8 @@ class BaseAgent(ABC):
         system_prompt: str | None = None,
         description: str | None = None,
         config: Config | None = None,
+        *,
+        runtime: AgentRuntime | None = None,
     ) -> None:
         if not isinstance(name, str) or not name.strip():
             raise ParameterValidationError("name must be a non-empty string")
@@ -72,45 +74,43 @@ class BaseAgent(ABC):
             raise ParameterValidationError(f"llm must be EasyLLM, got {type(llm).__name__}")
         if config is not None and not isinstance(config, Config):
             raise ParameterValidationError(f"config must be Config, got {type(config).__name__}")
+        if runtime is not None and not isinstance(runtime, AgentRuntime):
+            raise TypeError("runtime must be AgentRuntime")
 
         self.name = name.strip()
         self.llm = llm
         self.system_prompt = system_prompt
         self.description = description
         self.config = config or Config.from_env()
-        self.reasoning: dict[str, Any] | None = None
         self._prompt_providers = {}
         self._context_owner = object()
 
-        self._event_bus = RuntimeEventBus()
         self.prompt_composer: BaseSystemPromptComposer = SystemPromptComposer()
         self.skill_manager: SkillManager | None = None
         self.callback_manager: CallbackManager | None = None
-        self.hook_manager: HookManager | None = None
         self.permission_engine: BasePermissionEngine | None = None
-        self._metamessage_manager = MetaMessageManager()
 
         workspace_root = os.path.abspath(self.config.workspace_root or os.getcwd())
         allowed_roots = tuple(os.path.abspath(item) for item in self.config.get_allowed_roots()) or (workspace_root,)
-        self.execution_context = ExecutionContext(
+        self._runtime = runtime or AgentRuntime(
+            agent_id=self.name,
             workspace_root=workspace_root,
             allowed_roots=allowed_roots,
             metadata={"agentId": self.name},
         )
+
+        self.runtime.claim(self._context_owner)
 
         self.tool_registry: ToolRegistry | None = None
         self.context_manager: BaseContextManager = ContextManager()
         self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
         self.register_prompt_provider("context", self.context_manager.get_prompt_blocks)
         self.task_service: Any = None
-        self.current_task_id: str | None = None
         self.memory: Any = None
-        self.session_id = f"session_{uuid4().hex}"
         self._memory_tools: list[Any] = []
         self._memory_hooks: list[Any] = []
         self._memory_emitter = None
         self._owns_memory = False
-        self._invocation_lock = Lock()
         self.plan: BasePlanMode | None = None
         self.observability: Any = None
         self.multi_agent: BaseMultiAgent | None = None
@@ -118,36 +118,19 @@ class BaseAgent(ABC):
         self.codeintel_manager: Any = None
         self.worktree_manager: Any = None
         self.executor: BaseAgentExecutor | None = None
-        self.interrupt_controller: Any = None
 
-        self._stop_requested = False
-        self._stop_reason: str | None = None
-        self._closed = False
         self.last_restore_report: SessionRestoreReport | None = None
         self.last_close_report: dict[str, Any] | None = None
         self._callback_subscription = None
-        self._metamessage_subscription = self.event_bus.subscribe(
-            self._handle_runtime_metamessage
-        )
         self._bind_metamessage_manager()
 
-        self._sessions = SessionManager(SessionRuntime(
+        self._sessions = SessionManager(self.runtime, SessionBindings(
             agent_type=type(self).__name__,
             agent_name=self.name,
             context=lambda: self.context_manager,
             provider_name=lambda: self.llm.provider_name,
             tool_names=lambda: self.tool_registry.get_tool_names() if self.tool_registry else [],
             has_tool=lambda name: self.tool_registry is not None and self.tool_registry.has_tool(name),
-            get_session_id=lambda: self.session_id,
-            set_session_id=lambda value: setattr(self, "session_id", value),
-            get_reasoning=lambda: self.reasoning,
-            set_reasoning=lambda value: setattr(self, "reasoning", dict(value) if value else None),
-            get_current_task_id=lambda: self.current_task_id,
-            set_current_task_id=lambda value: setattr(self, "current_task_id", value),
-            has_pending_interruption=lambda: self.get_pending_interruption() is not None,
-            ensure_idle=self._ensure_session_idle,
-            reconcile_history=self._reconcile_metamessage_history,
-            refresh_execution_context=self._refresh_execution_context,
         ))
         self._owns_session_store = False
         for name, attribute, forkable in (
@@ -162,6 +145,42 @@ class BaseAgent(ABC):
             self.register_session_state(name, lambda attribute=attribute: getattr(self, attribute), forkable=forkable)
 
     @property
+    def runtime(self) -> AgentRuntime:
+        return self._runtime
+
+    @property
+    def hook_manager(self) -> HookManager:
+        return self.runtime.hooks
+
+    @property
+    def interrupt_controller(self) -> BaseToolInterruptController:
+        return self.runtime.interruptions
+
+    @property
+    def session_id(self) -> str:
+        return self.runtime.session_id
+
+    @session_id.setter
+    def session_id(self, value: str) -> None:
+        self.runtime.session_id = value
+
+    @property
+    def current_task_id(self) -> str | None:
+        return self.runtime.current_task_id
+
+    @current_task_id.setter
+    def current_task_id(self, value: str | None) -> None:
+        self.runtime.current_task_id = value
+
+    @property
+    def reasoning(self) -> dict[str, Any] | None:
+        return self.runtime.reasoning
+
+    @reasoning.setter
+    def reasoning(self, value: dict[str, Any] | None) -> None:
+        self.runtime.reasoning = value
+
+    @property
     def enable_tool(self) -> bool:
         return self.tool_registry is not None and bool(self.tool_registry.get_tool_names())
 
@@ -169,20 +188,18 @@ class BaseAgent(ABC):
     def event_bus(self) -> RuntimeEventBus:
         """Framework-owned event infrastructure; modules may subscribe but not replace it."""
 
-        return self._event_bus
+        return self.runtime.event_bus
 
     @property
     def metamessage_manager(self) -> MetaMessageManager:
         """Framework-owned dynamic-message infrastructure; it is not a module slot."""
 
-        return self._metamessage_manager
+        return self.runtime.metamessages
 
     def _metamessage_context(self) -> MetaMessageContext:
         return MetaMessageContext(
             execution_mode=self.get_execution_mode().value,
-            permission_mode=getattr(self.permission_engine, "approval_mode", "ask_for_approval").value
-            if hasattr(getattr(self.permission_engine, "approval_mode", None), "value")
-            else str(getattr(self.permission_engine, "approval_mode", "ask_for_approval")),
+            permission_mode=self.runtime.permission_mode,
             current_task_id=self.current_task_id,
         )
 
@@ -192,30 +209,10 @@ class BaseAgent(ABC):
             context_provider=self._metamessage_context,
         )
 
-    def _ensure_session_idle(self) -> None:
-        if self._closed:
-            raise RuntimeError("Cannot persist or restore a closed Agent")
-        if self._invocation_lock.locked():
-            raise RuntimeError("Session operations require an idle Agent")
-
-    def _reconcile_metamessage_history(self) -> None:
-        reconcile = getattr(self.metamessage_manager, "reconcile_history", None)
-        if callable(reconcile):
-            reconcile()
-
-    def _handle_runtime_metamessage(self, event: RuntimeEvent) -> None:
-        self.metamessage_manager.publish(event.type.value, event.data)
-
-    def _refresh_execution_context(self) -> None:
-        self.execution_context.execution_mode = self.get_execution_mode().value
-        approval_mode = getattr(self.permission_engine, "approval_mode", "ask_for_approval")
-        self.execution_context.permission_mode = getattr(approval_mode, "value", str(approval_mode))
-        self.execution_context.current_task_id = self.current_task_id
-        if self.plan is not None and self.get_execution_mode() == ExecutionMode.PLAN:
-            self.execution_context.metadata["planAllowedActions"] = list(self.plan.state.allowed_actions)
-        else:
-            self.execution_context.metadata.pop("planAllowedActions", None)
-        self.execution_context.mcp_servers = tuple(
+    def _refresh_runtime(self) -> None:
+        approval_mode = getattr(self.permission_engine, "approval_mode", self.runtime.permission_mode)
+        self.runtime.permission_mode = getattr(approval_mode, "value", str(approval_mode))
+        self.runtime.mcp_servers = tuple(
             sorted(
                 {
                     str(getattr(manager, "registry_server_name", None) or getattr(manager, "server_label", ""))
@@ -228,18 +225,18 @@ class BaseAgent(ABC):
             get_active_session = getattr(self.worktree_manager, "get_active_session", None)
             session = get_active_session() if callable(get_active_session) else None
             worktree = getattr(session, "worktree", None)
-            self.execution_context.worktree_path = getattr(worktree, "path", None)
-            self.execution_context.worktree_branch = getattr(worktree, "branch", None)
+            self.runtime.worktree_path = getattr(worktree, "path", None)
+            self.runtime.worktree_branch = getattr(worktree, "branch", None)
 
     def build_prompt_context(self, query: str = "") -> PromptBuildContext:
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return PromptBuildContext(
             agent_name=self.name,
             description=self.description,
             system_prompt=self.system_prompt,
             query=query,
             config=self.config,
-            execution_context=self.execution_context,
+            runtime=self.runtime,
             tools_enabled=self.enable_tool,
             providers=tuple(self._prompt_providers.values()),
         )
@@ -258,15 +255,11 @@ class BaseAgent(ABC):
         from permissions.models import AuthorizationContext
 
         return AuthorizationContext(
-            agent_id=self.name,
+            agent_id=self.runtime.agent_id,
             session_id=self.session_id,
-            workspace_root=self.execution_context.workspace_root,
-            runtime_mode=self.execution_context.execution_mode or "execute",
-            plan_allowed_actions=tuple(
-                getattr(getattr(self.plan, "state", None), "allowed_actions", ())
-                if self.get_execution_mode() == ExecutionMode.PLAN
-                else ()
-            ),
+            workspace_root=self.runtime.workspace_root,
+            runtime_mode=self.runtime.execution_mode or "execute",
+            plan_allowed_actions=self.runtime.plan_allowed_actions,
         )
 
     def with_prompt(self, composer: BaseSystemPromptComposer) -> "BaseAgent":
@@ -289,13 +282,13 @@ class BaseAgent(ABC):
         if self.plan is not None:
             self._bind_plan()
             getattr(self.plan, "install_tools", lambda: None)()
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def with_context(self, context_manager: BaseContextManager) -> "BaseAgent":
         if not isinstance(context_manager, BaseContextManager):
             raise TypeError("context_manager must implement BaseContextManager")
-        if self._closed or self._invocation_lock.locked() or self._sessions.busy:
+        if self.runtime.closed or self.runtime.invocation_lock.locked() or self._sessions.busy:
             raise RuntimeError("Context can only be replaced on an idle, open Agent")
         if context_manager is self.context_manager:
             return self
@@ -312,27 +305,22 @@ class BaseAgent(ABC):
         engine: BasePermissionEngine | None = None,
     ) -> "BaseAgent":
         resolved_engine = engine or RuleBasedPermissionEngine(
-            workspace_root=self.execution_context.workspace_root
+            workspace_root=self.runtime.workspace_root
         )
         if not isinstance(resolved_engine, BasePermissionEngine):
             raise TypeError("engine must implement BasePermissionEngine")
         self.permission_engine = resolved_engine
         if self.plan is not None:
             self._bind_plan()
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def with_hooks(self, hook_manager: HookManager | None = None) -> "BaseAgent":
         hook_manager = hook_manager if hook_manager is not None else build_default_hook_manager()
         if not isinstance(hook_manager, HookManager):
             raise TypeError("hook_manager must be HookManager")
-        if hook_manager is not self.hook_manager:
-            for hook in self._memory_hooks:
-                if self.hook_manager is not None:
-                    self.hook_manager.remove_hook(hook)
-                hook_manager.add_hook(hook)
-            self.hook_manager = hook_manager
-        self.context_manager.bind(self.llm, metamessages=self.metamessage_manager, owner=self._context_owner)
+        if hook_manager is not self.runtime.hooks:
+            self.runtime.hooks.extend(hook_manager.hooks)
         return self
 
     def with_callbacks(self, callback_manager: CallbackManager | None = None) -> "BaseAgent":
@@ -374,9 +362,7 @@ class BaseAgent(ABC):
             self.with_tool()
         resolved.bind(
             tool_registry=self.tool_registry,
-            metamessages=self.metamessage_manager,
-            event_bus=self.event_bus,
-            execution_context=self.execution_context,
+            runtime=self.runtime,
         )
         existing = self.tool_registry.get_tool("skill_tool")
         if existing is None:
@@ -414,16 +400,15 @@ class BaseAgent(ABC):
             self.with_tool()
         self._bind_plan()
         getattr(resolved, "install_tools", lambda: None)()
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def _bind_plan(self) -> None:
         if self.plan is None:
             return
         self.plan.bind(
-            metamessage_manager=self.metamessage_manager,
+            runtime=self.runtime,
             tool_registry=self.tool_registry,
-            runtime_refresher=self._refresh_execution_context,
         )
 
     def with_task_service(self, task_service: Any) -> "BaseAgent":
@@ -435,7 +420,7 @@ class BaseAgent(ABC):
         if self.tool_registry is None:
             self.with_tool()
         self._register_task_tools()
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def _register_task_tools(self) -> None:
@@ -475,7 +460,7 @@ class BaseAgent(ABC):
         if manager is None:
             if store is None:
                 resolved_path = path or os.path.join(
-                    self.execution_context.workspace_root,
+                    self.runtime.workspace_root,
                     ".easyagent",
                     "observability.sqlite3",
                 )
@@ -483,7 +468,7 @@ class BaseAgent(ABC):
             manager = ObservabilityManager(store)
         if not isinstance(manager, BaseObservabilityManager):
             raise TypeError("manager must extend BaseObservabilityManager")
-        self.observability = manager.bind(agent_id=self.name, event_bus=self.event_bus)
+        self.observability = manager.bind(agent_id=self.runtime.agent_id, event_bus=self.event_bus)
         return self
 
     def with_multi_agent(
@@ -513,7 +498,7 @@ class BaseAgent(ABC):
                 config=self.config,
                 system_prompt=self.system_prompt,
                 reasoning=self.reasoning,
-                execution_context=self.execution_context,
+                runtime=self.runtime,
                 tool_registry=self.tool_registry,
                 definitions=definitions,
                 permission_engine=self.permission_engine,
@@ -524,7 +509,7 @@ class BaseAgent(ABC):
             )
             resolved = ClaudeCodeMultiAgent(
                 agent_factory=factory,
-                workspace_root=workspace_root or self.execution_context.workspace_root,
+                workspace_root=workspace_root or self.runtime.workspace_root,
                 storage_dir=storage_dir,
                 max_background_tasks=max_background_tasks or self.config.max_background_tasks,
                 worktree_manager=self.worktree_manager,
@@ -538,9 +523,7 @@ class BaseAgent(ABC):
             raise TypeError("module must extend BaseMultiAgent")
         resolved.bind(
             tool_registry=self.tool_registry,
-            execution_context=self.execution_context,
-            event_bus=self.event_bus,
-            metamessages=self.metamessage_manager,
+            runtime=self.runtime,
         )
         contributed_tools = tuple(resolved.get_tools())
         names: set[str] = set()
@@ -570,7 +553,7 @@ class BaseAgent(ABC):
 
         if not isinstance(memory, BaseMemory):
             raise TypeError("memory must implement the BaseMemory module contract")
-        if self._closed or self._invocation_lock.locked():
+        if self.runtime.closed or self.runtime.invocation_lock.locked():
             raise RuntimeError("Memory can only be installed on an idle, open Agent")
         if self.memory is memory:
             return self
@@ -579,7 +562,7 @@ class BaseAgent(ABC):
         emitter = MetaMessageEmitter(self.metamessage_manager)
         memory.bind(MemoryServices(emitter, lambda: RuntimeScope(
             session_id=self.session_id,
-            workspace_root=self.execution_context.workspace_root,
+            workspace_root=self.runtime.workspace_root,
             user_id=getattr(memory, "user_id", None),
         )))
         try:
@@ -684,7 +667,7 @@ class BaseAgent(ABC):
         self.mcp_managers.append(manager)
         identity = str(getattr(manager, "registry_server_name", None) or getattr(manager, "server_label", len(self.mcp_managers)))
         self.register_session_state(f"mcp:{identity}", manager, forkable=False)
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def with_codeintel(self, manager: Any = None, *, provider: Any = None) -> "BaseAgent":
@@ -704,8 +687,8 @@ class BaseAgent(ABC):
             manager=manager,
             provider=provider,
             parent_agent=self,
-            workspace_root=self.execution_context.workspace_root,
-            allowed_roots=self.execution_context.allowed_roots,
+            workspace_root=self.runtime.workspace_root,
+            allowed_roots=self.runtime.allowed_roots,
         )
         return self
 
@@ -715,13 +698,13 @@ class BaseAgent(ABC):
 
         if manager is None:
             repo_root = WorktreeManager.detect_repo_root(
-                self.execution_context.workspace_root,
+                self.runtime.workspace_root,
                 git_binary=self.config.git_binary,
             )
             manager = WorktreeManager(
                 repo_root,
                 git_binary=self.config.git_binary,
-                original_cwd=self.execution_context.workspace_root,
+                original_cwd=self.runtime.workspace_root,
             )
         if not isinstance(manager, WorktreeManager):
             raise TypeError("manager must be WorktreeManager")
@@ -729,7 +712,7 @@ class BaseAgent(ABC):
             self.with_tool()
         register_worktree_tools(self.tool_registry, worktree_manager=manager)
         self.worktree_manager = manager
-        self._refresh_execution_context()
+        self._refresh_runtime()
         return self
 
     def with_executor(self, executor: BaseAgentExecutor) -> "BaseAgent":
@@ -743,7 +726,7 @@ class BaseAgent(ABC):
 
         if not isinstance(controller, BaseToolInterruptController):
             raise TypeError("controller must extend BaseToolInterruptController")
-        self.interrupt_controller = controller
+        self.runtime.interruptions = controller
         return self
 
     def get_pending_interruption(self) -> dict[str, Any] | None:
@@ -827,10 +810,10 @@ class BaseAgent(ABC):
                 setter(mode)
             else:
                 raise TypeError("Installed permission engine does not expose an approval-mode policy")
-            self._refresh_execution_context()
+            self._refresh_runtime()
             return
         raise TypeError("permission_engine must implement BasePermissionEngine")
-        self._refresh_execution_context()
+        self._refresh_runtime()
 
     def add_permission_rule(
         self,
@@ -864,28 +847,26 @@ class BaseAgent(ABC):
         self.plan.exit()
 
     def get_execution_mode(self) -> ExecutionMode:
-        return self.plan.mode if self.plan is not None else ExecutionMode.EXECUTE
+        return ExecutionMode(self.runtime.execution_mode)
 
     def set_current_task(self, task_id: str | None) -> None:
         self.current_task_id = task_id
-        self._refresh_execution_context()
+        self._refresh_runtime()
 
     def request_stop(self, reason: str = "") -> None:
-        self._stop_requested = True
-        self._stop_reason = reason.strip() or "Agent stop requested"
+        self.runtime.request_stop(reason)
 
     def clear_stop_request(self) -> None:
-        self._stop_requested = False
-        self._stop_reason = None
+        self.runtime.clear_stop_request()
 
     def is_stop_requested(self) -> bool:
-        return self._stop_requested
+        return self.runtime.stop_requested
 
     def get_stop_reason(self) -> str | None:
-        return self._stop_reason
+        return self.runtime.stop_reason
 
     def stop_reason_if_requested(self) -> str | None:
-        return self._stop_reason if self._stop_requested else None
+        return self.runtime.stop_reason if self.runtime.stop_requested else None
 
     def add_message(self, message: Any) -> None:
         self.context_manager.add(message)
@@ -964,7 +945,7 @@ class BaseAgent(ABC):
         return self
 
     def with_session(self, store, *, session_id=None, owned=False):
-        if self._invocation_lock.locked() or self._closed:
+        if self.runtime.invocation_lock.locked() or self.runtime.closed:
             raise RuntimeError("Session bindings can only change on an idle, open Agent")
         self._sessions.store = self._sessions.resolve_store(store)
         self._owns_session_store = owned
@@ -1000,6 +981,7 @@ class BaseAgent(ABC):
         return await self._sessions.afork(session_id, **kwargs)
 
     def _complete_session_restore(self, report: SessionRestoreReport) -> None:
+        self._refresh_runtime()
         snapshot = self._sessions.last_restored_snapshot or {}
         if self.hook_manager is not None:
             hook = self.hook_manager.after_session_restore({
@@ -1011,6 +993,7 @@ class BaseAgent(ABC):
         self.last_restore_report = report
 
     async def _acomplete_session_restore(self, report: SessionRestoreReport) -> None:
+        self._refresh_runtime()
         snapshot = self._sessions.last_restored_snapshot or {}
         if self.hook_manager is not None:
             hook = await self.hook_manager.arun_stage("after_session_restore", {
@@ -1045,8 +1028,11 @@ class BaseAgent(ABC):
         discard_worktree_changes: bool = False,
         close_llm: bool = True,
     ) -> dict[str, Any]:
-        if self._closed:
+        if self.runtime.closed:
             return dict(self.last_close_report or {"status": "closed", "components": {}})
+        self.runtime.ensure_idle()
+        if self._sessions.busy:
+            raise RuntimeError("Close an Agent after its active session operation completes")
         report: dict[str, Any] = {"status": "closed", "components": {}, "issues": []}
 
         def close_component(name: str, target: Any, **kwargs: Any) -> None:
@@ -1081,7 +1067,7 @@ class BaseAgent(ABC):
         close_component("context", self.context_manager)
         if close_llm:
             close_component("llm", self.llm)
-        self._closed = True
+        self.runtime.close()
         self.last_close_report = report
         return dict(report)
 
@@ -1091,9 +1077,9 @@ class BaseAgent(ABC):
     async def aclose(self, **kwargs):
         """Close owned async memory/storage before the existing product cleanup."""
         import asyncio
-        if self._closed:
+        if self.runtime.closed:
             return self.get_last_close_report()
-        if self._invocation_lock.locked() or self._sessions.busy:
+        if self.runtime.invocation_lock.locked() or self._sessions.busy:
             raise RuntimeError("Close an Agent after its active operation completes")
         issues = []
         for name, component, flag in (
