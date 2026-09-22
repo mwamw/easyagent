@@ -21,7 +21,7 @@
 | EasyAgent 的扩展入口直接对应关键 Harness 机制 | `BaseAgentExecutor`、`BaseMemory`、`BaseContextManager`、`BaseSessionStore` 与公开指南 | supported：限于核对的接口；不推广为所有子系统均完全解耦 |
 | Memory 契约不强制一种分类、CRUD 或后端 | `memory/base.py` 的可选 prompt/tools/hooks，及独立 Storage | supported |
 | Context 接受准备好的信息，不自行承担 Memory/RAG 检索 | Context 基类、请求准备路径与上下文指南 | supported |
-| 会话恢复与产品实例装配分开 | SessionPersistence 与会话恢复指南 | supported：不意味着自动恢复外部任务 |
+| 会话恢复与产品实例装配分开 | SessionManager 与会话恢复指南 | supported：不意味着自动恢复外部任务 |
 | 使用模块契约能够降低理解无关实现的需要 | 责任边界与装配示例提供结构解释 | needs evidence：实际学习时间与用户成功率未测量，正文保持价值主张措辞 |
 | 模块替换减少维护与升级成本 | 局部接口给出合理机制解释 | needs evidence：未进行纵向维护研究，不报告节省比例 |
 | EasyAgent 的方法在当前生态中具有可辨识的设计取向 | 三组对比与具体模块语义 | supported：设计取向；不声称首创或独占 |
@@ -105,7 +105,7 @@ v0.1 阅读版为 16 页，参考资料独立成页，包含 3 张内嵌 SVG 和
 | Prompt 用户实现 build 即可保留模块说明合并 | `BaseSystemPromptComposer.compose()`；ResearchPrompt + EvidenceMemory 检查 | supported：主动覆盖 compose 或关闭合并时不再承诺 |
 | 工具结果不需手动接入后续请求 | Tool/Registry 与默认执行管线；公开工具执行入口检查 | supported：直接 run 不等于完整 Agent 执行 |
 | 压缩器作者不用重写预算与调用时序 | RequestPreparer、ContextManager、BaseHistoryCompactor | supported：自定义算法仍要输出有效内容 |
-| 存储作者不必重新装配 Agent 或遍历内部模块 | SessionPersistence 与 Store 记录契约；保存/恢复检查 | supported：数据库原子版本检查属于后端责任 |
+| 存储作者不必重新装配 Agent 或遍历内部模块 | SessionManager 与 Store 记录契约；保存/恢复检查 | supported：数据库原子版本检查属于后端责任 |
 | 使用者完全不需要任何底层知识 | 不符合自定义逻辑与资源责任的事实 | removed：改为无需掌握无关内部实现和手工接入循环 |
 | 默认工程实现等同于生产安全认证 | 本版没有这样的实验或认证 | removed：只说明具体机制及其边界 |
 

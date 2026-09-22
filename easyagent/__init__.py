@@ -96,7 +96,15 @@ from .runtime import (
     RuntimeEventType,
 )
 from .multiagent import BaseMultiAgent, ClaudeCodeMultiAgent
-from .session import BaseSessionStore, SQLiteSessionStore, InMemorySessionStore, SessionRestoreReport
+from .session import (
+    BaseSessionStore,
+    InMemorySessionStore,
+    SessionManager,
+    SessionRestoreReport,
+    SessionRuntime,
+    SessionStateParticipant,
+    SQLiteSessionStore,
+)
 from .skills import SkillManager, SkillManifest, SkillTool
 from .tasks import TaskRecord, TaskService, TaskStatus
 from .tools import Tool, ToolConflictPolicy, ToolRegistry, ToolResult, ToolSpec
@@ -140,6 +148,9 @@ __all__ = [
     "BaseSessionStore",
     "SQLiteSessionStore",
     "InMemorySessionStore",
+    "SessionManager",
+    "SessionRuntime",
+    "SessionStateParticipant",
     "DangerousCommandGuardrail",
     "DefaultAgentExecutor",
     "EasyLLM",

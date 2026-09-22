@@ -395,10 +395,12 @@ def test_minimal_agent_installs_only_required_functional_modules():
 
 def test_module_boundaries_do_not_reintroduce_default_implementation_dependencies():
     root = Path(__file__).resolve().parents[1]
+    for misplaced in ("hooks", "permissions", "session", "guardrails"):
+        assert not (root / "core" / misplaced).exists()
     for path, forbidden in (
         (root / "executor/default.py", {"context.default", "context.history", "prompt.composer"}),
         (root / "prompt/composer.py", {"memory", "skill", "plan", "context.default.manager", "Tool"}),
-        (root / "core/session/persistence.py", {"context.history", "context.default"}),
+        (root / "session/manager.py", {"context.history", "context.default", "core.agent"}),
     ):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom):
@@ -424,6 +426,11 @@ def test_module_boundaries_do_not_reintroduce_default_implementation_dependencie
     history_source = (root / "context/history.py").read_text()
     for forbidden in ("core.llm", "provider_name", "_replay", "change_llm"):
         assert forbidden not in history_source
+    permission_models = (root / "permissions/models.py").read_text()
+    assert "ApprovalMode" not in permission_models
+    session_source = (root / "session/manager.py").read_text()
+    assert "self.agent" not in session_source
+    assert "from core.agent" not in session_source
 
 
 def test_framework_history_is_concrete_and_provider_independent():

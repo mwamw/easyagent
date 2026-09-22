@@ -26,13 +26,12 @@ from core.Exception import (
     ToolExecutionError,
     ToolRegistryError,
 )
-from core.guardrails import build_default_hook_manager
-from core.hooks import HookManager
+from guardrails import build_default_hook_manager
+from runtime.hooks import HookManager
 from core.llm import EasyLLM
-from core.permissions import PermissionEngine, ApprovalMode
-from core.permissions.base import BasePermissionEngine
-from core.permissions.default import RuleBasedPermissionEngine
-from core.session import SessionRestoreReport
+from permissions.base import BasePermissionEngine
+from permissions.default import RuleBasedPermissionEngine
+from session import SessionManager, SessionRestoreReport, SessionRuntime, SessionStateParticipant
 from runtime.metamessage import (
     ContextMetaMessageHistoryPort,
     MetaMessage,
@@ -132,8 +131,24 @@ class BaseAgent(ABC):
         )
         self._bind_metamessage_manager()
 
-        from core.session.persistence import SessionPersistence
-        self._sessions = SessionPersistence(self)
+        self._sessions = SessionManager(SessionRuntime(
+            agent_type=type(self).__name__,
+            agent_name=self.name,
+            context=lambda: self.context_manager,
+            provider_name=lambda: self.llm.provider_name,
+            tool_names=lambda: self.tool_registry.get_tool_names() if self.tool_registry else [],
+            has_tool=lambda name: self.tool_registry is not None and self.tool_registry.has_tool(name),
+            get_session_id=lambda: self.session_id,
+            set_session_id=lambda value: setattr(self, "session_id", value),
+            get_reasoning=lambda: self.reasoning,
+            set_reasoning=lambda value: setattr(self, "reasoning", dict(value) if value else None),
+            get_current_task_id=lambda: self.current_task_id,
+            set_current_task_id=lambda value: setattr(self, "current_task_id", value),
+            has_pending_interruption=lambda: self.get_pending_interruption() is not None,
+            ensure_idle=self._ensure_session_idle,
+            reconcile_history=self._reconcile_metamessage_history,
+            refresh_execution_context=self._refresh_execution_context,
+        ))
         self._owns_session_store = False
         for name, attribute, forkable in (
             ("permissions", "permission_engine", True), ("metamessage", "metamessage_manager", True),
@@ -176,6 +191,17 @@ class BaseAgent(ABC):
             history_port=ContextMetaMessageHistoryPort(self.context_manager),
             context_provider=self._metamessage_context,
         )
+
+    def _ensure_session_idle(self) -> None:
+        if self._closed:
+            raise RuntimeError("Cannot persist or restore a closed Agent")
+        if self._invocation_lock.locked():
+            raise RuntimeError("Session operations require an idle Agent")
+
+    def _reconcile_metamessage_history(self) -> None:
+        reconcile = getattr(self.metamessage_manager, "reconcile_history", None)
+        if callable(reconcile):
+            reconcile()
 
     def _handle_runtime_metamessage(self, event: RuntimeEvent) -> None:
         self.metamessage_manager.publish(event.type.value, event.data)
@@ -229,9 +255,8 @@ class BaseAgent(ABC):
 
     def build_authorization_context(self):
         """Build an immutable permission context from Agent-owned runtime state."""
-        from core.permissions.models import AuthorizationContext
+        from permissions.models import AuthorizationContext
 
-        mode = getattr(self.permission_engine, "approval_mode", ApprovalMode.ASK_FOR_APPROVAL)
         return AuthorizationContext(
             agent_id=self.name,
             session_id=self.session_id,
@@ -242,7 +267,6 @@ class BaseAgent(ABC):
                 if self.get_execution_mode() == ExecutionMode.PLAN
                 else ()
             ),
-            approval_mode=mode if isinstance(mode, ApprovalMode) else ApprovalMode(str(mode)),
         )
 
     def with_prompt(self, composer: BaseSystemPromptComposer) -> "BaseAgent":
@@ -285,12 +309,12 @@ class BaseAgent(ABC):
 
     def with_permissions(
         self,
-        engine: BasePermissionEngine | PermissionEngine | None = None,
+        engine: BasePermissionEngine | None = None,
     ) -> "BaseAgent":
         resolved_engine = engine or RuleBasedPermissionEngine(
             workspace_root=self.execution_context.workspace_root
         )
-        if not isinstance(resolved_engine, BasePermissionEngine) and not isinstance(resolved_engine, PermissionEngine):
+        if not isinstance(resolved_engine, BasePermissionEngine):
             raise TypeError("engine must implement BasePermissionEngine")
         self.permission_engine = resolved_engine
         if self.plan is not None:
@@ -539,7 +563,7 @@ class BaseAgent(ABC):
         return self
 
     def with_memory(self, memory: Any, *, owned: bool = False, replace: bool = False) -> "BaseAgent":
-        from core.hooks import BaseHook
+        from runtime.hooks import BaseHook
         from memory.base import BaseMemory, MemoryServices
         from core.scope import RuntimeScope
         from runtime.metamessage.emitter import MetaMessageEmitter
@@ -796,21 +820,13 @@ class BaseAgent(ABC):
     def get_enhanced_prompt(self, query: str = "") -> str:
         return self.get_system_prompt_template(query).render_system()
 
-    def set_permission_mode(self, mode: ApprovalMode | str) -> None:
+    def set_permission_mode(self, mode: Any) -> None:
         if isinstance(self.permission_engine, BasePermissionEngine):
-            mapping = {
-                "default": ApprovalMode.ASK_FOR_APPROVAL,
-                "accept_edits": ApprovalMode.AUTO_APPROVE_SAFE,
-                "dont_ask": ApprovalMode.FULL_ACCESS,
-                "bypass": ApprovalMode.FULL_ACCESS,
-            }
-            normalized = mode.value if isinstance(mode, ApprovalMode) else str(mode)
             setter = getattr(self.permission_engine, "set_approval_mode", None)
             if callable(setter):
-                resolved = mapping.get(normalized)
-                if resolved is None:
-                    resolved = ApprovalMode(normalized)
-                setter(resolved)
+                setter(mode)
+            else:
+                raise TypeError("Installed permission engine does not expose an approval-mode policy")
             self._refresh_execution_context()
             return
         raise TypeError("permission_engine must implement BasePermissionEngine")
@@ -944,7 +960,6 @@ class BaseAgent(ABC):
         )
 
     def register_session_state(self, name, component, *, version=1, required=False, forkable=True):
-        from core.session.persistence import SessionStateParticipant
         self._sessions.register(SessionStateParticipant(name, component, version, required, forkable))
         return self
 
@@ -966,7 +981,9 @@ class BaseAgent(ABC):
         return self._sessions.save(session_id, store=store, metadata=metadata, expires_at=expires_at)
 
     def restore_session(self, session_id, *, store=None):
-        return self._sessions.restore(session_id, store=store)
+        report = self._sessions.restore(session_id, store=store)
+        self._complete_session_restore(report)
+        return self
 
     def fork_session(self, session_id=None, *, store=None, metadata=None):
         return self._sessions.fork(session_id, store=store, metadata=metadata)
@@ -975,10 +992,48 @@ class BaseAgent(ABC):
         return await self._sessions.asave(session_id, **kwargs)
 
     async def arestore_session(self, session_id, **kwargs):
-        return await self._sessions.arestore(session_id, **kwargs)
+        report = await self._sessions.arestore(session_id, **kwargs)
+        await self._acomplete_session_restore(report)
+        return self
 
     async def afork_session(self, session_id=None, **kwargs):
         return await self._sessions.afork(session_id, **kwargs)
+
+    def _complete_session_restore(self, report: SessionRestoreReport) -> None:
+        snapshot = self._sessions.last_restored_snapshot or {}
+        if self.hook_manager is not None:
+            hook = self.hook_manager.after_session_restore({
+                "session_id": report.session_id,
+                "snapshot": snapshot,
+                "restore_report": report,
+            })
+            report = self._apply_session_restore_hook(hook, report)
+        self.last_restore_report = report
+
+    async def _acomplete_session_restore(self, report: SessionRestoreReport) -> None:
+        snapshot = self._sessions.last_restored_snapshot or {}
+        if self.hook_manager is not None:
+            hook = await self.hook_manager.arun_stage("after_session_restore", {
+                "session_id": report.session_id,
+                "snapshot": snapshot,
+                "restore_report": report,
+            })
+            report = self._apply_session_restore_hook(hook, report)
+        self.last_restore_report = report
+
+    @staticmethod
+    def _apply_session_restore_hook(hook: Any, report: SessionRestoreReport) -> SessionRestoreReport:
+        resolved = hook.payload.get("restore_report", report)
+        if not isinstance(resolved, SessionRestoreReport):
+            raise TypeError("Restore hook must return a SessionRestoreReport")
+        if hook.blocked:
+            resolved.add_issue(
+                component="hooks",
+                code="restore_hook_blocked",
+                message=hook.message,
+                severity="error",
+            )
+        return resolved
 
     def get_last_restore_report(self) -> dict[str, Any] | None:
         return self.last_restore_report.to_dict() if self.last_restore_report is not None else None

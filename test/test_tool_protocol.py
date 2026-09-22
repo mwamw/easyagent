@@ -121,7 +121,7 @@ def test_registry_requires_confirmation_short_circuits_execution():
     registry = ToolRegistry()
     tool = ConfirmTool()
     registry.register_tool(tool)
-    from core.permissions import PermissionEngine, PermissionBehavior
+    from permissions import PermissionEngine, PermissionBehavior
     decision = PermissionEngine(load_policies=False).authorize(
         registry.build_permission_request("confirm_tool", {})
     )

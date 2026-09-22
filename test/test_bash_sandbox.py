@@ -2,8 +2,8 @@ import shutil
 
 import pytest
 
-from core.permissions.default import RuleBasedPermissionEngine
-from core.permissions.models import PermissionBehavior
+from permissions.default import RuleBasedPermissionEngine
+from permissions.models import PermissionBehavior
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.bash_sandbox import (
     BashSandboxConfig,

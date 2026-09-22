@@ -1,6 +1,6 @@
 """Stable public hook exports."""
 
-from core.hooks import BaseHook, HookAction, HookDecision, HookExecutionResult, HookManager
+from runtime.hooks import BaseHook, HookAction, HookDecision, HookExecutionResult, HookManager
 
 __all__ = [
     "BaseHook",

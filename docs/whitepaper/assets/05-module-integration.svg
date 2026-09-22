@@ -46,7 +46,7 @@
   <text x="52" y="740" class="s">无需工具时结束相应响应；失败、等待审批和取消依既有执行与交互规则处理。</text>
   <rect x="52" y="792" width="1336" height="150" rx="16" fill="#e8eef9" stroke="#bdcde0"/>
   <text x="80" y="836" class="h">独立的显式边界：会话保存与恢复</text>
-  <text x="80" y="879" class="b">产品调用 save_session / restore_session → SessionPersistence → Session Store</text>
+  <text x="80" y="879" class="b">产品调用 save_session / restore_session → SessionManager → Session Store</text>
   <text x="80" y="917" class="s">保存已声明的状态，恢复到已装配实例；不代表每轮自动保存，也不自动恢复外部进程。</text>
   <text x="52" y="986" class="s">普通工具返回不重复注入。异步 Hook 和异步 I/O 需使用相应异步契约；框架不猜测领域实现的行为。</text>
 </svg>

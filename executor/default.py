@@ -9,8 +9,8 @@ from uuid import uuid4
 
 from core.Exception import AgentStopRequested, HookExecutionError, ToolInterruption
 from core.history import CanonicalMessage
-from core.permissions.base import BasePermissionEngine
-from core.permissions.models import PermissionBehavior
+from permissions.base import BasePermissionEngine
+from permissions.models import PermissionBehavior
 from core.request_input import ReplayRequestInput
 from context.models import ContextCompactionResult, ContextUsage
 from core.scope import RuntimeScope

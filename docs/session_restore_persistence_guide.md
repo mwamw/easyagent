@@ -2,7 +2,7 @@
 
 ## 装配后恢复
 
-SessionPersistence 保存数据，不根据实现类名创建 Agent、模型或工具。
+SessionManager 保存数据，不根据实现类名创建 Agent、模型或工具。
 旧 BasicAgent.load_session 工厂已移除；使用已装配实例的 restore_session。
 
 ```python

@@ -1,6 +1,6 @@
 """Stable public guardrail exports."""
 
-from core.guardrails import (
+from guardrails import (
     DangerousCommandGuardrail,
     PromptInjectionGuardrail,
     SecretLeakGuardrail,

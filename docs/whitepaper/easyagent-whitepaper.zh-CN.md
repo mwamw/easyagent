@@ -321,7 +321,7 @@ class DomainSessionStore(BaseSessionStore):
 
 **用户写什么。** 数据读写、并发版本检查和返回记录格式。数据库访问层必须履行 Store 的记录契约，包括 `snapshot`、`revision`、`metadata` 等字段；未知记录返回 `None`。列表、删除及清理等方法按应用需求继续实现，此例不是一个完整生产数据库后端。已有 SQLite 或内存实现适用时，可以直接使用，不写这段接入代码。
 
-**框架接管什么。** SessionPersistence 从当前历史和约定的状态参与者中收集可序列化数据，调用 Store 保存，并在恢复时检查格式，将数据交给已装配实例的状态恢复路径。用户不需要在 Store 中构建 Agent、初始化模型，或为每个模块重新编写一套恢复流程。
+**框架接管什么。** SessionManager 从当前历史和约定的状态参与者中收集可序列化数据，调用 Store 保存，并在恢复时检查格式，将数据交给已装配实例的状态恢复路径。用户不需要在 Store 中构建 Agent、初始化模型，或为每个模块重新编写一套恢复流程。
 
 **仍需遵守什么。** 保存与恢复由产品显式发起，框架不保证每轮自动保存。数据库必须原子地处理 `expected_revision`；异步后端需提供对应异步方法。会话快照不是完整原始日志，也不意味着重放或恢复外部进程。Memory 和 RAG 需要共享文档、向量或图后端时，可以使用独立的 Storage 契约，而不是把这些数据混入会话实例装配。[会话指南][E03]、[公共存储指南][E04]
 
@@ -402,7 +402,7 @@ OpenAI Agents SDK 的 Sandbox Agent 已公开文件、Shell、记忆和压缩等
 | 记忆的表达对象 | `BaseMemory` 提供说明、工具、Hook | 状态、长期 Store 与自定义逻辑 | `Memory` 的保存、召回与记忆记录 | Session 管理对话；Sandbox Memory 提供记忆能力 |
 | 检索由谁触发 | 记忆实现选择模型工具或 Hook | 应用定义查询与调用位置 | 默认 Crew 路径按任务召回；也可独立调用 | Sandbox 记忆支持模型读取；其他方案由应用接入 |
 | 上下文压缩入口 | 压缩器或完整 Context 契约 | 裁剪、删除、总结消息及自定义策略 | 可配置自动摘要；独立压缩契约未核对 | Sandbox Compaction 能力；细节依具体运行路径 |
-| 会话／状态保存 | SessionPersistence + Store 契约 | Checkpointer 保存执行状态 | Flow 状态与 Memory 后端是不同对象 | SDK Session 与可恢复运行状态 |
+| 会话／状态保存 | SessionManager + Store 契约 | Checkpointer 保存执行状态 | Flow 状态与 Memory 后端是不同对象 | SDK Session 与可恢复运行状态 |
 | 存储与机制关系 | 公共 Storage 不规定记忆记录形状 | Checkpointer 与长期 Store 分工 | 可实现 `StorageBackend` 替换记忆后端 | 应用可控制存储；Sandbox 环境另有状态 |
 | 定制时主要理解 | 相关模块契约与协作责任 | 图状态、消息及持久化语义 | Agent／Crew／Flow 与 Memory 语义 | Agent／Runner、Session 与能力生命周期 |
 

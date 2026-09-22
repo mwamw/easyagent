@@ -4,7 +4,7 @@ import pytest
 from easyagent import BasicAgent
 from easyagent.session import InMemorySessionStore, SQLiteSessionStore, SessionConflictError
 from easyagent.memory import LayeredMemory
-from core.session.migration import migrate_session_v3
+from session.migration import migrate_session_v3
 from test_session_persistence import SessionLLM
 
 

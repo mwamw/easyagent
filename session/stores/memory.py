@@ -5,7 +5,7 @@ from datetime import datetime
 import json
 from threading import RLock
 
-from .store import BaseSessionStore, SessionConflictError
+from .base import BaseSessionStore, SessionConflictError
 from storage.records import matches, validate_filter, validate_limit
 
 

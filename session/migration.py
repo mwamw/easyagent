@@ -45,7 +45,7 @@ def migrate_session_v3(source, target, *, dry_run=True):
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if tables != {"session_records"} or conn.execute("SELECT count(*) FROM session_records").fetchone()[0]:
                 raise FileExistsError("Use a new or empty V4 target; existing data is never overwritten")
-    from .sqlite import SQLiteSessionStore
+    from .stores.sqlite import SQLiteSessionStore
     store = SQLiteSessionStore(target)
     with store._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -58,4 +58,3 @@ def migrate_session_v3(source, target, *, dry_run=True):
                 row["created_at"], row["updated_at"], row["last_accessed_at"], row["expires_at"],
             ))
     return report
-

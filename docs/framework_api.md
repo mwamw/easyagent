@@ -190,7 +190,7 @@ Training 只消费 observability store，不是 Agent 内部执行模块。
 
 - `BaseSessionStore`
 - `SQLiteSessionStore` / `InMemorySessionStore`
-- `SessionPersistence` / `SessionStateParticipant`
+- `SessionManager` / `SessionStateParticipant`
 - `SessionRestoreReport`
 - `ComponentRestoreReport`
 - `RestoreIssue`

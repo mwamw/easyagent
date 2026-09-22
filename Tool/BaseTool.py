@@ -261,7 +261,7 @@ class Tool(ABC):
             expose_in_deferred=expose_in_deferred,
             metadata=dict(metadata or {}),
         )
-        from core.permissions.models import ToolPermissionDescriptor
+        from permissions.models import ToolPermissionDescriptor
         self._permission_descriptor = ToolPermissionDescriptor(
             tool_name=name,
             capabilities=tuple(resource_scope or ()),
@@ -314,7 +314,7 @@ class Tool(ABC):
         engines may replace how this metadata is interpreted without changing
         the model-facing tool schema.
         """
-        from core.permissions.models import ToolPermissionDescriptor
+        from permissions.models import ToolPermissionDescriptor
 
         return self._permission_descriptor
 

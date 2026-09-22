@@ -14,7 +14,7 @@ if ROOT not in sys.path:
 from agent import BasicAgent
 from context.default.manager import ContextManager
 from core.Exception import ToolRegistryError
-from core.hooks import BaseHook, HookDecision, HookManager
+from runtime.hooks import BaseHook, HookDecision, HookManager
 from core.llm import EasyLLM
 from core.request_input import ReplayRequestInput
 from Tool import Tool, ToolRegistry

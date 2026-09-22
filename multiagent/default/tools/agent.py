@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Callable, Iterable
 
-from core.permissions import ApprovalMode
+from permissions import ApprovalMode
 from runtime import ExecutionContext
 from multiagent.default.agents import AgentRuntimeManager
 from multiagent.default.subagents import SubagentManager, SubagentRequest

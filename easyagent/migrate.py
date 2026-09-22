@@ -2,7 +2,7 @@
 
 import argparse
 import json
-from core.session.migration import migrate_session_v3
+from session.migration import migrate_session_v3
 from memory.migration import migrate_memory_sqlite
 
 

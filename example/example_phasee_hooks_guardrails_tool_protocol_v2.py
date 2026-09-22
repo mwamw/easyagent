@@ -13,8 +13,8 @@ import asyncio
 from agent import BasicAgent
 from core import enable_logging
 from core.Config import Config
-from core.guardrails import build_default_hook_manager
-from core.hooks import BaseHook, HookDecision
+from guardrails import build_default_hook_manager
+from runtime.hooks import BaseHook, HookDecision
 from core.llm import EasyLLM
 from core.request_input import ReplayRequestInput
 from Tool import Tool, ToolRegistry

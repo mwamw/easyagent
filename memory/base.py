@@ -9,7 +9,7 @@ from core.scope import RuntimeScope
 
 
 if TYPE_CHECKING:
-    from core.hooks import BaseHook
+    from runtime.hooks import BaseHook
     from prompt import PromptBlock
     from prompt.base import PromptBuildContext
     from Tool.BaseTool import Tool

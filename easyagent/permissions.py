@@ -1,6 +1,6 @@
 """Stable public permission exports."""
 
-from core.permissions import (
+from permissions import (
     ApprovalMode,
     AuthorizationContext,
     BasePermissionEngine,

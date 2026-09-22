@@ -8,12 +8,6 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 
-class ApprovalMode(str, Enum):
-    ASK_FOR_APPROVAL = "ask_for_approval"
-    AUTO_APPROVE_SAFE = "auto_approve_safe"
-    FULL_ACCESS = "full_access"
-
-
 class PermissionBehavior(str, Enum):
     ALLOW = "allow"
     ASK = "ask"
@@ -42,7 +36,6 @@ class AuthorizationContext:
     workspace_root: str | None = None
     runtime_mode: str = "execute"
     plan_allowed_actions: tuple[str, ...] = ()
-    approval_mode: ApprovalMode = ApprovalMode.ASK_FOR_APPROVAL
     metadata: Mapping[str, Any] = field(default_factory=dict)
     extensions: Mapping[str, Any] = field(default_factory=dict)
 

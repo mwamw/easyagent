@@ -11,7 +11,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from agent import BasicAgent
-from core.permissions import (
+from permissions import (
     PermissionBehavior,
     PermissionEngine,
 )

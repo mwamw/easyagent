@@ -1,8 +1,8 @@
 from pydantic import BaseModel
 
-from core.permissions.base import BasePermissionEngine
-from core.permissions.default import RuleBasedPermissionEngine
-from core.permissions.models import (
+from permissions.base import BasePermissionEngine
+from permissions.default import RuleBasedPermissionEngine
+from permissions.models import (
     PermissionBehavior,
     PermissionDecision,
     PermissionGrant,

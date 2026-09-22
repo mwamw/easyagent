@@ -1,10 +1,10 @@
 """Public session persistence contracts and explicit storage implementations."""
-from core.session import (
+from session import (
     BaseSessionStore, SQLiteSessionStore, InMemorySessionStore, SessionConflictError,
-    SessionPersistence, SessionStateParticipant,
+    SessionManager, SessionRuntime, SessionStateParticipant,
     ComponentRestoreReport, RestoreIssue, SessionRestoreReport,
 )
 
 __all__ = ["BaseSessionStore", "SQLiteSessionStore", "InMemorySessionStore",
-           "SessionConflictError", "SessionPersistence", "SessionStateParticipant",
+           "SessionConflictError", "SessionManager", "SessionRuntime", "SessionStateParticipant",
            "ComponentRestoreReport", "RestoreIssue", "SessionRestoreReport"]

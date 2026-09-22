@@ -17,7 +17,7 @@ from agent import BasicAgent as InternalBasicAgent
 from core.llm import EasyLLM as InternalEasyLLM
 from observability import InMemoryObservabilityStore as InternalInMemoryObservabilityStore
 from training import TrainingExporter as InternalTrainingExporter
-from core.permissions import BasePermissionEngine as InternalPermissionEngine
+from permissions import BasePermissionEngine as InternalPermissionEngine
 from codeintel import WorkspaceCodeIntelCache as InternalWorkspaceCodeIntelCache
 from task import TaskService as InternalTaskService
 from Tool.ToolRegistry import ToolRegistry as InternalToolRegistry

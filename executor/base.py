@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Iterator, AsyncIterator
 from core.Config import Config
-from core.hooks import HookManager
+from runtime.hooks import HookManager
 from core.llm import EasyLLM
-from core.permissions.base import BasePermissionEngine
-from core.permissions.models import AuthorizationContext
+from permissions.base import BasePermissionEngine
+from permissions.models import AuthorizationContext
 from context.base import BaseContextManager
 from prompt.base import BaseSystemPromptComposer, PromptBuildContext
 from runtime import AgentStreamEvent, ExecutionContext, RuntimeEventBus

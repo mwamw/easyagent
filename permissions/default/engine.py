@@ -7,7 +7,6 @@ from typing import Any
 
 from ..base import BasePermissionEngine
 from ..models import (
-    ApprovalMode,
     PermissionBehavior,
     PermissionDecision,
     PermissionGrant,
@@ -15,6 +14,7 @@ from ..models import (
     ToolPermissionDescriptor,
 )
 from .matcher import RuleMatcher
+from .models import ApprovalMode
 from .policy import PolicyRule, PolicySet, load_policy_file, policy_locations
 
 
@@ -51,7 +51,14 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
         raise TypeError(f"Tool {getattr(tool, 'name', '<unknown>')} has no ToolPermissionDescriptor")
 
     def set_approval_mode(self, mode: ApprovalMode | str) -> None:
-        self.approval_mode = ApprovalMode(mode)
+        normalized = mode.value if isinstance(mode, ApprovalMode) else str(mode)
+        aliases = {
+            "default": ApprovalMode.ASK_FOR_APPROVAL,
+            "accept_edits": ApprovalMode.AUTO_APPROVE_SAFE,
+            "dont_ask": ApprovalMode.FULL_ACCESS,
+            "bypass": ApprovalMode.FULL_ACCESS,
+        }
+        self.approval_mode = aliases[normalized] if normalized in aliases else ApprovalMode(normalized)
         self._policy_revision += 1
 
     def add_rule(self, *, tool_name: str, behavior: PermissionBehavior | str,

@@ -11,7 +11,7 @@ from agent.BasicAgent import BasicAgent
 from core.Exception import ExecutionModeError
 from core.history import coerce_canonical_message
 from core.llm import EasyLLM
-from core.permissions import ApprovalMode
+from permissions import ApprovalMode
 from plan import ExecutionMode, PlanModeConfig, PlanModeManager
 
 

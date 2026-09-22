@@ -8,7 +8,7 @@ from typing import Any
 
 from Tool.BaseTool import ToolResult
 
-from core.hooks import BaseHook, HookDecision, HookManager
+from runtime.hooks import BaseHook, HookDecision, HookManager
 
 
 _DANGEROUS_COMMAND_PATTERNS: list[tuple[str, str]] = [

@@ -14,7 +14,7 @@ from agent import BasicAgent
 from easyagent.executors import AgentInvocationState
 from core.Exception import ToolConfirmationRequired
 from core.llm import EasyLLM
-from core.permissions import (
+from permissions import (
     ApprovalMode, BasePermissionEngine, PermissionBehavior, PermissionDecision,
     RuleBasedPermissionEngine,
 )
@@ -183,7 +183,7 @@ def test_plan_exit_preserves_approval_policy(approval_mode, exit_via):
             agent.plan.exit()
         assert factory().runtime_mode == "execute"
         assert factory().plan_allowed_actions == ()
-        assert factory().approval_mode == approval_mode
+        assert agent.permission_engine.approval_mode == approval_mode
         assert agent.get_execution_mode() == ExecutionMode.EXECUTE
         assert agent.permission_engine.export_state() == before
     finally:

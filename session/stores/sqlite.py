@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .store import BaseSessionStore, SessionConflictError
+from .base import BaseSessionStore, SessionConflictError
 from storage.records import matches, validate_filter, validate_limit
 
 

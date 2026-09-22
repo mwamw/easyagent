@@ -401,7 +401,7 @@ class DomainSessionStore(BaseSessionStore):
 
 # 安装：agent.with_session(DomainSessionStore(repository))</code></pre>
 <p><strong>用户写什么。</strong> 数据读写、并发版本检查和返回记录格式。数据库访问层必须履行 Store 的记录契约，包括 <code>snapshot</code>、<code>revision</code>、<code>metadata</code> 等字段；未知记录返回 <code>None</code>。列表、删除及清理等方法按应用需求继续实现，此例不是一个完整生产数据库后端。已有 SQLite 或内存实现适用时，可以直接使用，不写这段接入代码。</p>
-<p><strong>框架接管什么。</strong> SessionPersistence 从当前历史和约定的状态参与者中收集可序列化数据，调用 Store 保存，并在恢复时检查格式，将数据交给已装配实例的状态恢复路径。用户不需要在 Store 中构建 Agent、初始化模型，或为每个模块重新编写一套恢复流程。</p>
+<p><strong>框架接管什么。</strong> SessionManager 从当前历史和约定的状态参与者中收集可序列化数据，调用 Store 保存，并在恢复时检查格式，将数据交给已装配实例的状态恢复路径。用户不需要在 Store 中构建 Agent、初始化模型，或为每个模块重新编写一套恢复流程。</p>
 <p><strong>仍需遵守什么。</strong> 保存与恢复由产品显式发起，框架不保证每轮自动保存。数据库必须原子地处理 <code>expected_revision</code>；异步后端需提供对应异步方法。会话快照不是完整原始日志，也不意味着重放或恢复外部进程。Memory 和 RAG 需要共享文档、向量或图后端时，可以使用独立的 Storage 契约，而不是把这些数据混入会话实例装配。<a href="../session_restore_persistence_guide.md">会话指南</a>、<a href="../storage_guide.md">公共存储指南</a></p>
 <h3 id="section-22">4.7 将模块装配成产品，而不是再次编写 Harness</h3>
 <p>下面把本章定义的类装配起来。<code>repository</code> 用于证据读取，<code>memory_tools</code> 为另外提供的记忆工具，<code>summarize</code> 为领域摘要函数，<code>session_store</code> 可以是已有实现或上面的自定义实现。工具名称应互不冲突。</p>
@@ -611,7 +611,7 @@ def build_research_agent(llm, repository, memory_tools, summarize, session_store
 </tr>
 <tr class="even">
 <td>会话／状态保存</td>
-<td>SessionPersistence + Store 契约</td>
+<td>SessionManager + Store 契约</td>
 <td>Checkpointer 保存执行状态</td>
 <td>Flow 状态与 Memory 后端是不同对象</td>
 <td>SDK Session 与可恢复运行状态</td>

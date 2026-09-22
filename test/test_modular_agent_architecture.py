@@ -11,7 +11,7 @@ import pytest
 import agent
 from agent import BasicAgent
 from prompt.composer import BaseSystemPromptComposer, PromptBuildContext
-from core.hooks import BaseHook, HookDecision, HookManager
+from runtime.hooks import BaseHook, HookDecision, HookManager
 from core.llm import EasyLLM
 from runtime.metamessage import MetaMessage, MetaMessageLifecycle
 from observability import InMemoryObservabilityStore

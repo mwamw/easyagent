@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent import BasicAgent
 from core.llm import EasyLLM
-from core.permissions import PermissionBehavior, PermissionEngine
+from permissions import PermissionBehavior, PermissionEngine
 from Emcp import MCPPolicyContext, MCPPolicyRule
 from Tool.ToolRegistry import ToolRegistry
 from Tool.builtin.mcp_tool import MCPToolManager, register_mcp_tools

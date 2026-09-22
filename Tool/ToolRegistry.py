@@ -7,8 +7,8 @@ from typing import Any, Literal, Type
 from pydantic import BaseModel
 
 from .BaseTool import Tool, ToolResult, ToolSpec
-from core.permissions.base import BasePermissionEngine
-from core.permissions.models import AuthorizationContext, PermissionRequest, ToolPermissionDescriptor
+from permissions.base import BasePermissionEngine
+from permissions.models import AuthorizationContext, PermissionRequest, ToolPermissionDescriptor
 
 
 ToolVisibility = Literal["resident", "runtime", "turn"]

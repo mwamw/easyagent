@@ -64,7 +64,7 @@
 | Memory | [BaseMemory](../../memory/base.py)、[指南](../memory_system_guide.md) | 说明、工具、Hook 的可选契约和绑定责任；不证明各种文件/外部记忆方案已实现。 |
 | Context | [BaseContextManager](../../context/base.py)、[指南](../context_and_compaction_guide.md) | 组装、预算、压缩与来源解耦；不证明完全没有估算误差。 |
 | 动态消息 | [MetaMessageEmitter](../../runtime/metamessage/emitter.py)、[API 指南](../framework_api.md) | 源无关注入机制；不证明完整事件溯源或任意副作用事务恢复。 |
-| Session | [Store 契约](../../core/session/store.py)、[持久化指南](../session_restore_persistence_guide.md) | 显式装配后恢复、存储替换；不是完整 transcript 或外部任务恢复。 |
+| Session | [Store 契约](../../session/stores/base.py)、[持久化指南](../session_restore_persistence_guide.md) | 显式装配后恢复、存储替换；不是完整 transcript 或外部任务恢复。 |
 | Storage | [公共存储指南](../storage_guide.md) | 与领域对象分离的后端和 Embedding 接口；实际部署仍需后端依赖与配置。 |
 | 示例 | [模块边界示例](../../example/example_module_boundaries.py) | 公共接口的装配方式；不将示例代码行数用作效率实验。 |
 | S4Code | 本工作空间的产品实现与 [模块重构记录](../module_refactor_progress.md) | 产品层/框架层的具体案例；不证明多个领域都已经完成迁移。 |
@@ -90,7 +90,7 @@ S4Code 界面的 checkpoint 只回溯会话上下文，不撤销文件或外部�
 - [请求准备](../../agent/components/request_preparer.py)：默认管线运行公开 `before_context` Hook、处理注入、组装提示词与上下文，进行压缩和最终预算检查。
 - [Tool 契约](../../Tool/BaseTool.py)：参数、`run` / `arun` 与结果类型；默认 `arun()` 不自动把阻塞 I/O 变成非阻塞。
 - [历史压缩契约](../../context/default/compressor/history.py)与 [ContextManager](../../context/default/manager.py)：压缩器处理管理器选定的片段，近期轮次由管理器保留；用户不能假定输入是完整会话。
-- [SessionPersistence](../../core/session/persistence.py)与 [Store 契约](../../core/session/store.py)：显式收集、保存与恢复状态，应用后端必须履行记录格式和版本一致性约定。
+- [SessionManager](../../session/manager.py)与 [Store 契约](../../session/stores/base.py)：显式收集、保存与恢复状态，应用后端必须履行记录格式和版本一致性约定。
 
 七段代码从正文提取后运行离线接口检查：使用内存仓库和假模型响应，核对参数校验、模块说明合并、Memory 工具/Hook 注册、异步注入与回收、压缩器输出、Store 版本冲突及会话恢复。此检查只证明示例按当前接口可接入，不是开发效率、任务能力或生产安全实验；摘要算法、数据库与领域工具仍由应用实现。
 

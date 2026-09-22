@@ -6,8 +6,8 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Callable
 
 from core.cache_policy import PromptCachePolicy, build_cache_signature
-from core.permissions import ApprovalMode
-from core.permissions.default import RuleBasedPermissionEngine
+from permissions import ApprovalMode
+from permissions.default import RuleBasedPermissionEngine
 from core.request_compiler import compile_prompt_blocks
 from runtime import ExecutionContext
 from multiagent.default.definitions import AgentDefinitionRegistry

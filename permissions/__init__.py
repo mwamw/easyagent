@@ -2,7 +2,6 @@
 
 from .base import BasePermissionEngine
 from .models import (
-    ApprovalMode,
     AuthorizationContext,
     PermissionBehavior,
     PermissionDecision,
@@ -10,7 +9,7 @@ from .models import (
     PermissionGrant,
     ToolPermissionDescriptor,
 )
-from .default import RuleBasedPermissionEngine
+from .default import ApprovalMode, RuleBasedPermissionEngine
 from .default.policy import PolicyRule, PolicySet
 from .grants import PermissionGrantLedger
 
