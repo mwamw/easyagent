@@ -1,0 +1,7 @@
+import { Main } from "./shared/models.ea"
+import { ResearchHarness } from "./shared/research.ea"
+
+agent PaperAssistant = ResearchHarness(workspace = path("."), model = Main)
+agent DeepResearch = ResearchHarness(workspace = path("."), model = Main, budget = 64000)
+
+run PaperAssistant with terminal { show_tool_results = false }

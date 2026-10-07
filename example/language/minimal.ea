@@ -1,0 +1,20 @@
+# A complete Harness. The same Agent is also available through the Python API.
+model Main {
+    provider = "openai"
+    model = env("EASYAGENT_MODEL")
+    api_key = env("EASYAGENT_API_KEY")
+    base_url = env("EASYAGENT_BASE_URL", default = "https://api.openai.com/v1")
+}
+
+agent Assistant {
+    model = Main
+    workspace = path(".")
+    prompt {
+        text = "You are a helpful assistant. Be clear and honest about uncertainty."
+        include_defaults = false
+    }
+}
+
+run Assistant with terminal {
+    streaming = true
+}

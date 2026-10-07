@@ -1,0 +1,11 @@
+version: 1
+agent:
+  name: assistant
+  workspace: .
+model:
+  provider: openai
+  model: your-model
+  api_key:
+    env: OPENAI_API_KEY
+prompt:
+  text: You are a helpful assistant. Answer clearly and accurately.

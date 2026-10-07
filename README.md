@@ -21,6 +21,39 @@ Linux 上的内置 `BashTool` 可选使用 Bubblewrap 沙箱。沙箱是 Bash �
 读写边界，以及继承网络或完全断网。参见
 [Linux Bash Sandbox](docs/bash_sandbox_guide.md)。
 
+## 用语言定义自己的 Harness
+
+先看简短的[配置文件与 DSL 实现概览](docs/configuration_and_dsl.md)（含架构图与对比）。
+
+希望生成可以单独启动的应用目录，可以使用
+`buildagent --file agent.yaml --output ./my-agent`，然后运行 `python my-agent/app.py`。
+详见[应用生成指南](docs/application_build.md)；支持批量 YAML，且不会覆盖已有目录。
+
+除了 Python 装配和 YAML 配置，现在也提供 [EasyAgent Language](docs/language.md)：
+通过 `.ea` 文件声明模型、上下文、工具、权限等能力，支持类型检查、局部导入和参数化模板。
+它编译为现有装配定义，运行结果仍是普通 `BasicAgent`，不新增 Agent Loop。
+
+```text
+model Main { model = env("EASYAGENT_MODEL") api_key = env("EASYAGENT_API_KEY") }
+agent Assistant {
+    model = Main
+    context { max_tokens = 32000 }
+    permission using rule_based { approval_mode = "ask_for_approval" }
+    tools { filesystem() }
+}
+run Assistant with terminal { streaming = true }
+```
+
+```bash
+easyagent-lang check example/language/minimal.ea     # 无需模型凭据的静态检查
+easyagent-lang explain example/language/coding.ea  # 不展示密钥的装配预览
+easyagent-lang run example/language/minimal.ea     # 配置模型环境变量后启动
+python -m example.language.offline_demo --query "你好"  # 完全离线体验
+```
+
+交互界面需安装 `.[ui]`；命令也可以使用 `python -m easyagent.language`。
+Python 用于实现新的模块、工具和执行策略，语言用于组合它们；原有 Python/YAML API 不变。
+
 ## Why EasyAgent?
 
 专业 Agent 的差异，不只在提示词和工具列表中。
@@ -426,6 +459,14 @@ EasyAgent 的取向是 **Use our framework to build your harness**：将关键�
 如果只是一次模型调用或简单检索，模型 SDK 或现成数据工具可能更直接；如果核心需求是确定性业务流程和持久工作流，工作流运行时可能更合适；如果完整 Harness 已满足要求，直接用其 SDK 也很合理。
 
 ## Documentation
+
+无需编写装配代码时，可以使用新增的[配置文件加载入口](docs/configuration_loading.md)：
+`load_agent("agent.yaml")` 返回普通 Agent，原有 Python API 不变；
+`easyagent-run agent.yaml --check` 可先进行静态校验。
+
+安装可选依赖 `pip install -e ".[ui]"` 后，可使用
+`easyagent-chat agent.yaml` 启动[默认终端 UI](docs/terminal_ui.md)，支持流式对话、
+工具状态、权限确认与用户提问。原有 Python API 和单请求入口保持可用。
 
 | 主题 | 指南 |
 | --- | --- |

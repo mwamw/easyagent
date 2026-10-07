@@ -12,6 +12,8 @@ from prompt.base import BaseSystemPromptComposer, PromptBuildContext
 from runtime import AgentStreamEvent, AgentRuntime
 from Tool.ToolRegistry import ToolRegistry
 from Tool.BaseTool import ToolResult
+from runtime.interactions import InteractionReply
+from plan.base import BasePlanMode
 
 from runtime.invocation import AgentInvocationPhase, AgentInvocationState
 
@@ -28,9 +30,20 @@ class AgentExecutionServices:
     authorization_context_factory: Callable[[], AuthorizationContext]
     tool_registry: ToolRegistry | None = None
     before_context_build: Callable[[], None] = lambda: None
+    plan: BasePlanMode | None = None
 
 
 class BaseAgentExecutor(ABC):
+    async def arespond_to_interruption(
+        self, services: AgentExecutionServices, reply: InteractionReply,
+    ) -> None:
+        raise NotImplementedError("This executor does not support interactive replies")
+
+    def astream_continue(
+        self, services: AgentExecutionServices, *, max_iter: int, temperature: float,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        raise NotImplementedError("This executor does not support continuation")
+
     @abstractmethod
     def invoke(
         self,

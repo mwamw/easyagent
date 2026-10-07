@@ -1,0 +1,18 @@
+{
+  "name": "EasyAgent",
+  "scopeName": "source.easyagent",
+  "patterns": [
+    {"name": "comment.line.easyagent", "match": "(#|//).*$"},
+    {"name": "string.quoted.triple.easyagent", "begin": "\"\"\"", "end": "\"\"\""},
+    {"name": "string.quoted.double.easyagent", "begin": "\"", "end": "\"", "patterns": [
+      {"name": "constant.character.escape.easyagent", "match": "\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4})"}
+    ]},
+    {"name": "keyword.control.easyagent", "match": "\\b(import|from|as|define|return|run|with|using|disabled)\\b"},
+    {"name": "storage.type.easyagent", "match": "\\b(model|context|permission|memory|prompt|executor|plan|tasks|session|observability|hooks|callbacks|codeintel|worktree|multi_agent|agent|tools|skills)\\b"},
+    {"name": "entity.name.type.easyagent", "match": "\\b(String|Path|Integer|Number|Boolean|Model|Context|Permission|Memory|Prompt|Executor|Plan|Tasks|Session|Observability|Hooks|Callbacks|CodeIntel|Worktree|MultiAgent|Agent)\\b"},
+    {"name": "constant.language.easyagent", "match": "\\b(true|false|none|null)\\b"},
+    {"name": "support.function.easyagent", "match": "\\b(env|path|directory)(?=\\s*\\()"},
+    {"name": "constant.numeric.easyagent", "match": "-?\\b(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\\b"},
+    {"name": "entity.name.function.easyagent", "match": "\\b[A-Za-z_][A-Za-z_0-9]*(?=\\s*\\()"}
+  ]
+}

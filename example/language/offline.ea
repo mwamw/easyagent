@@ -1,0 +1,15 @@
+# `offline_demo.py` explicitly registers this model. The generic CLI does not.
+model Local using offline {}
+
+define Harness(model: Model, workspace: Path) -> Agent {
+    agent {
+        model = model
+        workspace = workspace
+        context { max_tokens = 16000 }
+        permission using rule_based { approval_mode = "ask_for_approval" }
+        tools { calculator() }
+    }
+}
+
+agent Demo = Harness(model = Local, workspace = path("."))
+run Demo with terminal { streaming = true }

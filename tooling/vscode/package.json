@@ -1,0 +1,22 @@
+{
+  "name": "easyagent-language",
+  "displayName": "EasyAgent Language",
+  "description": "Syntax highlighting for EasyAgent Harness source files",
+  "version": "0.1.0",
+  "publisher": "easyagent-local",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+    "languages": [{
+      "id": "easyagent",
+      "aliases": ["EasyAgent", "ea"],
+      "extensions": [".ea"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "easyagent",
+      "scopeName": "source.easyagent",
+      "path": "./syntaxes/easyagent.tmLanguage.json"
+    }]
+  }
+}

@@ -1,0 +1,6 @@
+model Main {
+    provider = "openai"
+    model = env("EASYAGENT_MODEL")
+    api_key = env("EASYAGENT_API_KEY")
+    base_url = env("EASYAGENT_BASE_URL", default = "https://api.openai.com/v1")
+}

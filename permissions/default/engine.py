@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any
+from contextlib import contextmanager
+from typing import Iterator
 from runtime.agent import AgentRuntime
 
 from ..base import BasePermissionEngine
@@ -101,6 +103,15 @@ class RuleBasedPermissionEngine(BasePermissionEngine):
     def grant(self, grant: PermissionGrant) -> None:
         self._grants.append(grant)
         self._policy_revision += 1
+
+    @contextmanager
+    def approval(self, grant: PermissionGrant) -> Iterator[None]:
+        self.grant(grant)
+        try:
+            yield
+        finally:
+            self._grants = [item for item in self._grants if item.grant_id != grant.grant_id]
+            self._policy_revision += 1
 
     def grants(self) -> list[PermissionGrant]:
         return list(self._grants)

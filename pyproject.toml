@@ -24,6 +24,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ui = [
+  "rich>=13.0",
+  "prompt_toolkit>=3.0",
+]
 rag = [
   "numpy>=1.24.0",
   "chromadb>=0.4.0",
@@ -55,6 +59,12 @@ dev = [
 Homepage = "https://github.com/easyagent/easyagent"
 Repository = "https://github.com/easyagent/easyagent"
 
+[project.scripts]
+easyagent-run = "configuration.__main__:main"
+easyagent-chat = "ui.__main__:main"
+easyagent-lang = "language.__main__:main"
+buildagent = "application.__main__:main"
+
 [tool.setuptools]
 include-package-data = true
 
@@ -66,6 +76,10 @@ include = [
   "executor*",
   "codeintel*",
   "context*",
+  "configuration*",
+  "application*",
+  "language*",
+  "ui*",
   "core*",
   "db*",
   "Emcp*",

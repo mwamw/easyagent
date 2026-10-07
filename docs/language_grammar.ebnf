@@ -1,0 +1,33 @@
+(* EasyAgent Language v1. See language.md for type and binding semantics. *)
+module       = { import | declaration | definition | run | separator } ;
+import       = "import", "{", name_binding, { ",", name_binding }, [","], "}", "from", string ;
+name_binding = identifier, [ "as", identifier ] ;
+declaration  = kind, identifier, ( "=", expression | [ "using", identifier ], body ) ;
+definition   = "define", identifier, "(", [ parameter, { ",", parameter }, [","] ], ")",
+               "->", type, "{", ["return"], expression, {separator}, "}" ;
+parameter    = identifier, ":", type, [ "=", expression ] ;
+run          = "run", identifier, [ "with", identifier ], [ object ] ;
+expression   = string | number | "true" | "false" | "none" | "null"
+             | identifier | call | object | array | inline_component ;
+inline_component = kind, [ "using", identifier ], body ;
+body         = "{", { field, {separator} }, "}" ;
+field        = (identifier | string), ("=" | ":"), expression
+             | kind, ["using", identifier], body (* only in Agent *)
+             | "tools", "{", { ["disabled"], call, {separator} }, "}" (* only in Agent *)
+             | "skills", "{", { "directory", "(", expression, ")", {separator} }, "}" ;
+object       = "{", { (identifier | string), ("=" | ":"), expression, {separator} }, "}" ;
+array        = "[", [ expression, { ",", expression }, [","] ], "]" ;
+call         = identifier, "(", [ argument, { ",", argument }, [","] ], ")" ;
+argument     = [identifier, "="], expression ;
+separator    = "," | ";" ;
+kind         = "model" | "context" | "permission" | "memory" | "prompt" | "executor"
+             | "plan" | "tasks" | "session" | "observability" | "hooks" | "callbacks"
+             | "codeintel" | "worktree" | "multi_agent" | "agent" ;
+type         = "String" | "Path" | "Integer" | "Number" | "Boolean" | "Model" | "Context"
+             | "Permission" | "Memory" | "Prompt" | "Executor" | "Plan" | "Tasks" | "Session"
+             | "Observability" | "Hooks" | "Callbacks" | "CodeIntel" | "Worktree" | "MultiAgent" | "Agent" ;
+(* identifiers: [A-Za-z_][A-Za-z_0-9]*; numbers: finite JSON numbers;
+   strings: JSON double-quoted strings, or raw triple-double-quoted strings;
+   comments: # or // until end of line. Whitespace is insignificant outside strings.
+   Template/tool calls require named arguments; path/env/directory have specific signatures.
+   Agent may not select a non-default implementation; it composes the components. *)

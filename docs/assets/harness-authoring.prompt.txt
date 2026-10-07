@@ -1,0 +1,29 @@
+Generation mode: built-in image_gen (imagegen skill). New raster infographic for configuration_and_dsl.md.
+
+Use case: infographic-diagram
+Asset type: a landscape raster architecture illustration embedded in a concise Chinese engineering Markdown document about EasyAgent.
+Primary request: make the relationship between two existing authoring entry points and ONE shared Agent assembly/runtime visually obvious.
+Style: polished restrained technical editorial infographic, clean white background, generous whitespace, crisp large sans-serif text, flat rounded rectangular cards, thin clearly directed connectors, no 3D or decorative machinery. Use a quiet blue accent for the YAML lane, violet for the DSL lane, dark neutral for shared components. All diagram text must be English exactly as specified below; no added slogans or watermarks. Wide approximately 3:2 aspect ratio, high resolution, readable in documentation.
+
+Layout and EXACT labels:
+At the top a modest title: "EasyAgent: From definition to runtime".
+Below the title two equally prominent parallel authoring lanes:
+LEFT top card "YAML configuration", small subtitle ".yaml".
+LEFT below card "Configuration loader", small subtitle "parse + validate".
+An arrow goes from left top to left below.
+RIGHT top card "EasyAgent Language", small subtitle ".ea".
+RIGHT below card "DSL compiler", small subtitle "references + types + templates".
+An arrow goes from right top to right below.
+Both lower lane cards converge into one central shared card labeled "AgentConfiguration", small subtitle "shared assembly definition".
+On the RIGHT connector from DSL compiler to AgentConfiguration, place a readable short annotation "build(): bind env + select Agent". This is important: static compilation is separate from runtime binding.
+From AgentConfiguration an arrow goes DOWN to a single card labeled "AgentBuilder", subtitle "constructors + with_*".
+A smaller side card "Component Registry", subtitle "names + schemas + factories", has a horizontal arrow INTO AgentBuilder, not into the DSL compiler or BasicAgent.
+From AgentBuilder an arrow goes DOWN into a wide single card labeled "BasicAgent", subtitle "existing EasyAgent Runtime". Inside the bottom of this wide card use a small clearly readable line "Defaults + optional components".
+No second runtime and no graph/node/edge terminology.
+At the very bottom, separated from the construction flow by white space, a short caption "Python API, CLI and Terminal UI use the same Agent".
+Keep node titles large, orthogonal clear arrows, no overlapping connectors, no tiny illegible text, no icons or extra panels.
+
+Final edit prompt (built-in image_gen, original generation used as edit target):
+Use case: infographic-diagram edit, legibility correction.
+The attached image is the edit target. Change ONLY the background/readability treatment. Replace ALL dark gradients, black vignette, colored glow and shadows outside the diagram cards with a uniform solid opaque pure WHITE (#FFFFFF) background across the entire canvas. This is a technical document figure, not a cinematic poster. Make the title and bottom caption dark navy on WHITE, and the small annotation "build(): bind env + select Agent" dark violet on WHITE, all clearly legible.
+Preserve EXACTLY the existing node positions, every English word, card dimensions, arrow directions, converging connections, side Component Registry placement, and overall layout. Keep the subtle pale blue/pale violet card fills. The BasicAgent card may remain dark slate with white text; keep all other cards pale and text dark. Do not add text, do not change any software names, do not remove nodes, do not move connectors. No glow, no gradients, no darkness outside cards, no transparency.

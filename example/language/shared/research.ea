@@ -1,0 +1,22 @@
+# Templates assemble recipes; they do not define the model's reasoning steps.
+define ResearchHarness(workspace: Path, model: Model, budget: Integer = 32000) -> Agent {
+    agent {
+        workspace = workspace
+        model = model
+        context { max_tokens = budget }
+        permission using rule_based { approval_mode = "ask_for_approval" }
+        prompt {
+            text = """You are a research assistant. Separate evidence from inference.
+Inspect sources before citing them. Do not fabricate citations or experimental results."""
+            include_defaults = false
+        }
+        tools {
+            filesystem()
+            web_search(backend = "duckduckgo")
+            web_fetch()
+            ask_user_question()
+        }
+        session {}
+        observability {}
+    }
+}

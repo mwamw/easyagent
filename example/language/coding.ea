@@ -1,0 +1,43 @@
+import { Main } from "./shared/models.ea"
+
+permission WorkspacePolicy using rule_based {
+    approval_mode = "ask_for_approval"
+    policy_directory = path("../configuration/policies")
+}
+
+agent CodingAssistant {
+    model = Main
+    workspace = path("../..")
+    config = { tool_schema_mode = "deferred" }
+    permission = WorkspacePolicy
+    context { max_tokens = 32000 }
+    executor {}
+    prompt {
+        file = path("../configuration/system.md")
+        include_defaults = false
+    }
+    tools {
+        filesystem()
+        file_write()
+        file_edit()
+        notebook_edit()
+        ask_user_question()
+        # Enable intentionally after checking your host's Bubblewrap support.
+        disabled bash(sandbox = {
+            enabled = true
+            fail_if_unavailable = true
+            allow_unsandboxed_commands = false
+            network = "deny"
+        })
+    }
+    skills { directory(path("../configuration/skills")) }
+    plan {}
+    tasks {}
+    memory = none
+    session using sqlite { path = path("./state/sessions.db") }
+    observability using sqlite { path = path("./state/trace.db") }
+    multi_agent { storage_dir = path("./state/agents") max_background_tasks = 2 }
+    mcp = none
+}
+
+run CodingAssistant with terminal { streaming = true max_iter = 20 }

@@ -1,0 +1,62 @@
+version: 1
+ui:
+  implementation: terminal
+  config:
+    streaming: true
+    show_tool_results: false
+agent:
+  name: coding-assistant
+  workspace: ../..
+  config:
+    tool_schema_mode: deferred
+model:
+  provider: openai
+  model: your-model
+  api_key:
+    env: OPENAI_API_KEY
+prompt:
+  file: ./system.md
+context:
+  config:
+    max_tokens: 32000
+tools:
+  - name: filesystem
+  - name: file_write
+  - name: file_edit
+  - name: notebook_edit
+  - name: ask_user_question
+  - name: bash
+    enabled: false  # Enable deliberately; OS sandbox availability is checked at execution.
+    config:
+      sandbox:
+        enabled: true
+        fail_if_unavailable: true
+        allow_unsandboxed_commands: false
+        network: deny
+permissions:
+  implementation: rule_based
+  config:
+    approval_mode: ask_for_approval
+    policy_directory: ./policies
+skills:
+  directories:
+    - ./skills
+plan: {}
+tasks: {}
+memory:
+  enabled: false  # default is working memory; optional dependencies are required.
+session:
+  implementation: sqlite
+  config:
+    path: ./state/sessions.db
+observability:
+  implementation: sqlite
+  config:
+    path: ./state/trace.db
+multi_agent:
+  config:
+    storage_dir: ./state/agents
+    max_background_tasks: 2
+mcp:
+  enabled: false
+  servers: []

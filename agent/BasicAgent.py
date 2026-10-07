@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from typing import Any, AsyncIterator, Iterator
+from contextlib import aclosing
+from runtime.interactions import InteractionReply
 
 from executor import (
     AgentExecutionServices,
@@ -60,6 +62,7 @@ class BasicAgent(BaseAgent):
             tool_registry=self.tool_registry,
             context_manager=self.context_manager,
             before_context_build=before_context_build,
+            plan=self.plan,
         )
 
     def invoke(
@@ -114,14 +117,28 @@ class BasicAgent(BaseAgent):
         temperature: float | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[AgentStreamEvent]:
-        async for event in self.executor.astream(
+        async with aclosing(self.executor.astream(
             self._services(),
             query,
             max_iter=max_iter,
             temperature=self.config.temperature if temperature is None else temperature,
             **kwargs,
-        ):
-            yield event
+        )) as events:
+            async for event in events:
+                yield event
+
+    async def arespond_to_interruption(self, reply: InteractionReply) -> None:
+        await self.executor.arespond_to_interruption(self._services(), reply)
+
+    async def astream_continue(
+        self, max_iter: int = 10, temperature: float | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        async with aclosing(self.executor.astream_continue(
+            self._services(), max_iter=max_iter,
+            temperature=self.config.temperature if temperature is None else temperature,
+        )) as events:
+            async for event in events:
+                yield event
 
 
 __all__ = ["BasicAgent"]
