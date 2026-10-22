@@ -73,6 +73,8 @@ class OpenAICompatibleProviderBase(BaseProvider):
             "base_url": self.base_url,
             "timeout": self.timeout,
         }
+        if "max_retries" in self.kwargs:
+            client_kwargs["max_retries"] = self.kwargs["max_retries"]
         if self.default_headers:
             client_kwargs["default_headers"] = dict(self.default_headers)
         return OpenAI(**client_kwargs)
@@ -87,6 +89,8 @@ class OpenAICompatibleProviderBase(BaseProvider):
                 "base_url": self.base_url,
                 "timeout": self.timeout,
             }
+            if "max_retries" in self.kwargs:
+                client_kwargs["max_retries"] = self.kwargs["max_retries"]
             if self.default_headers:
                 client_kwargs["default_headers"] = dict(self.default_headers)
             self._async_client = AsyncOpenAI(**client_kwargs)

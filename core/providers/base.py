@@ -224,14 +224,16 @@ class BaseProvider(ABC):
             close()
 
     async def aclose(self) -> None:
+        from inspect import isawaitable
         async_client = getattr(self, "_async_client", None)
-        aclose = getattr(async_client, "aclose", None)
-        if callable(aclose):
-            await aclose()
-            return
-        close = getattr(async_client, "close", None)
-        if callable(close):
-            close()
+        close = getattr(async_client, "aclose", None) or getattr(async_client, "close", None)
+        try:
+            if callable(close):
+                result = close()
+                if isawaitable(result):
+                    await result
+        finally:
+            self._async_client = None
 
     @property
     def provider_name(self) -> str:

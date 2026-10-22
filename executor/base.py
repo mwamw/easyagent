@@ -40,7 +40,7 @@ class BaseAgentExecutor(ABC):
         raise NotImplementedError("This executor does not support interactive replies")
 
     def astream_continue(
-        self, services: AgentExecutionServices, *, max_iter: int, temperature: float,
+        self, services: AgentExecutionServices, *, max_iter: int | None, temperature: float,
     ) -> AsyncIterator[AgentStreamEvent]:
         raise NotImplementedError("This executor does not support continuation")
 
@@ -50,7 +50,7 @@ class BaseAgentExecutor(ABC):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> str:
@@ -62,7 +62,7 @@ class BaseAgentExecutor(ABC):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> str:
@@ -74,7 +74,7 @@ class BaseAgentExecutor(ABC):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> Iterator[AgentStreamEvent]:
@@ -86,7 +86,7 @@ class BaseAgentExecutor(ABC):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> AsyncIterator[AgentStreamEvent]:

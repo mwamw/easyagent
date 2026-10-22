@@ -315,6 +315,8 @@ Canonical History 与 Provider Replay 分离，使产品不必把持久化状态
 
 框架预算判断优先采用**有效 API usage 基线 + 本地增量估算**；首轮或基线失效时回退完整本地估算。压缩预检、最终请求检查和 `get_context_usage()` 遵循同一规则，不依赖启用 Observability。
 
+需要跨进程或会话恢复继续使用实测基线时，可配置 `ContextManager(max_tokens=..., persist_usage_anchor=True)`。基线随 Context 状态保存，恢复时检查历史摘要指纹及模型、地址、凭据、提示词、工具和计数器配置；不兼容时回退本地估算。凭据只参与指纹计算，不写入基线状态。默认关闭，保持恢复后重新计数的行为。
+
 ### Tool：不仅是一个函数
 
 `Tool`、`ToolSpec`、`ToolResult` 与 `ToolRegistry` 一起表达参数 Schema、读写语义、副作用、权限、可见性、按需展开和执行结果。普通工具、内置工具与 MCP 工具沿相关运行路径参与 Agent。

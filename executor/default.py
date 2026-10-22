@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from contextlib import aclosing
+from itertools import count
 from typing import Any, AsyncIterator, Iterator, TypeVar
 from uuid import uuid4
 
@@ -45,7 +47,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         await respond(self, services, reply)
 
     async def astream_continue(
-        self, services: AgentExecutionServices, *, max_iter: int, temperature: float,
+        self, services: AgentExecutionServices, *, max_iter: int | None, temperature: float,
     ) -> AsyncIterator[AgentStreamEvent]:
         from contextlib import aclosing
         from .interactions import outstanding_calls
@@ -66,11 +68,11 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         self.last_state: AgentInvocationState | None = None
 
     @staticmethod
-    def _validate(query: str, max_iter: int, temperature: float) -> None:
+    def _validate(query: str, max_iter: int | None, temperature: float) -> None:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
-        if not isinstance(max_iter, int) or max_iter < 1:
-            raise ValueError("max_iter must be a positive integer")
+        if max_iter is not None and (isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1):
+            raise ValueError("max_iter must be a positive integer or None")
         if not isinstance(temperature, (int, float)) or not 0 <= temperature <= 2:
             raise ValueError("temperature must be between 0 and 2")
 
@@ -583,14 +585,14 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> str:
         self._validate(query, max_iter, temperature)
         state = self._start(services, query, stream=False)
         try:
-            for round_number in range(1, max_iter + 1):
+            for round_number in (count(1) if max_iter is None else range(1, max_iter + 1)):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
@@ -786,14 +788,14 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> str:
         self._validate(query, max_iter, temperature)
         state = self._start(services, query, stream=False)
         try:
-            for round_number in range(1, max_iter + 1):
+            for round_number in (count(1) if max_iter is None else range(1, max_iter + 1)):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
@@ -988,7 +990,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         **kwargs: Any,
     ) -> Iterator[AgentStreamEvent]:
@@ -996,7 +998,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         state = self._start(services, query, stream=True)
         sequence = 0
         try:
-            for round_number in range(1, max_iter + 1):
+            for round_number in (count(1) if max_iter is None else range(1, max_iter + 1)):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
@@ -1264,7 +1266,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         services: AgentExecutionServices,
         query: str,
         *,
-        max_iter: int,
+        max_iter: int | None,
         temperature: float,
         append_query: bool = True,
         **kwargs: Any,
@@ -1273,7 +1275,7 @@ class DefaultAgentExecutor(BaseAgentExecutor):
         state = self._start(services, query, stream=True, append_query=append_query)
         sequence = 0
         try:
-            for round_number in range(1, max_iter + 1):
+            for round_number in (count(1) if max_iter is None else range(1, max_iter + 1)):
                 state.round_number = round_number
                 self._check_stop(services)
                 services.before_context_build()
@@ -1413,21 +1415,22 @@ class DefaultAgentExecutor(BaseAgentExecutor):
                         provider_events = services.llm.astream_with_tools(request_input, tools, **options)
                     else:
                         provider_events = services.llm.astream_events(request_input, **options)
-                    async for provider_event in provider_events:
-                        self._check_stop(services)
-                        event_type = provider_event.get("type")
-                        if event_type == "text_delta":
-                            delta = str(provider_event.get("delta") or "")
-                            text_parts.append(delta)
-                            sequence += 1
-                            yield self._stream_event(services, state, AgentStreamEventType.TEXT_DELTA, sequence, content=delta)
-                        elif event_type in {"thinking_delta", "reasoning_delta"}:
-                            delta = str(provider_event.get("delta") or "")
-                            thinking_parts.append(delta)
-                            sequence += 1
-                            yield self._stream_event(services, state, AgentStreamEventType.REASONING_DELTA, sequence, content=delta)
-                        elif event_type in {"tool_calls", "final_response"}:
-                            terminal = self._select_terminal_event(terminal, provider_event)
+                    async with aclosing(provider_events):
+                        async for provider_event in provider_events:
+                            self._check_stop(services)
+                            event_type = provider_event.get("type")
+                            if event_type == "text_delta":
+                                delta = str(provider_event.get("delta") or "")
+                                text_parts.append(delta)
+                                sequence += 1
+                                yield self._stream_event(services, state, AgentStreamEventType.TEXT_DELTA, sequence, content=delta)
+                            elif event_type in {"thinking_delta", "reasoning_delta"}:
+                                delta = str(provider_event.get("delta") or "")
+                                thinking_parts.append(delta)
+                                sequence += 1
+                                yield self._stream_event(services, state, AgentStreamEventType.REASONING_DELTA, sequence, content=delta)
+                            elif event_type in {"tool_calls", "final_response"}:
+                                terminal = self._select_terminal_event(terminal, provider_event)
                 except Exception as exc:
                     self._publish(
                         services,

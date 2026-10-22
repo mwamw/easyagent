@@ -40,16 +40,18 @@ class PreparedUsageRequest:
     signature: str
     history_epoch: int
     local_tokens: int
+    portable_signature: str
 
 
 @dataclass(frozen=True)
 class _UsageAnchor:
-    signature: str
+    signature: str | None
     history_epoch: int
     provider_tokens: int
     local_tokens: int
     kind: str
     usage: dict[str, Any]
+    portable_signature: str
 
 
 class ContextUsageTracker:
@@ -57,7 +59,8 @@ class ContextUsageTracker:
 
     The base belongs to one Agent and one history generation. Only the executor's
     successful main-model responses install it; summarizers and child Agents do
-    not overwrite it. It is deliberately not restored from a session snapshot.
+    not overwrite it. Snapshot restoration is opt in and verifies the saved
+    history and a portable request signature before reusing a measured base.
     """
 
     def __init__(self):
@@ -82,18 +85,23 @@ class ContextUsageTracker:
         ignored = {"temperature", "max_tokens", "max_output_tokens", "max_completion_tokens", "stream", "reasoning"}
         return {key: value for key, value in (options or {}).items() if key not in ignored}
 
-    def _signature(self, manager, request, llm, tools, reasoning, options):
+    def _signature(self, manager, request, llm, tools, reasoning, options, *, portable=False):
         counter = manager.counter
         payload = {
             "provider": request.provider_name, "model": getattr(llm, "model", None),
-            "llm_instance": id(llm), "endpoint": getattr(llm, "base_url", None),
+            "endpoint": getattr(llm, "resolve_base_url", getattr(llm, "base_url", None)),
+            "credentials": getattr(llm, "resolve_api_key", getattr(llm, "api_key", None)),
+            "headers": getattr(llm, "default_headers", {}),
             "system": request.render_system_prompt(), "tools": tools, "reasoning": reasoning,
             "stable_reminders": [(block.name, block.render()) for block in request.system_reminder_blocks
                                  if block.partition != "dynamic"],
             "options": self._input_options(options), "cache_policy": request.cache_policy.to_dict(),
-            "counter": [id(counter), getattr(counter, "chars_per_token", None),
+            "counter": [type(counter).__module__, type(counter).__qualname__, getattr(counter, "chars_per_token", None),
                         getattr(getattr(counter, "_encoder", None), "name", None)],
         }
+        if not portable:
+            payload["llm_instance"] = id(llm)
+            payload["counter_instance"] = id(counter)
         return sha256(json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     def estimate(self, manager, request, *, llm, history_epoch, tools=None, reasoning=None, options=None):
@@ -105,7 +113,10 @@ class ContextUsageTracker:
         if anchor is not None:
             if anchor.history_epoch != history_epoch:
                 reason = "history_replaced"
-            elif anchor.signature != signature:
+            elif (anchor.signature != signature and not (
+                anchor.signature is None and anchor.portable_signature == self._signature(
+                    manager, request, llm, tools, reasoning, options, portable=True)
+            )):
                 reason = "request_context_changed"
             else:
                 delta = local - anchor.local_tokens
@@ -123,7 +134,8 @@ class ContextUsageTracker:
             self.last_options = deepcopy(options or {})
         return PreparedUsageRequest(deepcopy(request), deepcopy(tools), deepcopy(reasoning),
             self._signature(manager, request, llm, tools, reasoning, options), history_epoch,
-            manager.count_request(request, tools=tools, reasoning=reasoning))
+            manager.count_request(request, tools=tools, reasoning=reasoning),
+            self._signature(manager, request, llm, tools, reasoning, options, portable=True))
 
     def observe(self, manager, prepared, usage, *, response_replay=(), use_output=True):
         if prepared is None or usage.get("usageSource") != "provider":
@@ -158,7 +170,45 @@ class ContextUsageTracker:
         if base is None:
             return
         with self._lock:
-            self._anchor = _UsageAnchor(prepared.signature, prepared.history_epoch, base, local, kind, deepcopy(usage))
+            self._anchor = _UsageAnchor(prepared.signature, prepared.history_epoch, base, local, kind,
+                                       deepcopy(usage), prepared.portable_signature)
+            self.revision += 1
+
+    def export_state(self, *, history_epoch: int, history_digest: str) -> dict[str, Any] | None:
+        with self._lock:
+            anchor = self._anchor
+            if anchor is None or anchor.history_epoch != history_epoch:
+                return None
+            return {
+                "version": 1, "history_digest": history_digest,
+                "signature": anchor.portable_signature,
+                "provider_tokens": anchor.provider_tokens, "local_tokens": anchor.local_tokens,
+                "kind": anchor.kind, "usage": deepcopy(anchor.usage),
+                "last_query": self.last_query, "last_options": deepcopy(self.last_options),
+            }
+
+    def restore_state(self, state: Any, *, history_epoch: int, history_digest: str) -> None:
+        # The saved measurement is optional cache data. Invalid or incompatible
+        # data must fall back to local counting without breaking session restore.
+        self.invalidate()
+        with self._lock:
+            self.last_query, self.last_options = "", {}
+        if not isinstance(state, dict) or state.get("version") != 1:
+            return
+        if state.get("history_digest") != history_digest:
+            return
+        signature = state.get("signature")
+        provider = _tokens(state.get("provider_tokens"))
+        local = _tokens(state.get("local_tokens"))
+        kind, usage = state.get("kind"), state.get("usage")
+        query, options = state.get("last_query", ""), state.get("last_options", {})
+        if (not isinstance(signature, str) or len(signature) != 64 or provider is None or local is None
+            or not isinstance(kind, str) or kind not in {"request_input", "request_and_response"} or not isinstance(usage, dict)
+            or usage.get("usageSource") != "provider" or not isinstance(query, str) or not isinstance(options, dict)):
+            return
+        with self._lock:
+            self._anchor = _UsageAnchor(None, history_epoch, provider, local, kind, deepcopy(usage), signature)
+            self.last_query, self.last_options = query, deepcopy(options)
             self.revision += 1
 
     def invalidate(self):

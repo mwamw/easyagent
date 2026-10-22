@@ -68,7 +68,7 @@ class BasicAgent(BaseAgent):
     def invoke(
         self,
         query: str,
-        max_iter: int = 10,
+        max_iter: int | None = 10,
         temperature: float | None = None,
         **kwargs: Any,
     ) -> str:
@@ -83,7 +83,7 @@ class BasicAgent(BaseAgent):
     async def ainvoke(
         self,
         query: str,
-        max_iter: int = 10,
+        max_iter: int | None = 10,
         temperature: float | None = None,
         **kwargs: Any,
     ) -> str:
@@ -98,7 +98,7 @@ class BasicAgent(BaseAgent):
     def stream(
         self,
         query: str,
-        max_iter: int = 10,
+        max_iter: int | None = 10,
         temperature: float | None = None,
         **kwargs: Any,
     ) -> Iterator[AgentStreamEvent]:
@@ -113,7 +113,7 @@ class BasicAgent(BaseAgent):
     async def astream(
         self,
         query: str,
-        max_iter: int = 10,
+        max_iter: int | None = 10,
         temperature: float | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[AgentStreamEvent]:
@@ -131,7 +131,7 @@ class BasicAgent(BaseAgent):
         await self.executor.arespond_to_interruption(self._services(), reply)
 
     async def astream_continue(
-        self, max_iter: int = 10, temperature: float | None = None,
+        self, max_iter: int | None = 10, temperature: float | None = None,
     ) -> AsyncIterator[AgentStreamEvent]:
         async with aclosing(self.executor.astream_continue(
             self._services(), max_iter=max_iter,

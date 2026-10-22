@@ -1094,19 +1094,19 @@ class BaseAgent(ABC):
         return f"{self.__class__.__name__}(name={self.name!r}, tools={self.enable_tool})"
 
     @abstractmethod
-    def invoke(self, query: str, max_iter: int = 10, temperature: float | None = None, **kwargs: Any) -> str:
+    def invoke(self, query: str, max_iter: int | None = 10, temperature: float | None = None, **kwargs: Any) -> str:
         raise NotImplementedError
 
     @abstractmethod
-    async def ainvoke(self, query: str, max_iter: int = 10, temperature: float | None = None, **kwargs: Any) -> str:
+    async def ainvoke(self, query: str, max_iter: int | None = 10, temperature: float | None = None, **kwargs: Any) -> str:
         raise NotImplementedError
 
     @abstractmethod
-    def stream(self, query: str, max_iter: int = 10, temperature: float | None = None, **kwargs: Any) -> Iterator[AgentStreamEvent]:
+    def stream(self, query: str, max_iter: int | None = 10, temperature: float | None = None, **kwargs: Any) -> Iterator[AgentStreamEvent]:
         raise NotImplementedError
 
     @abstractmethod
-    def astream(self, query: str, max_iter: int = 10, temperature: float | None = None, **kwargs: Any) -> AsyncIterator[AgentStreamEvent]:
+    def astream(self, query: str, max_iter: int | None = 10, temperature: float | None = None, **kwargs: Any) -> AsyncIterator[AgentStreamEvent]:
         raise NotImplementedError
 
 

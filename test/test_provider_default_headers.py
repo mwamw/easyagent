@@ -58,3 +58,12 @@ def test_anthropic_provider_applies_default_headers_to_sync_and_async_clients() 
 
     assert sync_client.call_args.kwargs["default_headers"] == headers
     assert async_client.call_args.kwargs["default_headers"] == headers
+
+
+def test_openai_provider_forwards_explicit_retry_policy():
+    with (patch('core.providers.openai_compat.transport.OpenAI') as sync,
+          patch('core.providers.openai_compat.transport.AsyncOpenAI') as asynchronous):
+        provider = OpenAIProvider(model='test', api_key='fake', base_url='http://example.test/v1', max_retries=0)
+        provider._get_async_client()
+    assert sync.call_args.kwargs['max_retries'] == 0
+    assert asynchronous.call_args.kwargs['max_retries'] == 0
