@@ -106,7 +106,7 @@ class RuleBasedHistoryCompactor(BaseHistoryCompactor):
         min_recent_turns: int = 1,
     ):
         super().__init__(token_counter=token_counter)
-        self.recent_turns = max(1, recent_turns)
+        self.recent_turns = max(0, recent_turns)
         self.min_recent_turns = max(1, min_recent_turns)
 
     def compact(
@@ -395,7 +395,7 @@ class LLMHistoryCompactor(BaseHistoryCompactor):
         super().__init__(token_counter=token_counter)
         self.llm = llm
         self.language = language
-        self.recent_turns = max(1, recent_turns)
+        self.recent_turns = max(0, recent_turns)
         self._formatter = RuleBasedHistoryCompactor(token_counter=token_counter)
 
     def set_token_counter(self, token_counter: TokenCounter) -> None:

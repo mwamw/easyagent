@@ -553,8 +553,10 @@ class EasyLLM:
             **kwargs,
         )
         raw_stream = await self._provider.async_stream_raw(request)
-        async for event in self._get_codec().astream_events(raw_stream, tools=False):
-            yield event
+        from contextlib import aclosing
+        async with aclosing(self._astream_provider_events(raw_stream, tools=False)) as events:
+            async for event in events:
+                yield event
 
     async def ainvoke_with_tools(
         self,
@@ -613,8 +615,26 @@ class EasyLLM:
             **kwargs,
         )
         raw_stream = await self._provider.async_stream_raw(request)
-        async for event in self._get_codec().astream_events(raw_stream, tools=True):
-            yield event
+        from contextlib import aclosing
+        async with aclosing(self._astream_provider_events(raw_stream, tools=True)) as events:
+            async for event in events:
+                yield event
+
+    async def _astream_provider_events(self, raw_stream: Any, *, tools: bool):
+        from contextlib import aclosing
+        from inspect import isawaitable
+
+        events = self._get_codec().astream_events(raw_stream, tools=tools)
+        try:
+            async with aclosing(events):
+                async for event in events:
+                    yield event
+        finally:
+            close = getattr(raw_stream, "aclose", None) or getattr(raw_stream, "close", None)
+            if callable(close):
+                result = close()
+                if isawaitable(result):
+                    await result
 
     def close(self) -> None:
         """关闭底层 Provider 客户端。"""

@@ -324,3 +324,80 @@ def test_openai_cached_input_is_not_counted_twice():
     assert usage["contextInputTokens"] == 100
     assert usage["contextTotalTokens"] == 110
     assert usage["cachedInputTokens"] == 90
+
+
+def durable_context(limit=100000):
+    return ContextManager(builder=ContextBuilder(budget=TokenBudget(limit), counter=CharacterCounter()),
+                          persist_usage_anchor=True)
+
+
+def test_opt_in_usage_anchor_survives_new_agent_and_keeps_api_based_budget():
+    first = agent_with([{'usage': api_usage()}], durable_context())
+    first.invoke('question')
+    state = first.context_manager.export_state()
+    assert 'usageAnchor' in state
+    assert first.llm.api_key not in json.dumps(state['usageAnchor'])
+    restored = agent_with([], durable_context(120))
+    restored.context_manager.restore_state(state)
+    report = restored.get_context_usage()
+    assert report['request_estimate_source'] == 'provider_usage_plus_delta_estimate'
+    assert report['estimatedRequestTokens'] == 110
+    # A larger local estimate must not replace the measured value or cause a
+    # premature overflow; the user's new budget is independent from the anchor.
+    assert report['localEstimatedRequestTokens'] > 120
+    assert report['maxTokens'] == 120
+    prepared = restored.context_manager.build_input(restored.get_system_prompt_blocks('question'),
+        tools=None, options={}, query='', cache_policy=restored.config.cache_policy)
+    restored.context_manager.validate_input(prepared, tools=None, options={})
+    restored.add_user_message('next question')
+    changed = restored.get_context_usage()
+    assert changed['estimatedRequestTokens'] == 110 + changed['localEstimatedRequestTokens'] - report['localEstimatedRequestTokens']
+    assert changed['request_estimate_source'] == 'provider_usage_plus_delta_estimate'
+
+
+@pytest.mark.parametrize('change', ['model', 'endpoint', 'key', 'system', 'tools', 'history', 'corrupt'])
+def test_persisted_usage_rejects_incompatible_context(change):
+    first = agent_with([{'usage': api_usage()}], durable_context())
+    first.invoke('question')
+    state = first.context_manager.export_state()
+    restored = agent_with([], durable_context())
+    if change == 'model':
+        restored.llm.model = 'other'
+    elif change == 'endpoint':
+        restored.llm.base_url = 'http://other.local/v1'
+    elif change == 'key':
+        restored.llm.api_key = 'other-key'
+    elif change == 'system':
+        restored.with_prompt(SystemPromptComposer([PromptBlock('identity', 'different')], include_defaults=False))
+    elif change == 'tools':
+        restored.add_tool(EchoTool())
+    elif change == 'history':
+        state['canonical'][0]['content'][0]['text'] = 'replaced history'
+    else:
+        state['usageAnchor']['provider_tokens'] = -1
+    restored.context_manager.restore_state(state)
+    assert restored.get_context_usage()['request_estimate_source'] == 'local_request_estimate'
+
+
+def test_persisted_usage_does_not_leak_across_clear_or_history_replacement():
+    agent = agent_with([{'usage': api_usage()}], durable_context())
+    agent.invoke('question')
+    agent.context_manager.restore_state(agent.context_manager.export_state())
+    assert agent.get_context_usage()['request_estimate_source'].startswith('provider_usage')
+    agent.history = [CanonicalMessage(role='user', content=[CanonicalBlock(type='text', text='new')])]
+    assert agent.get_context_usage()['request_estimate_source'] == 'local_request_estimate'
+    assert 'usageAnchor' not in agent.context_manager.export_state()
+    agent.clear_history()
+    assert 'usageAnchor' not in agent.context_manager.export_state()
+
+
+@pytest.mark.parametrize('patch', [{'kind': []}, {'usage': []}, {'last_options': []}, {'version': 99}, {'signature': None}])
+def test_invalid_persisted_usage_cache_does_not_break_history_restore(patch):
+    agent = agent_with([{'usage': api_usage()}], durable_context())
+    agent.invoke('question')
+    state = agent.context_manager.export_state()
+    state['usageAnchor'].update(patch)
+    restored = agent_with([], durable_context())
+    restored.context_manager.restore_state(state)
+    assert len(restored.history) == 2
+    assert restored.get_context_usage()['request_estimate_source'] == 'local_request_estimate'

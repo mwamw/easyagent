@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import json
+from hashlib import sha256
 from typing import Optional, Any
 from context.default.builder import ContextBuilder
 from context.default.compressor.base import BaseCompressor
@@ -56,10 +57,12 @@ def _split_turn_tail(history: list[Any], preserve_tail_turns: int) -> tuple[list
     if not history:
         return [], []
     turns = _group_turns(history)
-    if preserve_tail_turns <= 0 or preserve_tail_turns >= len(turns):
+    if preserve_tail_turns >= len(turns):
         return [], [_copy_entry(message) for message in history]
-    prefix_turns = turns[:-preserve_tail_turns]
-    tail_turns = turns[-preserve_tail_turns:]
+    # Zero explicitly allows all persistent history to be compacted, including
+    # a single long user turn. Temporary injections retain their own lifecycle.
+    prefix_turns = turns[:-preserve_tail_turns] if preserve_tail_turns > 0 else turns
+    tail_turns = turns[-preserve_tail_turns:] if preserve_tail_turns > 0 else []
     prefix = [_copy_entry(message) for turn in prefix_turns for message in turn]
     tail = [_copy_entry(message) for turn in tail_turns for message in turn]
     # Temporary injections must survive until their own lifecycle ends, but must
@@ -75,7 +78,8 @@ def _split_turn_tail(history: list[Any], preserve_tail_turns: int) -> tuple[list
             persistent.append(message)
     return persistent, [*temporary, *tail]
 def _compactor_recent_turns(history_compactor: Any) -> int:
-    return max(1, int(getattr(history_compactor, "recent_turns", 1) or 1))
+    value = getattr(history_compactor, "recent_turns", 1)
+    return max(0, int(1 if value is None else value))
 
 
 def _result(
@@ -158,11 +162,13 @@ class ContextManager(BaseContextManager, RequestEstimation):
         max_tokens: int | None = None,
         formatter: Optional[BaseFormatter] = None,
         budget: Optional[TokenBudget] = None,
+        persist_usage_anchor: bool = False,
     ):
         super().__init__()
         self._context_epoch = 0
         self._usage = ContextUsageTracker()
         self._prepared_usage = None
+        self.persist_usage_anchor = persist_usage_anchor
         if budget is None:
             budget = TokenBudget(max_tokens=max_tokens)
         self._builder = builder or ContextBuilder(budget=budget)
@@ -225,10 +231,26 @@ class ContextManager(BaseContextManager, RequestEstimation):
         self._context_epoch += 1
         self._usage.invalidate()
 
+    def _history_digest(self):
+        payload = [message.to_dict() for message in self.canonical]
+        return sha256(json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+    def export_state(self):
+        state = super().export_state()
+        if self.persist_usage_anchor:
+            anchor = self._usage.export_state(history_epoch=self.context_epoch, history_digest=self._history_digest())
+            if anchor is not None:
+                state["usageAnchor"] = anchor
+        return state
+
     def restore_state(self, state):
         super().restore_state(state)
         self._context_epoch += 1
         self._usage.invalidate()
+        self._prepared_usage = None
+        if self.persist_usage_anchor:
+            self._usage.restore_state((state or {}).get("usageAnchor"), history_epoch=self.context_epoch,
+                                      history_digest=self._history_digest())
 
     def build_input(self, prompt_blocks, *, tools, options, query,
                     cache_policy, replay_history=None) -> ReplayRequestInput:

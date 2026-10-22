@@ -22,6 +22,9 @@ request = context.build_request_input(
 context.validate_request(request)
 ```
 
+`recent_turns=0` allows all persistent history to be compacted, including a single user turn with many tool calls. Non-permanent meta messages retain their own lifecycle and are not absorbed into the summary. The framework default remains 4.
+
+
 build_request_input 构造候选请求，validate_request 检查最终完整输入。
 Agent 的请求管线自动完成组装、压缩和最终检查；直接使用 Context 时调用方负责检查。
 未配置 max_tokens 表示不设置框架输入上限，不代表模型具有无限上下文。
@@ -49,6 +52,12 @@ LLM 的摘要请求或其他 Agent 覆盖。同步、异步、流式请求使用
 `request_estimate_source` 为 `provider_usage_plus_delta_estimate` 或
 `local_request_estimate`。新请求未发送前，其增量仍是估算，不是 API 实测。
 直接使用未接入 Agent usage 跟踪的 Context 时，仅做本地估算。
+
+默认情况下，会话恢复会丢弃 API usage 基线。需要在服务端重建 Agent 或跨进程恢复时保留，可使用
+`ContextManager(max_tokens=24_000, persist_usage_anchor=True)`。有效基线随 `export_state()` 保存，
+`restore_state()` 先验证历史指纹，再按当前模型、地址、凭据、固定提示词、工具及计数器配置验证兼容性。
+不兼容或缓存损坏时回退本地估算；压缩、清空或替换历史会使旧基线失效。摘要模型调用不会覆盖主模型基线。
+上限仍取当前 Context 预算，调整预算不会改变实测 token 数。基线状态不保存明文 API Key。
 
 ## 动态信息与扩展
 

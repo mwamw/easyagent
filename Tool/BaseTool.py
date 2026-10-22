@@ -282,10 +282,12 @@ class Tool(ABC):
     async def arun(self, parameters: dict) -> Any:
         """异步执行工具。
 
-        默认实现直接调用同步 ``run()``。子类（如 ``MCPWrappedTool``）
-        可重写此方法以提供原生异步执行，避免线程桥接开销。
+        同步工具在线程中执行，避免阻塞调用方的异步事件循环。
+        子类可重写此方法以提供原生异步执行。取消等待不会终止工作线程；
+        调用方应使用协作停止并等待工具结束。
         """
-        return self.run(parameters)
+        import asyncio
+        return await asyncio.to_thread(self.run, parameters)
 
     def get_guidance(self) -> str:
         return self.spec.guidance
